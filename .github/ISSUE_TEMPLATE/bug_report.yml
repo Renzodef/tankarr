@@ -1,0 +1,54 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please search the existing issues first.
+        Remove API keys, passwords, host names and addresses from anything you paste.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tankarr version
+      description: Shown on the System page, or the image tag you run (for example 0.9.0, latest, sha-1a2b3c4).
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - Docker image (ghcr.io)
+        - Docker image built from source
+        - From source (Python)
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Host platform
+      description: Operating system and architecture, for example "Debian 12, arm64" or "Unraid 7, amd64".
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output of `docker logs tankarr` around the problem, with secrets removed.
+      render: text

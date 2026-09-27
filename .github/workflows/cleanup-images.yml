@@ -1,0 +1,48 @@
+name: Clean up branch images
+
+# Images of branches that no longer exist, and builds that only a sha- tag
+# still names, are removed after a while. Tags that users can run (latest,
+# versions) and everything younger than a month are never touched.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Delete stale branch images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Delete images that no branch or channel names any more
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          package="${GITHUB_REPOSITORY#*/}"
+          owner="$GITHUB_REPOSITORY_OWNER"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/branches" -q '.[].name' | tr '/' '-' | sort -u > branches.txt
+          cutoff="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --paginate "users/$owner/packages/container/$package/versions" \
+            -q '.[] | [.id, .created_at, (.metadata.container.tags | join(" "))] | @tsv' > versions.tsv
+          while IFS=$'\t' read -r id created tags; do
+            [ -n "$tags" ] || continue                     # untagged layers and manifests: never
+            keep=false; only_sha=true
+            for tag in $tags; do
+              case "$tag" in
+                branch-*) only_sha=false; grep -qx -- "${tag#branch-}" branches.txt && keep=true ;;
+                sha-*) ;;
+                *) keep=true; only_sha=false ;;              # latest, versions
+              esac
+            done
+            if $only_sha && [[ "$created" > "$cutoff" ]]; then keep=true; fi
+            if ! $keep; then
+              echo "deleting version $id ($tags, created $created)"
+              gh api -X DELETE "users/$owner/packages/container/$package/versions/$id"
+            fi
+          done < versions.tsv

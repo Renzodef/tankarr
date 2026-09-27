@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://renzodef.github.io/tankarr/
+    about: Installation, configuration and usage guides.
+  - name: Questions and ideas
+    url: https://github.com/Renzodef/tankarr/discussions
+    about: Ask for help or discuss an idea before opening an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/Renzodef/tankarr/security/advisories/new
+    about: Please report vulnerabilities privately, never in a public issue.

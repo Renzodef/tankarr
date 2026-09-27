@@ -1,0 +1,16 @@
+# Categories for the notes GitHub generates when a release is published.
+changelog:
+  exclude:
+    labels: [skip-changelog]
+    authors: [dependabot]
+  categories:
+    - title: Breaking changes
+      labels: [breaking-change]
+    - title: New features
+      labels: [feature, enhancement]
+    - title: Fixes
+      labels: [bug, fix]
+    - title: Documentation
+      labels: [documentation]
+    - title: Other changes
+      labels: ["*"]

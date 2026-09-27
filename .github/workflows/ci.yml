@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the OCR tools used by the integration tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng fonts-dejavu-core
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m ruff check tankarr tests contrib
+      - run: python -m ruff format --check tankarr tests contrib
+      - run: python -m pytest
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - run: npm test --prefix frontend
+      - run: npm run build --prefix frontend
+
+  browser:
+    name: Browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install -e '.[dev]'
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - name: Install Chromium for the browser tests
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Test the production UI against an isolated real API
+        run: npm run test:e2e --prefix frontend
+      - name: Keep browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-test-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the image without publishing it
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: tankarr:ci
+          cache-from: type=gha,scope=ci-amd64
+          cache-to: type=gha,scope=ci-amd64,mode=max
+      - name: Smoke-test the image
+        run: |
+          docker run -d --name tankarr-ci -p 127.0.0.1:8787:8787 tankarr:ci
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8787/api/health; then break; fi
+            if [ "$attempt" = 60 ]; then docker logs tankarr-ci; exit 1; fi
+            sleep 2
+          done
+          echo
+          # A fresh container must never be open: it creates a login instead.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/manga)" = 401
+          docker logs tankarr-ci 2>&1 | grep -q "created one"
+          docker exec tankarr-ci sh -c '
+            test "$(id -u)" != 0
+            for tool in unrar unar lsar tesseract pdfinfo pdftoppm java; do
+              command -v "$tool" >/dev/null || { echo "missing $tool"; exit 1; }
+            done
+            tesseract --version | head -n 1
+            java -version'
+          docker rm -f tankarr-ci

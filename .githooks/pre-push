@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Runs the same lint and test gate as CI before anything leaves this clone.
+# Enable with ./install-local-git-hooks.sh; skip once with `git push --no-verify`.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+for variable in $(git rev-parse --local-env-vars); do unset "$variable" || true; done
+cd "$ROOT"
+printf '▶ Lint and tests (./run-tests.sh)...\n'
+if ! ./run-tests.sh >/dev/null 2>&1; then
+    printf '✗ Lint or tests failed, push cancelled. Run ./run-tests.sh for details.\n' >&2
+    exit 1
+fi
+printf '✓ Lint and tests passed\n'

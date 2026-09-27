@@ -1,0 +1,30 @@
+# Only pyproject.toml, README.md, tankarr/ and frontend/ are copied into the
+# image; keep everything else, and anything secret, out of the build context.
+.git
+.github
+.githooks
+.venv
+.env
+.env.*
+!.env.sample
+*.log
+**/__pycache__
+.pytest_cache
+.ruff_cache
+*.egg-info
+data
+docs
+site
+tests
+contrib
+AGENTS*.md
+CLAUDE*.md
+HANDOFF-*.md
+.agents
+.claude
+.codex
+frontend/node_modules
+frontend/dist
+frontend/playwright-report
+frontend/test-results
+frontend/*.tsbuildinfo

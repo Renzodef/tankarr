@@ -1,0 +1,49 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.sample
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Runtime data: databases, library, downloads, backups
+data/
+*.sqlite3
+*.sqlite3-*
+*.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+frontend/*.tsbuildinfo
+
+# Documentation site build
+site/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+*.log
+
+# Notes for one specific installation, hand-offs between agents and local
+# agent state. They never belong in the public repository.
+AGENTS.local.md
+CLAUDE.local.md
+HANDOFF-*.md
+.agents/
+.claude/
+.codex/
