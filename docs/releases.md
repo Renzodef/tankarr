@@ -101,8 +101,10 @@ annotation links it automatically).
 
 Dependabot opens grouped updates every week (Python, npm, GitHub Actions and
 the Docker base images). A workflow merges each of them as soon as the
-required checks pass; a major update of a runtime dependency is the
-exception: it receives the `needs-review` label and waits for a maintainer.
+required checks pass. Two exceptions receive the `needs-review` label and
+wait for a maintainer: a major update of a runtime dependency (judged per
+dependency, so a group is not held back by a major bump of a development
+tool) and a change of the Docker base images.
 Merged updates are carried into the working repository before the next
 release, like any other merged pull request.
 
