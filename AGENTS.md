@@ -28,7 +28,10 @@ Look at `git remote get-url origin`.
   scripts for one person's NAS: they live outside this repository. If Tankarr
   needs a hook for such a thing, it is a generic feature, off by default.
 - Tankarr ships no download sources and no extension repository: the operator
-  configures them. Do not add defaults that point at specific sites.
+  configures them. Do not add defaults that point at specific sites. The
+  built-in integrations with public catalogues and libraries (MangaBaka,
+  AniList, archive.org and the like) are documented, generic features with an
+  on/off switch, not exceptions to this rule.
 - Notes for a specific installation go in `AGENTS.local.md`; hand-offs between
   agents in `HANDOFF-*.md`. Both are git-ignored: never commit them.
 - Before committing, search the staged diff for your own installation's

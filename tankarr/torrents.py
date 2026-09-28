@@ -367,42 +367,49 @@ class TorrentManager:
         return await self._recycle_rejected_payload(failed)
 
     async def sweep_orphans(self) -> dict[str, Any]:
-        """Remove torrents in Tankarr's category that no job references.
+        """Remove Tankarr's own torrents in its category that no job references.
 
         A job Tankarr dropped (series deleted, chapter unmonitored, unit
         changed) can leave its torrent behind; after the grace period the
-        torrent and its files go. Torrents outside the category are never
-        touched, and anything a job still references is kept.
+        torrent and its files go. Only hashes Tankarr itself handed to the
+        client are candidates: a torrent another application or a person put
+        in the same category is foreign, reported and never touched, and
+        anything a job still references is kept.
         """
 
         if not self.qbittorrent.configured:
-            return {"seen": 0, "removed": 0}
+            return {"seen": 0, "removed": 0, "foreign": 0}
         grace_hours = int(
             getattr(self.settings, "torrent_orphan_grace_hours", 24) or 24
         )
-        known = {
-            str(job["info_hash"]).casefold()
-            for job in self.database.list_torrent_downloads(limit=5000)
-        }
+        torrents = await self.qbittorrent.list_category_torrents()
+        hashes = [str(item.get("hash") or "").casefold() for item in torrents]
+        referenced = self.database.torrent_hashes_with_job(hashes)
+        ours = self.database.torrent_hashes_added_by_tankarr(hashes)
         now = datetime.now(UTC).timestamp()
         removed: list[str] = []
-        torrents = await self.qbittorrent.list_category_torrents()
-        for item in torrents:
-            info_hash = str(item.get("hash") or "").casefold()
-            if not info_hash or info_hash in known:
+        foreign: list[str] = []
+        for item, info_hash in zip(torrents, hashes, strict=True):
+            if not info_hash or info_hash in referenced:
+                continue
+            name = str(item.get("name") or info_hash)
+            if info_hash not in ours:
+                foreign.append(name)
                 continue
             added_on = float(item.get("added_on") or 0)
             if added_on and now - added_on < grace_hours * 3600:
                 continue
             await self.qbittorrent.delete_torrent(info_hash, delete_files=True)
-            removed.append(str(item.get("name") or info_hash))
+            removed.append(name)
         self.last_orphan_sweep = {
             "at": datetime.now(UTC).isoformat(),
             "seen": len(torrents),
             "removed": len(removed),
             "names": removed[:20],
+            "foreign": len(foreign),
+            "foreign_names": sorted(foreign)[:20],
         }
-        return {"seen": len(torrents), "removed": len(removed)}
+        return {"seen": len(torrents), "removed": len(removed), "foreign": len(foreign)}
 
     def status(self) -> dict[str, Any]:
         source_status = {

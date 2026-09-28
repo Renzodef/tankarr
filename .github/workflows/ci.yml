@@ -122,7 +122,7 @@ jobs:
           docker logs tankarr-ci 2>&1 | grep -q "created one"
           docker exec tankarr-ci sh -c '
             test "$(id -u)" != 0
-            for tool in unrar unar lsar tesseract pdfinfo pdftoppm java; do
+            for tool in bsdtar unar lsar tesseract pdfinfo pdftoppm java; do
               command -v "$tool" >/dev/null || { echo "missing $tool"; exit 1; }
             done
             tesseract --version | head -n 1

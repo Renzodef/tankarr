@@ -27,15 +27,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TANKARR_IMPORT_DIR=/import \
     TANKARR_FRONTEND_DIR=/app/frontend/dist
 
-# unrar (Debian non-free) reads RAR5 archives that unar mis-extracts
-# ("Attempted to read more data than was available" on solid RAR5 books);
-# unar stays for lsar's structured page index.
-RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
+# RAR and RAR5 books are read with libarchive (bsdtar): maintained in Debian
+# main with security updates, unlike unrar from non-free, which is no longer
+# installed. unar stays as a fallback and for lsar's structured page index.
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
         fontconfig \
         fonts-dejavu-core \
+        libarchive-tools \
         libfreetype6 \
         poppler-utils \
         tesseract-ocr \
@@ -43,7 +43,6 @@ RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.li
         tesseract-ocr-osd \
         tesseract-ocr-all \
         unar \
-        unrar \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 tankarr \
     && useradd --uid 1000 --gid 1000 --create-home tankarr

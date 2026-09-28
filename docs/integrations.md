@@ -254,9 +254,13 @@ example.
 | **Remove after import** (`remove_after_import`) | Tankarr deletes it and its files from qBittorrent as soon as the books are in the library. |
 | **Remove when seeding is done** (`remove_when_seeded`) | Tankarr deletes it and its files once qBittorrent stops it at its seeding limits. |
 
-About once an hour, Tankarr deletes, with their files, the torrents in its
-category that no Tankarr download refers to and that are older than the orphan
-grace period. Torrents outside the category are never touched.
+About once an hour, Tankarr deletes, with their files, the torrents it added
+to its category whose download was deleted afterwards (a series removed, a
+chapter unmonitored) and that are older than the orphan grace period. Tankarr
+keeps a record of every torrent it hands to qBittorrent and only ever removes
+those: a torrent another application or you put in the same category is left
+alone and listed on the System page. Torrents outside the category are never
+touched.
 
 A magnet link whose metadata no peer delivers within 30 minutes
 (`TANKARR_TORRENT_METADATA_TIMEOUT_MINUTES`) is removed from qBittorrent and its

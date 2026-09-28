@@ -156,7 +156,11 @@ def test_rar_page_signature_uses_sorted_image_crc_index(tmp_path: Path, monkeypa
         returncode = 0
         stdout = json.dumps(payload)
 
-    monkeypatch.setattr(importer_module, "rar_tool", lambda: "unar")
+    monkeypatch.setattr(
+        importer_module.shutil,
+        "which",
+        lambda name: "/usr/bin/lsar" if name == "lsar" else None,
+    )
     monkeypatch.setattr(importer_module.subprocess, "run", lambda *_a, **_k: Result())
 
     assert LibraryImporter._rar_page_signature(archive) == ((20, 220), (10, 110))
@@ -1234,8 +1238,10 @@ async def test_local_cbz_is_rolled_back_when_database_publication_fails(
         database.get_chapter(chapter["id"])
 
 
-def test_rar_tool_prefers_unrar_and_drives_it_with_bare_listing(monkeypatch, tmp_path):
-    """unrar reads the solid RAR5 books unar mis-extracts, so it wins when present."""
+def test_rar_tool_prefers_bsdtar_and_drives_it_with_a_bare_listing(
+    monkeypatch, tmp_path
+):
+    """libarchive is maintained in Debian main, so it wins over unrar and unar."""
 
     import subprocess
 
@@ -1244,7 +1250,51 @@ def test_rar_tool_prefers_unrar_and_drives_it_with_bare_listing(monkeypatch, tmp
     monkeypatch.setattr(
         importer_module.shutil,
         "which",
-        lambda name: f"/usr/bin/{name}" if name in {"unrar", "unar", "lsar"} else None,
+        lambda name: (
+            f"/usr/bin/{name}" if name in {"bsdtar", "unrar", "unar", "lsar"} else None
+        ),
+    )
+    assert importer_module.rar_tool() == "bsdtar"
+
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            command, 0, stdout="Vol.01/\nVol.01/001.jpg\nVol.01/002.jpg\n", stderr=""
+        )
+
+    monkeypatch.setattr(
+        importer_module,
+        "run_decoder",
+        lambda command, *_args, **kwargs: fake_run(command),
+    )
+    archive = tmp_path / "book.cbr"
+    assert importer_module._rar_list(archive) == [
+        "Vol.01/",
+        "Vol.01/001.jpg",
+        "Vol.01/002.jpg",
+    ]
+    assert importer_module._rar_image_count(archive) == 2
+    assert calls[-1][:2] == ["bsdtar", "-tf"]
+
+    importer_module._rar_extract(archive, tmp_path / "out")
+    assert calls[-1] == ["bsdtar", "-xf", str(archive), "-C", str(tmp_path / "out")]
+
+
+def test_rar_tool_falls_back_to_unrar_and_drives_it_with_bare_listing(
+    monkeypatch, tmp_path
+):
+    """Without libarchive and unar, an operator-installed unrar still works."""
+
+    import subprocess
+
+    from tankarr import importer as importer_module
+
+    monkeypatch.setattr(
+        importer_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "unrar" else None,
     )
     assert importer_module.rar_tool() == "unrar"
 
@@ -1275,13 +1325,13 @@ def test_rar_tool_prefers_unrar_and_drives_it_with_bare_listing(monkeypatch, tmp
     assert calls[-1][-1].endswith("/")
 
 
-def test_rar_tool_falls_back_to_unar_without_unrar(monkeypatch):
+def test_rar_tool_prefers_unar_over_unrar_without_bsdtar(monkeypatch):
     from tankarr import importer as importer_module
 
     monkeypatch.setattr(
         importer_module.shutil,
         "which",
-        lambda name: f"/usr/bin/{name}" if name in {"unar", "lsar"} else None,
+        lambda name: f"/usr/bin/{name}" if name in {"unar", "lsar", "unrar"} else None,
     )
     assert importer_module.rar_tool() == "unar"
 

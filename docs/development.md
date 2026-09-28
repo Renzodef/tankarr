@@ -26,7 +26,7 @@ Optional tools, needed only by the features that use them:
 | Java 25 runtime | The managed Suwayomi server, Tankarr's source engine. |
 | Tesseract OCR, with data for the languages you need | Language checks on imported archives and the local translation fallback. |
 | DejaVu Sans font | Lettering of the local translation fallback. |
-| `unrar`, or `unar` and `lsar` | CBR and RAR archives. `unrar` is preferred: it reads solid RAR5 books that `unar` can mis-extract. A RAR-capable 7-Zip also works. |
+| `bsdtar` (libarchive), or `unar` and `lsar` | CBR and RAR archives, RAR5 included. `bsdtar` is preferred: it is maintained in Debian main and receives security updates. `unar`, `unrar` and a RAR-capable 7-Zip work as fallbacks; `lsar` also provides the page index used to recognise an unchanged book. |
 | Poppler (`pdfinfo`, `pdftoppm`) | PDF import. |
 
 The Docker image includes all of them. Tests that need Tesseract or Poppler are

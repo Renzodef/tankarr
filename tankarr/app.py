@@ -3793,6 +3793,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "href": "#/system",
                 }
             )
+        # Torrents in Tankarr's category that Tankarr never added are left
+        # alone by the orphan sweep; only a person can move or remove them.
+        sweep = torrents.last_orphan_sweep or {}
+        if sweep.get("foreign"):
+            count = int(sweep["foreign"])
+            alerts.append(
+                {
+                    "level": "info",
+                    "key": "foreign_torrents",
+                    "title": (
+                        f"{count} torrent{'s' if count != 1 else ''} in the "
+                        f"{settings.qbittorrent_category!r} category that Tankarr "
+                        "did not add"
+                    ),
+                    "detail": (
+                        "They are never removed by Tankarr. Move them to another "
+                        "category or delete them in qBittorrent: "
+                        + ", ".join(sweep.get("foreign_names") or [])
+                    )[:400],
+                }
+            )
         for name, path in (
             ("library", settings.library_dir),
             ("config", settings.data_dir),

@@ -701,7 +701,7 @@ const SECTIONS: SectionDef[] = [
         key: "torrent_orphan_grace_hours",
         advanced: true,
         label: "Orphan grace period (hours)",
-        hint: "A torrent in Tankarr's category with no job behind it is removed with its files after this many hours.",
+        hint: "A torrent Tankarr added whose download was deleted afterwards is removed with its files after this many hours. Torrents Tankarr did not add are never removed.",
         kind: "number",
       },
       {
