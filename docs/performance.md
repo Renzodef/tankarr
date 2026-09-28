@@ -40,6 +40,10 @@ other project.
   the fields it renders and omits the boilerplate verdict of slots no recovery
   pass has searched yet: for a freshly added library that verdict was half of
   the payload.
+- **One TLS context for every outbound client.** Building an HTTP client
+  loads the CA bundle, about 50 ms of blocking CPU; the qBittorrent and
+  SABnzbd polls and every Komga, Prowlarr and Stump request opened a new client.
+  All of them now reuse a context created once (0.7 ms per client).
 - **SQLite settings.** The database runs in WAL mode with `synchronous=NORMAL`
   (safe from corruption, durable against an application crash; only a power
   cut can lose the last transactions, which the nightly backup covers) and

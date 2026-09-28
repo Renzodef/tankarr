@@ -10,6 +10,7 @@ import httpx
 
 from tankarr import USER_AGENT
 from tankarr.config import Settings
+from tankarr.http import async_client
 from tankarr.torrent_utils import magnet_info_hash
 
 
@@ -41,7 +42,7 @@ class QBitTorrentClient:
         if not self.configured:
             raise QBitTorrentError("qBittorrent is not configured")
         base_url = str(self.settings.qbittorrent_url).rstrip("/")
-        async with httpx.AsyncClient(
+        async with async_client(
             base_url=base_url,
             timeout=httpx.Timeout(self.settings.request_timeout_seconds),
             follow_redirects=False,

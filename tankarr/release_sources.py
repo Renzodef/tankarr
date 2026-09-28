@@ -346,9 +346,9 @@ class ReleaseSourceManager:
             if self.fetch_page is not None:
                 text = await self.fetch_page(mobile_url)
             else:
-                import httpx
+                from tankarr.http import async_client
 
-                async with httpx.AsyncClient(
+                async with async_client(
                     timeout=8.0,
                     follow_redirects=True,
                     headers={"User-Agent": self._MOBILE_USER_AGENT},

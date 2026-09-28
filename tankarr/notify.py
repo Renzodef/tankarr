@@ -5,6 +5,7 @@ import logging
 import httpx
 
 from tankarr.config import Settings
+from tankarr.http import async_client
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class NtfyNotifier:
             "max": 5,
             "urgent": 5,
         }.get(priority.casefold(), 3)
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with async_client(timeout=10) as client:
             response = await client.post(
                 self.settings.ntfy_url.rstrip("/"),
                 json={

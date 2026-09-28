@@ -58,6 +58,7 @@ from tankarr.database import (
     local_release_identity,
     local_series_identity,
 )
+from tankarr.http import async_client
 from tankarr.komga import KomgaClient
 from tankarr.metadata.correlations import CORRELATION_LABELS, correlation_url
 from tankarr.metadata.publications import publication_metadata_key
@@ -1661,7 +1662,7 @@ class TankarrService:
         ):
             return 0
         try:
-            async with httpx.AsyncClient(
+            async with async_client(
                 timeout=self.settings.request_timeout_seconds
             ) as client:
                 host, items = await fetch_naver_webtoon_items(client, naver_links[0])

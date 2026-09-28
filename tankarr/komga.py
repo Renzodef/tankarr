@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlparse
 import httpx
 
 from tankarr.config import Settings
+from tankarr.http import async_client
 
 
 class KomgaReconciliationError(RuntimeError):
@@ -53,7 +54,7 @@ class KomgaClient:
         return None
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return async_client(
             base_url=(
                 self.settings.komga_internal_url
                 or self.settings.komga_url

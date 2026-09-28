@@ -9,6 +9,7 @@ import httpx
 
 from tankarr import USER_AGENT
 from tankarr.config import Settings
+from tankarr.http import async_client
 from tankarr.sabnzbd import nzb_pseudo_hash
 from tankarr.torrent_utils import (
     INFO_HASH_PATTERN,
@@ -85,7 +86,7 @@ class ProwlarrClient:
             raise ProwlarrError("Prowlarr is disabled")
         if not self.configured:
             raise ProwlarrError("Prowlarr URL and API key are required")
-        return httpx.AsyncClient(
+        return async_client(
             base_url=self.settings.prowlarr_url,
             timeout=httpx.Timeout(self.settings.request_timeout_seconds),
             follow_redirects=False,

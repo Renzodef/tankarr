@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from tankarr import PROJECT_URL, USER_AGENT
+from tankarr.http import async_client
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,7 @@ class UpdateChecker:
     async def check(self) -> dict[str, Any]:
         """Ask GitHub for the latest release; a failure is reported, not raised."""
 
-        client = self._http or httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0, connect=10.0)
-        )
+        client = self._http or async_client(timeout=httpx.Timeout(15.0, connect=10.0))
         try:
             response = await client.get(
                 self.api_url,

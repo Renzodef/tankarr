@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from tankarr.http import async_client
+
 ProgressCallback = Callable[[int, int], Awaitable[None]]
 SearchDiagnostic = dict[str, str]
 
@@ -109,7 +111,7 @@ class ProviderHTTP:
         self.max_attempts = max(1, max_attempts)
         self.backoff_base_seconds = backoff_base_seconds
         self.backoff_cap_seconds = backoff_cap_seconds
-        self._client = httpx.AsyncClient(
+        self._client = async_client(
             headers=headers or {},
             auth=auth,
             timeout=httpx.Timeout(timeout_seconds),

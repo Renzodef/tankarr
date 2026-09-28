@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 
 from tankarr.archive import package_cbz_validated, sha256, validate_cbz
+from tankarr.http import async_client
 from tankarr.importer import LibraryImporter
 from tankarr.local_translation import LocalTranslationError, translate_archive
 from tankarr.providers.base import ProviderRequestError
@@ -257,7 +258,7 @@ class TranslationManager:
             if self.settings.translation_processor_token
             else {}
         )
-        async with httpx.AsyncClient(
+        async with async_client(
             headers=headers, timeout=10, follow_redirects=False
         ) as client:
             for path in list(root.glob("*.json"))[:20]:
@@ -395,7 +396,7 @@ class TranslationManager:
         )
         remote_id = f"{job['id']}-{job['attempts']}"
         url = f"{base}/jobs/{remote_id}"
-        async with httpx.AsyncClient(
+        async with async_client(
             headers=headers, timeout=60, follow_redirects=False
         ) as client:
             response = await client.get(url)

@@ -45,6 +45,7 @@ from typing import Any
 import httpx
 
 from tankarr.archive import fsync_directory, publish_without_overwrite
+from tankarr.http import async_client
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +372,7 @@ class SuwayomiRuntime:
         self._last_update_check_at: str | None = None
         self._last_extension_refresh_at: str | None = None
         self._last_extension_updates: list[str] = []
-        self._http = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0))
+        self._http = async_client(timeout=httpx.Timeout(60.0, connect=10.0))
 
     # ------------------------------------------------------------------ state
 
@@ -1133,7 +1134,7 @@ class SuwayomiRuntime:
 
         if not icon_path.startswith("/"):
             raise SuwayomiRuntimeError("Unknown icon path")
-        async with httpx.AsyncClient(
+        async with async_client(
             timeout=15.0,
             auth=httpx.BasicAuth(*self.credentials) if self.credentials else None,
         ) as client:

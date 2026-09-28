@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from tankarr.config import Settings
+from tankarr.http import async_client
 
 SCAN_JOB_NAMES = {"library_scan", "LibraryScanJob"}
 SERIES_SCAN_JOB_NAMES = {"series_scan", "SeriesScanJob"}
@@ -71,7 +72,7 @@ class StumpLibraryClient:
             30.0,
             min(float(self.settings.komga_reconcile_timeout_seconds), 120.0),
         )
-        return httpx.AsyncClient(
+        return async_client(
             base_url=base,
             timeout=httpx.Timeout(read_timeout, connect=10.0),
         )

@@ -70,6 +70,7 @@ from tankarr.catalogue import (
 from tankarr.chapter_mapping import build_chapter_index, canonical_number
 from tankarr.config import Settings, get_settings
 from tankarr.database import ActiveDownloadJobsError, Database
+from tankarr.http import async_client
 from tankarr.importer import LanguageReviewRequired, LibraryImporter
 from tankarr.internet_archive import InternetArchiveClient
 from tankarr.komga import KomgaClient
@@ -4290,7 +4291,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "/"
         )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with async_client(timeout=15.0) as client:
                 if kind == "none":
                     return {"ok": True, "detail": "No reader shortcut configured"}
                 if kind == "tankarr":
