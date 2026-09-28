@@ -79,6 +79,11 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: TANKARR_COMMIT=${{ github.sha }}
+          # Supply-chain metadata alongside the image: a SLSA provenance
+          # attestation and an SPDX SBOM, readable with `docker buildx
+          # imagetools inspect <image> --format '{{ json .Provenance }}'`.
+          provenance: mode=max
+          sbom: true
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=publish-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=publish-${{ env.PLATFORM_PAIR }},mode=max
