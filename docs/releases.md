@@ -97,6 +97,15 @@ published, open its settings on GitHub and make sure it is **public** and
 linked to this repository (the image's `org.opencontainers.image.source`
 annotation links it automatically).
 
+## Dependency updates
+
+Dependabot opens grouped updates every week (Python, npm, GitHub Actions and
+the Docker base images). A workflow merges each of them as soon as the
+required checks pass; a major update of a runtime dependency is the
+exception: it receives the `needs-review` label and waits for a maintainer.
+Merged updates are carried into the working repository before the next
+release, like any other merged pull request.
+
 ## Pull request labels
 
 Labels decide where a merged pull request appears in generated release notes:

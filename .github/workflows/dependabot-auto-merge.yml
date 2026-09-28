@@ -1,0 +1,40 @@
+name: Dependabot auto-merge
+
+# Dependabot's pull requests are merged as soon as the required checks pass.
+# A major update of a runtime dependency is the exception: it is labelled
+# needs-review and waits for a maintainer.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    name: Merge when the checks pass
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable auto-merge
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major' || steps.metadata.outputs.dependency-type == 'direct:development'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Leave a major runtime update to a maintainer
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major' && steps.metadata.outputs.dependency-type != 'direct:development'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh label create needs-review --repo "$GITHUB_REPOSITORY" --color e99695 --description "Waits for a maintainer" --force
+          gh pr edit "$PR_URL" --add-label needs-review
