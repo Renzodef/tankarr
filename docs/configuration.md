@@ -321,6 +321,17 @@ to the log and keeps it in `generated-login.json` in the data directory (mode
 Failed sign-ins are logged with the client address and slowed down after five
 attempts from the same address, up to one attempt per minute.
 
+Other applications (dashboards, scripts, a mobile client) authenticate with the
+**API key** instead of the login: they send it in the `X-Api-Key` header. The
+key is created on the first start in `api-key` in the data directory (mode
+0600) and shown under **Settings → Security**, where it can be regenerated; the
+old key stops working at once. It grants the same access as the login, and a
+wrong key is slowed down like a wrong password.
+
+```sh
+curl -H "X-Api-Key: $API_KEY" http://localhost:8787/api/system/health
+```
+
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TANKARR_AUTH_METHOD` | `forms` | `forms`: a login page with a session cookie that lasts 12 hours, or 30 days with **Remember me**. `basic`: the browser's own credential prompt. API clients can always use HTTP Basic authentication. Settings → Security. |
@@ -419,6 +430,7 @@ Internal settings and service addresses that rarely need changing.
 | `TANKARR_PROVIDER_PRIORITY` | `suwayomi` | Order of the direct chapter-download providers. `suwayomi` is currently the only one; an unknown name stops Tankarr at startup. It is also the backlog order when `TANKARR_SOURCE_PRIORITY_BACKFILL` is empty. Restart required. |
 | `TANKARR_LEGACY_LIBRARY_ROOTS` | *empty* | Comma-separated absolute paths where an earlier setup of this installation kept its library, for example a host path used before moving to Docker. Files recorded under them are looked up at the same relative path inside the current library directory; `/library` is always treated this way. Restart required. |
 | `TANKARR_SETUP_COMPLETED_AT` | *unset* | When the first-run setup checklist was completed: an ISO 8601 timestamp with a time zone, stored in UTC. The checklist writes it; while it is unset and a required check fails, the web interface opens the checklist. |
+| `TANKARR_UPDATE_CHECK_ENABLED` | `true` | Ask GitHub once a day whether a newer Tankarr release exists and show it on the System page, under About and in Needs attention. Nothing is downloaded or installed, and the request carries only the running version in its user agent. `false` disables it, for hosts without internet access. Restart required. |
 | `TANKARR_RESTORED_SAFE_MODE` | `false` | Safe mode of a restored backup. Restoring writes `restored-settings.json` into the new data directory with this set to `true`, and with the monitor, the Wanted search, metadata lookups, automatic import and duplicate cleanup saved as off; that file fills in whatever the environment does not set. In safe mode no background automation runs and the web interface and API refuse changes, so the restored installation can be checked first. Restart with `false` to leave it. Restart required. |
 | `TANKARR_MANGABAKA_API_URL` | `https://api.mangabaka.org/v1` | Base URL of the MangaBaka API, the catalogue that identifies works. Restart required. |
 | `TANKARR_MANGAUPDATES_API_URL` | `https://api.mangaupdates.com/v1` | Base URL of the MangaUpdates API. Restart required. |

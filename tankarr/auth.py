@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -40,6 +41,10 @@ _SESSION_SECONDS = 12 * 60 * 60
 _REMEMBERED_SESSION_SECONDS = 30 * 24 * 60 * 60
 _MAX_CLOCK_SKEW_SECONDS = 300
 _SIGNING_SECRET_BYTES = 32
+# Other applications authenticate with this header instead of the login.
+API_KEY_HEADER = "x-api-key"
+_API_KEY_BYTES = 32
+_API_KEY_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 def authenticate_basic_header(
@@ -246,19 +251,32 @@ def ensure_login(settings: Settings) -> str | None:
     return created
 
 
-def _load_signing_secret(path: Path) -> bytes:
-    """A random per-installation key, created once with owner-only access."""
+def _read_secret(path: Path, minimum_length: int) -> bytes | None:
+    """The stored secret, or None when the file is missing or too short."""
 
     try:
         if path.is_symlink():
             raise OSError(f"{path} must not be a symlink")
         secret = path.read_bytes()
-        if len(secret) >= _SIGNING_SECRET_BYTES:
-            return secret
     except FileNotFoundError:
-        pass
+        return None
+    return secret if len(secret) >= minimum_length else None
+
+
+def _load_signing_secret(path: Path) -> bytes:
+    """A random per-installation key, created once with owner-only access."""
+
+    secret = _read_secret(path, _SIGNING_SECRET_BYTES)
+    if secret is None:
+        secret = secrets.token_bytes(_SIGNING_SECRET_BYTES)
+        _write_secret(path, secret)
+    return secret
+
+
+def _write_secret(path: Path, secret: bytes) -> None:
+    """Replace the secret file atomically, readable by the owner only."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    secret = secrets.token_bytes(_SIGNING_SECRET_BYTES)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}")
     descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
@@ -269,7 +287,6 @@ def _load_signing_secret(path: Path) -> bytes:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-    return secret
 
 
 def _urlsafe_encode(value: bytes) -> str:
@@ -292,6 +309,9 @@ class AuthenticationManager:
         self.signing_secret_path = settings.data_dir / "auth-signing-key"
         self._signing_secret: bytes | None = None
         self._signing_secret_lock = threading.Lock()
+        self.api_key_path = settings.data_dir / "api-key"
+        self._api_key: str | None = None
+        self._api_key_lock = threading.Lock()
         self.throttle = LoginThrottle()
 
     def _sessions(self) -> sqlite3.Connection:
@@ -429,6 +449,42 @@ class AuthenticationManager:
         except (sqlite3.Error, OSError):
             return False
 
+    def api_key(self) -> str:
+        """The installation's API key, created on first use and kept on disk.
+
+        Other applications send it in the ``X-Api-Key`` header instead of the
+        login. It is independent of the password, so changing the password
+        does not break every integration, and it can be regenerated on its
+        own when it leaks.
+        """
+
+        if self._api_key is None:
+            with self._api_key_lock:
+                if self._api_key is None:
+                    stored = _read_secret(self.api_key_path, 2 * _API_KEY_BYTES)
+                    key = stored.decode("ascii", "replace").strip() if stored else ""
+                    if not _API_KEY_PATTERN.match(key):
+                        key = secrets.token_hex(_API_KEY_BYTES)
+                        _write_secret(self.api_key_path, f"{key}\n".encode("ascii"))
+                    self._api_key = key
+        return self._api_key
+
+    def regenerate_api_key(self) -> str:
+        """Replace the API key; the previous one stops working at once."""
+
+        with self._api_key_lock:
+            key = secrets.token_hex(_API_KEY_BYTES)
+            _write_secret(self.api_key_path, f"{key}\n".encode("ascii"))
+            self._api_key = key
+        return key
+
+    def api_key_valid(self, presented: str | None) -> bool:
+        if not presented:
+            return False
+        return compare_digest(
+            presented.strip().encode("utf-8"), self.api_key().encode("ascii")
+        )
+
     def request_authenticated(self, scope: Scope) -> bool:
         if not self.configured:
             return True
@@ -438,6 +494,8 @@ class AuthenticationManager:
             self.settings.auth_username or "",
             self.settings.auth_password or "",
         ):
+            return True
+        if self.api_key_valid(headers.get(API_KEY_HEADER)):
             return True
         if self.method != "forms":
             return False
@@ -537,9 +595,11 @@ class AuthenticationMiddleware:
             await self.app(scope, receive, send)
             return
 
-        authorization = Headers(scope=scope).get("authorization")
+        headers = Headers(scope=scope)
+        authorization = headers.get("authorization")
+        presented_key = headers.get(API_KEY_HEADER)
         client = client_address(scope)
-        if authorization:
+        if authorization or presented_key:
             wait = self.manager.throttle.retry_after(client)
             if wait > 0:
                 await too_many_attempts(wait)(scope, receive, send)
@@ -555,6 +615,10 @@ class AuthenticationMiddleware:
             logger.warning(
                 "Authentication failed for user %r from %s", claimed[:64], client
             )
+        elif presented_key:
+            # A wrong key is guessed like a wrong password: same backoff.
+            self.manager.throttle.failed(client)
+            logger.warning("Authentication failed with an API key from %s", client)
 
         headers = {"Cache-Control": "no-store"}
         if self.manager.method == "basic":

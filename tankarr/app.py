@@ -161,6 +161,7 @@ from tankarr.suwayomi_runtime import (
     default_java_executable,
 )
 from tankarr.torrents import TorrentManager
+from tankarr.updates import UpdateChecker
 from tankarr.worker import DownloadWorker
 
 
@@ -647,6 +648,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     translations.acquisition = TranslationAcquisition(translations, torrents)
     torrents.translations = translations.acquisition
     authentication = AuthenticationManager(settings)
+    authentication.api_key()
+    updates = UpdateChecker(__version__, enabled=settings.update_check_enabled)
     snapshot_validators = SnapshotValidators()
     started_at = datetime.now(UTC).isoformat()
 
@@ -1723,6 +1726,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     asyncio.create_task(
                         suwayomi_maintenance_loop(), name="tankarr-suwayomi-maintenance"
                     ),
+                    asyncio.create_task(updates.run(), name="tankarr-update-check"),
                     asyncio.create_task(
                         maintenance.run(), name="tankarr-nightly-maintenance"
                     ),
@@ -1855,6 +1859,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         response.delete_cookie(SESSION_COOKIE, path="/", samesite="lax")
         return response
+
+    @app.get("/api/auth/api-key")
+    async def read_api_key():
+        key = await run_api_blocking(authentication.api_key)
+        return JSONResponse({"api_key": key}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/auth/api-key/regenerate")
+    async def regenerate_api_key(request: Request):
+        key = await run_api_blocking(authentication.regenerate_api_key)
+        logger.info("API key regenerated from %s", client_address(request.scope))
+        return JSONResponse({"api_key": key}, headers={"Cache-Control": "no-store"})
 
     def reader_alignment_status() -> dict[str, Any]:
         kind = effective_reader_kind(settings)
@@ -3884,6 +3899,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "detail": str(metadata_status.get("last_cycle_error"))[:200],
                 }
             )
+        update = updates.status()
+        if update.get("update_available"):
+            alert = {
+                "level": "info",
+                "key": "update_available",
+                "title": f"Tankarr {update['latest']} is available",
+                "detail": (
+                    f"This installation runs {update['current']}. Pull the new "
+                    "image and restart the container; the release notes say "
+                    "what changed."
+                ),
+            }
+            if update.get("url"):
+                alert["href"] = str(update["url"])
+            alerts.append(alert)
         order = {"danger": 0, "warn": 1, "info": 2}
         alerts.sort(key=lambda item: order.get(item["level"], 3))
         # An acknowledged alert stays hidden until its own content changes,
@@ -3920,6 +3950,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             jobs = database.list_jobs(500)
             return {
                 "version": __version__,
+                "update": updates.status(),
                 "python": platform.python_version(),
                 "platform": platform.platform(),
                 "started_at": started_at,

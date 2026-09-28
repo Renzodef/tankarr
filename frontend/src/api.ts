@@ -309,6 +309,9 @@ export const api = {
     return request(`/api/manga/${encodeURIComponent(mangaId)}/translations/upload?${query}`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
   },
   authStatus: () => request<AuthStatus>("/api/auth/status"),
+  apiKey: () => request<{ api_key: string }>("/api/auth/api-key"),
+  regenerateApiKey: () =>
+    request<{ api_key: string }>("/api/auth/api-key/regenerate", { method: "POST" }),
   login: (username: string, password: string, rememberMe: boolean) =>
     request<AuthStatus>("/api/auth/login", {
       method: "POST",

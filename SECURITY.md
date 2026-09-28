@@ -36,7 +36,11 @@ an attacker who already controls the host or the Tankarr configuration folder.
 - **Protect the configuration folder** (`/config`). It holds the database and,
   in `metadata.env`, the passwords and API keys of your integrations. Backup
   bundles contain the same secrets unencrypted: store them on trusted storage.
-- **Update regularly**, and follow the release notes.
+- **Treat the API key like the password.** `api-key` in `/config`, shown under
+  Settings → Security, gives other applications the same access as the login.
+  Regenerate it there if it leaks.
+- **Update regularly**, and follow the release notes. The System page says when
+  a newer release exists.
 - Tankarr downloads and opens archives from the internet. It runs as an
   unprivileged user, extracts archives in subprocesses with memory, size and
   time limits, and never follows symbolic links from an archive, but keep the

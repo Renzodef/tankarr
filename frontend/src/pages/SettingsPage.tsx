@@ -832,6 +832,23 @@ export default function SettingsPage() {
   const [sabTest, setSabTest] = useState<string | null>(null);
   const [prowlarrIndexers, setProwlarrIndexers] = useState<ProwlarrIndexer[]>([]);
   const [prowlarrCategories, setProwlarrCategories] = useState<ProwlarrCategory[]>([]);
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const [apiKeyBusy, setApiKeyBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .apiKey()
+      .then((result) => {
+        if (!cancelled) setApiKey(result.api_key);
+      })
+      .catch(() => {
+        if (!cancelled) setApiKey(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const load = async (submittedValues?: Record<string, string>) => {
     try {
@@ -1111,6 +1128,37 @@ export default function SettingsPage() {
       );
     } catch (caught) {
       setKomgaTest(String(caught));
+    }
+  };
+
+  const copyApiKey = async () => {
+    if (!apiKey) return;
+    try {
+      await navigator.clipboard.writeText(apiKey);
+      notify("success", "API key copied to the clipboard.");
+    } catch {
+      notify("error", "Copying failed: show the key and copy it by hand.");
+    }
+  };
+
+  const regenerateApiKey = async () => {
+    if (
+      !window.confirm(
+        "Regenerate the API key? Every application using the current key stops working until it gets the new one.",
+      )
+    ) {
+      return;
+    }
+    setApiKeyBusy(true);
+    try {
+      const result = await api.regenerateApiKey();
+      setApiKey(result.api_key);
+      setApiKeyVisible(true);
+      notify("success", "A new API key is in use; the old one no longer works.");
+    } catch (caught) {
+      notify("error", String(caught));
+    } finally {
+      setApiKeyBusy(false);
     }
   };
 
@@ -1567,6 +1615,29 @@ export default function SettingsPage() {
                 {komgaTest ? (
                   <p className="muted small setting-test-result">{komgaTest}</p>
                 ) : null}
+              </div>
+            ) : null}
+            {section.title === "Security" ? (
+              <div className="api-key-block">
+                <strong>API key</strong>
+                <p className="muted small">
+                  Lets other applications (dashboards, scripts, mobile clients) use the API without your login: they send it in the{" "}
+                  <code>X-Api-Key</code> header. It grants the same access as the login, so treat it like the password and regenerate it if it leaks.
+                </p>
+                <div className="form-row setting-test-row">
+                  <code className="api-key-value" aria-label="API key">
+                    {apiKey === null ? "…" : apiKeyVisible ? apiKey : "•".repeat(32)}
+                  </code>
+                  <button type="button" className="btn btn-small" disabled={!apiKey} onClick={() => setApiKeyVisible((visible) => !visible)}>
+                    {apiKeyVisible ? "Hide" : "Show"}
+                  </button>
+                  <button type="button" className="btn btn-small" disabled={!apiKey} onClick={() => void copyApiKey()}>
+                    Copy
+                  </button>
+                  <button type="button" className="btn btn-small" disabled={apiKeyBusy} onClick={() => void regenerateApiKey()}>
+                    <Icon name="refresh" size={14} /> Regenerate
+                  </button>
+                </div>
               </div>
             ) : null}
             {section.title === "Notifications (ntfy)" ? (
