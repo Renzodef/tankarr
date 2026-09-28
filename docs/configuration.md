@@ -324,7 +324,9 @@ Failed sign-ins are logged with the client address and slowed down after five
 attempts from the same address, up to one attempt per minute.
 
 Other applications (dashboards, scripts, a mobile client) authenticate with the
-**API key** instead of the login: they send it in the `X-Api-Key` header. The
+**API key** instead of the login: they send it in the `X-Api-Key` header, or as
+a bearer token (`Authorization: Bearer <key>`, what a Prometheus scrape can
+send). The
 key is created on the first start in `api-key` in the data directory (mode
 0600) and shown under **Settings → Security**, where it can be regenerated; the
 old key stops working at once. It grants the same access as the login, and a

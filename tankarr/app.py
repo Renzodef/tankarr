@@ -87,6 +87,8 @@ from tankarr.logs import (
 from tankarr.maintenance import MaintenanceWorker
 from tankarr.metadata import build_metadata_sources
 from tankarr.metadata.service import MAX_ARTWORK_BYTES, MetadataService
+from tankarr.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
+from tankarr.metrics import database_samples, render_metrics
 from tankarr.models import (
     AddMangaRequest,
     AddReleaseSourceRequest,
@@ -5794,6 +5796,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409, detail=f"{exc} cannot be started by hand"
             ) from exc
+
+    def collect_metrics() -> str:
+        with database.connect() as connection:
+            counts = database_samples(connection)
+        return render_metrics(
+            counts=counts,
+            tasks=tasks.snapshot(),
+            volumes={"data": settings.data_dir, "library": settings.library_dir},
+            started_at=started_at,
+            update=updates.status(),
+            now=datetime.now(UTC).timestamp(),
+        )
+
+    @app.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics():
+        body = await run_api_blocking(collect_metrics)
+        return Response(
+            content=body,
+            media_type=METRICS_CONTENT_TYPE,
+            headers={"Cache-Control": "no-store"},
+        )
 
     frontend_dist = settings.frontend_dir or (
         Path(__file__).resolve().parent.parent / "frontend" / "dist"

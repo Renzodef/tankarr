@@ -81,6 +81,18 @@ def authenticate_basic_header(
     return username_matches & password_matches
 
 
+def bearer_token(authorization: str | None) -> str | None:
+    """The token of a ``Bearer`` header: the API key for scrapers and scripts."""
+
+    if not authorization:
+        return None
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.casefold() != "bearer":
+        return None
+    token = token.strip()
+    return token if 0 < len(token) <= 256 else None
+
+
 def basic_username(authorization: str | None) -> str | None:
     """The user name a Basic header claims, for logging failed attempts only."""
 
@@ -496,7 +508,9 @@ class AuthenticationManager:
             self.settings.auth_password or "",
         ):
             return True
-        if self.api_key_valid(headers.get(API_KEY_HEADER)):
+        if self.api_key_valid(
+            headers.get(API_KEY_HEADER) or bearer_token(headers.get("authorization"))
+        ):
             return True
         if self.method != "forms":
             return False
@@ -616,7 +630,7 @@ class AuthenticationMiddleware:
             logger.warning(
                 "Authentication failed for user %r from %s", claimed[:64], client
             )
-        elif presented_key:
+        elif presented_key or bearer_token(authorization):
             # A wrong key is guessed like a wrong password: same backoff.
             self.manager.throttle.failed(client)
             logger.warning("Authentication failed with an API key from %s", client)

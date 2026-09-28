@@ -27,6 +27,7 @@ Every setting also has a `TANKARR_*` environment variable. The
 | [Internet Archive](#internet-archive) | Whole volumes downloaded directly from archive.org | Indexers & torrents |
 | [Readers](#readers) | Opening the library in the built-in reader, Komga, Kavita, Stump or another reader | Reader |
 | [ntfy, webhook, Discord, Telegram, Apprise](#notifications) | Notifications | Notifications |
+| [Prometheus](#monitoring-prometheus) | Metrics scraping | API key |
 | [Metadata catalogues](#metadata-catalogues) | Identifying works: titles, creators, covers, counts | Metadata |
 | [AI provider](#translation-fallback) | Optional machine translation of missing books and chapters | Translation |
 
@@ -429,6 +430,28 @@ you give Tankarr. The three events are:
 **Send test notification** publishes a real test message with the values
 currently in the form, even before you save them. A failed notification never
 fails the import or the job that triggered it.
+
+## Monitoring (Prometheus)
+
+`GET /metrics` exposes the library and queue counts, the free space of the
+data and library volumes, the last run and state of every scheduled task and
+whether an update is available, in the Prometheus text format. It answers
+behind the normal login: give Prometheus the API key from **Settings →
+Security** as a bearer token, or the login as basic auth.
+
+```yaml
+scrape_configs:
+  - job_name: tankarr
+    scrape_interval: 60s
+    static_configs:
+      - targets: ["tankarr:8787"]
+    authorization:
+      credentials: <the API key>
+```
+
+Behind a URL base the path is `/<base>/metrics`. A scrape reads a few SQL
+aggregates and the state the background loops already keep; it never renders
+a page, so it costs milliseconds.
 
 ## Metadata catalogues
 
