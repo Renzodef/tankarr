@@ -512,7 +512,8 @@ ZIP, CBR/RAR and PDF files and folders of images into series. For each group
 you pick the **Target series**, an existing one or **Create new local series**,
 whether to **Import as** chapters or volumes, and the language of a new series.
 RAR archives are recognised by their content even with a wrong extension and
-read with `unrar`, `unar` or 7-Zip; PDFs are rendered with Poppler.
+read with `bsdtar` (libarchive), `unar`, `unrar` or 7-Zip; PDFs are rendered with
+Poppler.
 
 Every file is normalized to a CBZ with `ComicInfo.xml` and published through
 the same atomic, hash-checked import as a download. A new local series has no

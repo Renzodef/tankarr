@@ -212,7 +212,7 @@ work with `docker buildx build --platform linux/amd64,linux/arm64 .`.
 
 For development, or on a host without Docker. You need Python 3.12 or newer,
 Node.js 22, and for full functionality Java 25 (managed Suwayomi), Tesseract
-OCR, `unar`/`unrar` and Poppler.
+OCR, `bsdtar` (libarchive) or `unar` and Poppler.
 
 ```sh
 git clone https://github.com/Renzodef/tankarr.git

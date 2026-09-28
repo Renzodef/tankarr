@@ -103,17 +103,22 @@ def natural_key(text: str) -> tuple:
 
 
 def rar_tool() -> str | None:
-    """Preferred RAR reader: unrar, then unar (Debian main), then a rar-capable 7-Zip.
+    """Preferred RAR reader: bsdtar (libarchive), then unar, unrar, 7-Zip.
 
-    unar mis-extracts solid RAR5 books ("Attempted to read more data than was
-    available" on a few pages of an archive unrar reads whole), so the
-    reference implementation wins when it is installed.
+    Archives come from indexers and Usenet, so the decoder parses untrusted
+    input. libarchive's RAR and RAR5 readers are maintained in Debian main and
+    receive security updates; unrar (non-free) and unar do not, so they are
+    fallbacks for hosts without libarchive. unar also mis-extracts solid RAR5
+    books ("Attempted to read more data than was available" on a few pages of
+    an archive libarchive and unrar read whole).
     """
 
-    if shutil.which("unrar"):
-        return "unrar"
+    if shutil.which("bsdtar"):
+        return "bsdtar"
     if shutil.which("lsar") and shutil.which("unar"):
         return "unar"
+    if shutil.which("unrar"):
+        return "unrar"
     if shutil.which("7zz"):
         return "7zz"
     if shutil.which("7z"):
@@ -125,7 +130,10 @@ def _rar_list(path: Path) -> list[str] | None:
     tool = rar_tool()
     if tool is None:
         return None
-    if tool == "unar":
+    if tool == "bsdtar":
+        # ``-t``: list one entry path per line, directories with a trailing slash.
+        command = ["bsdtar", "-tf", str(path)]
+    elif tool == "unar":
         command = ["lsar", str(path)]
     elif tool == "unrar":
         # ``lb``: bare listing, one entry path per line.
@@ -149,7 +157,7 @@ def _rar_list(path: Path) -> list[str] | None:
     if tool == "unar":
         # The first line repeats the archive path; entries follow.
         return [line.strip() for line in lines[1:] if line.strip()]
-    if tool == "unrar":
+    if tool in {"bsdtar", "unrar"}:
         return [line.strip() for line in lines if line.strip()]
     return [line.split(maxsplit=5)[-1] for line in lines if line.strip()]
 
@@ -159,8 +167,12 @@ def _rar_extract(
 ) -> None:
     tool = rar_tool()
     if tool is None:
-        raise RuntimeError("RAR support requires the unar or 7z tool")
-    if tool == "unar":
+        raise RuntimeError("RAR support requires bsdtar, unar, unrar or 7z")
+    if tool == "bsdtar":
+        # bsdtar strips leading slashes and refuses ``..`` members on its own;
+        # the caller rejects symbolic links after extraction.
+        command = ["bsdtar", "-xf", str(path), "-C", str(target)]
+    elif tool == "unar":
         command = [
             "unar",
             "-quiet",
@@ -1223,9 +1235,13 @@ class LibraryImporter:
 
     @staticmethod
     def _rar_page_signature(path: Path) -> tuple[tuple[int, int], ...]:
-        """Read RAR page sizes and CRCs from lsar's structured index."""
+        """Read RAR page sizes and CRCs from lsar's structured index.
 
-        if rar_tool() != "unar":
+        lsar only lists; whichever tool extracts, its index is used when it is
+        installed.
+        """
+
+        if not shutil.which("lsar"):
             return ()
         try:
             result = subprocess.run(
