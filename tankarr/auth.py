@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -115,6 +116,41 @@ def client_address(scope: Scope) -> str:
 
     client = scope.get("client")
     return str(client[0]) if client else "unknown"
+
+
+def _ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(value.split("%", 1)[0].strip())
+    except ValueError:
+        return None
+
+
+_CARRIER_GRADE_NAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_local_address(value: str) -> bool:
+    """Loopback, a private network, link-local or a Tailscale address."""
+
+    address = _ip(value)
+    if address is None:
+        return False
+    return bool(
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or (address.version == 4 and address in _CARRIER_GRADE_NAT)
+    )
+
+
+def forwarded_clients(headers: Headers) -> list[str]:
+    """The X-Forwarded-For chain, nearest client first, empty when absent."""
+
+    raw = headers.get("x-forwarded-for") or ""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+# Headers a reverse proxy that signed the user in may carry their name in.
+REMOTE_USER_HEADERS = ("remote-user", "x-forwarded-user", "x-authentik-username")
 
 
 class LoginThrottle:
@@ -498,6 +534,32 @@ class AuthenticationManager:
             presented.strip().encode("utf-8"), self.api_key().encode("ascii")
         )
 
+    def trusted_proxy(self, address: str) -> bool:
+        peer = _ip(address)
+        if peer is None:
+            return False
+        return any(peer in network for network in self.settings.trusted_proxy_networks)
+
+    def client_is_local(self, scope: Scope) -> bool:
+        """Whether the request comes from the operator's own network.
+
+        A proxy Tankarr trusts speaks for the client it forwards. Forwarding
+        headers from an address Tankarr does not trust make the client
+        unknowable, so nobody is local then: a proxy on the LAN must not turn
+        the whole internet into local addresses. When uvicorn already resolved
+        the chain (FORWARDED_ALLOW_IPS), the peer is the forwarded client.
+        """
+
+        peer = client_address(scope)
+        forwarded = forwarded_clients(Headers(scope=scope))
+        if not forwarded:
+            return is_local_address(peer)
+        if self.trusted_proxy(peer):
+            return is_local_address(forwarded[0])
+        if peer in forwarded:
+            return is_local_address(peer)
+        return False
+
     def request_authenticated(self, scope: Scope) -> bool:
         if not self.configured:
             return True
@@ -512,17 +574,29 @@ class AuthenticationManager:
             headers.get(API_KEY_HEADER) or bearer_token(headers.get("authorization"))
         ):
             return True
+        if not self.settings.auth_required_for_local and self.client_is_local(scope):
+            return True
+        if self.method == "external":
+            return self.trusted_proxy(client_address(scope))
         if self.method != "forms":
             return False
         return self.validate_session(self._session_cookie(headers.get("cookie")))
 
     def status(self, scope: Scope) -> dict[str, Any]:
         authenticated = self.request_authenticated(scope)
+        username = self.settings.auth_username if authenticated else None
+        if authenticated and self.method == "external":
+            headers = Headers(scope=scope)
+            for name in REMOTE_USER_HEADERS:
+                value = (headers.get(name) or "").strip()
+                if value:
+                    username = value[:200]
+                    break
         return {
             "configured": self.configured,
             "method": self.method,
             "authenticated": authenticated,
-            "username": self.settings.auth_username if authenticated else None,
+            "username": username,
         }
 
     def _signing_key(self) -> bytes:
@@ -602,7 +676,7 @@ class AuthenticationMiddleware:
             or path in PUBLIC_HEALTHCHECK_PATHS
             or path in PUBLIC_AUTH_PATHS
             or (
-                self.manager.method == "forms"
+                self.manager.method in {"forms", "external"}
                 and scope.get("method") in {"GET", "HEAD"}
                 and _public_forms_asset(path)
             )

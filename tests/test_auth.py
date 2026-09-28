@@ -345,3 +345,106 @@ def test_wrong_api_keys_are_throttled_like_wrong_passwords(tmp_path: Path):
     throttled = client.get("/api/manga", headers={"X-Api-Key": "f" * 64})
     assert throttled.status_code == 429
     client.close()
+
+
+def test_local_addresses_may_skip_the_login_when_the_operator_allows_it(
+    tmp_path: Path,
+):
+    settings = _settings(
+        tmp_path,
+        auth_method="forms",
+        auth_username="fixture-user",
+        auth_password="correct horse battery staple",
+        auth_required_for_local=False,
+        auth_trusted_proxies="172.18.0.2",
+    )
+    app = create_app(settings)
+
+    lan = TestClient(app, client=("192.168.1.10", 40000))
+    assert lan.get("/api/manga").status_code == 200
+    assert lan.get("/api/auth/status").json()["authenticated"] is True
+    remote = TestClient(app, client=("1.1.1.1", 40000))
+    assert remote.get("/api/manga").status_code == 401
+    # A proxy Tankarr trusts speaks for the client it forwards.
+    proxied = TestClient(app, client=("172.18.0.2", 40000))
+    assert (
+        proxied.get(
+            "/api/manga", headers={"X-Forwarded-For": "192.168.1.20"}
+        ).status_code
+        == 200
+    )
+    assert (
+        proxied.get(
+            "/api/manga", headers={"X-Forwarded-For": "8.8.8.8, 172.18.0.2"}
+        ).status_code
+        == 401
+    )
+    # Forwarding headers from an address Tankarr does not trust: nobody is local.
+    stranger = TestClient(app, client=("10.9.9.9", 40000))
+    assert (
+        stranger.get(
+            "/api/manga", headers={"X-Forwarded-For": "192.168.1.20"}
+        ).status_code
+        == 401
+    )
+    # uvicorn already resolved the chain (FORWARDED_ALLOW_IPS): the peer is the client.
+    resolved = TestClient(app, client=("192.168.1.30", 40000))
+    assert (
+        resolved.get(
+            "/api/manga", headers={"X-Forwarded-For": "192.168.1.30"}
+        ).status_code
+        == 200
+    )
+    for client in (lan, remote, proxied, stranger, resolved):
+        client.close()
+
+
+def test_external_authentication_trusts_only_the_proxy(tmp_path: Path):
+    settings = _settings(
+        tmp_path,
+        auth_method="external",
+        auth_username="fixture-user",
+        auth_password="correct horse battery staple",
+        auth_trusted_proxies="10.0.0.0/8",
+    )
+    app = create_app(settings)
+
+    proxied = TestClient(app, client=("10.1.2.3", 40000))
+    status = proxied.get("/api/auth/status", headers={"Remote-User": "alice"}).json()
+    assert status == {
+        "configured": True,
+        "method": "external",
+        "authenticated": True,
+        "username": "alice",
+    }
+    assert proxied.get("/api/manga").status_code == 200
+    assert proxied.get("/").text == "Tankarr UI"
+
+    direct = TestClient(app, client=("192.168.1.10", 40000))
+    refused = direct.get("/api/manga")
+    assert refused.status_code == 401
+    assert "www-authenticate" not in refused.headers
+    assert direct.get("/api/auth/status").json()["authenticated"] is False
+    # The shell still loads, to explain that the proxy has to sign the user in.
+    assert direct.get("/").text == "Tankarr UI"
+    # Scripts keep their login and API key.
+    assert (
+        direct.get(
+            "/api/manga", auth=("fixture-user", "correct horse battery staple")
+        ).status_code
+        == 200
+    )
+    proxied.close()
+    direct.close()
+
+
+def test_external_authentication_needs_trusted_proxies():
+    with pytest.raises(ValidationError):
+        Settings(auth_method="external")
+    normalized = Settings(
+        auth_method="external",
+        auth_trusted_proxies=" 172.18.0.2 , 10.0.0.0/8,10.0.0.0/8",
+    )
+    assert normalized.auth_trusted_proxies == "172.18.0.2,10.0.0.0/8"
+    with pytest.raises(ValidationError):
+        Settings(auth_trusted_proxies="proxy.local")

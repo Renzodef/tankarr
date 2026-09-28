@@ -60,5 +60,24 @@ export default function AuthGate() {
     return <LoginPage onAuthenticated={setStatus} />;
   }
 
+  if (status.configured && status.method === "external" && !status.authenticated) {
+    return (
+      <main className="login-page">
+        <section className="login-card">
+          <div className="login-brand">
+            <Logo size={54} />
+            <h1>tankarr</h1>
+          </div>
+          <p className="muted">
+            Sign in through your reverse proxy. Tankarr only accepts requests that arrive from its trusted proxies, and this one did not.
+          </p>
+          <button type="button" className="btn btn-primary" onClick={() => void refresh()}>
+            Retry
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return <App authentication={status} onLogout={logout} />;
 }

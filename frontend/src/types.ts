@@ -56,7 +56,7 @@ export type LibraryCountSummary = {
 
 export type AuthStatus = {
   configured: boolean;
-  method: "forms" | "basic";
+  method: "forms" | "basic" | "external";
   authenticated: boolean;
   username: string | null;
 };

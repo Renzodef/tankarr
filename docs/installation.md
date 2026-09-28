@@ -117,8 +117,32 @@ sees the real client address, for example
 The default method, `forms`, shows a login page with a signed, HTTP-only
 session cookie and "Remember me", like the other *arr applications.
 `TANKARR_AUTH_METHOD=basic` uses the browser's credential prompt instead. API
-clients can always use HTTP Basic authentication. The method, user name and
-password can be changed later from **Settings → Security**.
+clients can always use HTTP Basic authentication or the API key. The method,
+user name and password can be changed later from **Settings → Security**.
+
+Two options match the other *arr applications' authentication settings:
+
+- `TANKARR_AUTH_REQUIRED_FOR_LOCAL=false` lets requests from your own network
+  (private and loopback addresses) in without a login. Behind a reverse proxy,
+  set `TANKARR_AUTH_TRUSTED_PROXIES` to the proxy's address so Tankarr judges
+  the forwarded client, not the proxy; forwarding headers from an address it
+  does not trust never count as local, so a proxy on the LAN cannot turn the
+  internet into local addresses.
+- `TANKARR_AUTH_METHOD=external` hands the sign-in to a reverse proxy that
+  authenticates users itself (Authelia, Authentik, Caddy `forward_auth`,
+  Traefik middlewares). Tankarr then accepts requests only from
+  `TANKARR_AUTH_TRUSTED_PROXIES` and shows the user name the proxy sends in
+  `Remote-User`. Never expose port 8787 past that proxy.
+
+```caddyfile
+tankarr.example.com {
+    forward_auth authelia:9091 {
+        uri /api/authz/forward-auth
+        copy_headers Remote-User Remote-Groups
+    }
+    reverse_proxy tankarr:8787
+}
+```
 
 ## File permissions
 

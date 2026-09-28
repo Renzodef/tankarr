@@ -235,12 +235,25 @@ const SECTIONS: SectionDef[] = [
       {
         key: "auth_method",
         label: "Authentication method",
-        hint: "Forms shows the Tankarr login page. Basic uses the browser's credential prompt and remains available to API clients.",
+        hint: "Forms shows the Tankarr login page. Basic uses the browser's credential prompt and remains available to API clients. External trusts a reverse proxy (Authelia, Authentik, Caddy forward_auth) that signs users in: requests are accepted from the trusted proxies only.",
         kind: "select",
         options: [
           ["forms", "Forms (Login Page)"],
           ["basic", "Basic (Browser Prompt)"],
+          ["external", "External (Reverse Proxy)"],
         ],
+      },
+      {
+        key: "auth_trusted_proxies",
+        label: "Trusted proxies",
+        hint: "Comma-separated addresses or networks of your reverse proxy, for example 172.18.0.2 or 10.0.0.0/8. Required by External; also tells Tankarr which forwarded client address to believe.",
+        kind: "text",
+      },
+      {
+        key: "auth_required_for_local",
+        label: "Require a login on the local network",
+        hint: "Off: requests from private and loopback addresses skip the login, like \"Disabled for local addresses\" in the other *arr applications. Behind a reverse proxy, set Trusted proxies first; forwarding headers from an untrusted address never count as local.",
+        kind: "boolean",
       },
       {
         key: "auth_username",
