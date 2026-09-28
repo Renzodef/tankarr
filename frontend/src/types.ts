@@ -939,6 +939,14 @@ export type TorrentStatus = {
   category: string;
   active: number;
   review: number;
+  orphan_sweep?: {
+    at: string;
+    seen: number;
+    removed: number;
+    names: string[];
+    foreign: number;
+    foreign_names: string[];
+  } | null;
   last_poll_at: string | null;
   last_error: string | null;
 };

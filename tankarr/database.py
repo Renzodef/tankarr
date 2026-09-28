@@ -390,6 +390,13 @@ CREATE TABLE IF NOT EXISTS torrent_download (
     UNIQUE(manga_id, source, source_id)
 );
 
+-- Every torrent Tankarr ever handed to the client, kept after its job is
+-- deleted: the orphan sweep removes only hashes recorded here.
+CREATE TABLE IF NOT EXISTS torrent_ledger (
+    info_hash TEXT PRIMARY KEY,
+    added_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_download_job_status_manga
     ON download_job(status, manga_id);
 
@@ -930,7 +937,7 @@ def clean_release_title(value: object) -> str:
 
 # Increment whenever initialize adds or changes a schema migration. The marker is
 # committed only after initialization succeeds; upgrades are backed up beforehand.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class Database:
@@ -1021,6 +1028,11 @@ class Database:
                     ).create()
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(SCHEMA)
+            # Jobs created before the ledger existed are Tankarr's torrents too.
+            connection.execute(
+                "INSERT OR IGNORE INTO torrent_ledger (info_hash, added_at) "
+                "SELECT info_hash, created_at FROM torrent_download"
+            )
             self._ensure_column(
                 connection, "manga", "translation_enabled", "INTEGER NOT NULL DEFAULT 0"
             )
@@ -8889,7 +8901,43 @@ class Database:
                     ),
                 )
                 identifier = int(cursor.lastrowid)
+            connection.execute(
+                "INSERT OR IGNORE INTO torrent_ledger (info_hash, added_at) VALUES (?, ?)",
+                (info_hash, now),
+            )
         return self.get_torrent_download(identifier)
+
+    def torrent_hashes_with_job(self, info_hashes: Iterable[str]) -> set[str]:
+        """The given hashes that a download job (of any status) still references."""
+
+        return self._matching_hashes("torrent_download", info_hashes)
+
+    def torrent_hashes_added_by_tankarr(self, info_hashes: Iterable[str]) -> set[str]:
+        """The given hashes Tankarr handed to the client at some point.
+
+        A job that was deleted (series removed, unit changed) leaves its hash
+        here, so the orphan sweep can tell Tankarr's leftovers from torrents
+        another application or a person put in the same category.
+        """
+
+        return self._matching_hashes("torrent_ledger", info_hashes)
+
+    def _matching_hashes(self, table: str, info_hashes: Iterable[str]) -> set[str]:
+        wanted = {str(value).casefold() for value in info_hashes if value}
+        if not wanted:
+            return set()
+        found: set[str] = set()
+        values = sorted(wanted)
+        with self.connect() as connection:
+            for start in range(0, len(values), 500):
+                chunk = values[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    f"SELECT info_hash FROM {table} WHERE info_hash IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                found.update(str(row[0]).casefold() for row in rows)
+        return found
 
     def set_torrent_download_protocol(self, download_id: int, protocol: str) -> None:
         with self.connect() as connection:

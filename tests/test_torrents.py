@@ -605,16 +605,64 @@ async def test_orphan_sweep_removes_only_old_unreferenced_torrents_in_the_catego
 
     database, qbit, manager, job = _seeded_manager(tmp_path, "seed")
     old = time.time() - 48 * 3600
+    # Two torrents Tankarr added whose jobs were dropped afterwards (series
+    # deleted): one past the grace period, one fresh.
+    dropped_old = database.create_torrent_download(
+        "kamui", {**release(info_hash="a" * 40), "id": "rel-a"}
+    )
+    dropped_fresh = database.create_torrent_download(
+        "kamui", {**release(info_hash="b" * 40), "id": "rel-b"}
+    )
+    database.delete_torrent_download(dropped_old["id"])
+    database.delete_torrent_download(dropped_fresh["id"])
     qbit.category_torrents = [
         {"hash": job["info_hash"], "name": "known", "added_on": old},
         {"hash": "a" * 40, "name": "old orphan", "added_on": old},
         {"hash": "b" * 40, "name": "fresh orphan", "added_on": time.time() - 600},
+        # Put in the category by another application or by hand: never ours.
+        {"hash": "c" * 40, "name": "foreign seed", "added_on": old},
     ]
     result = await manager.sweep_orphans()
-    assert result == {"seen": 3, "removed": 1}
+    assert result == {"seen": 4, "removed": 1, "foreign": 1}
     assert qbit.deleted == [("a" * 40, True)]
     assert manager.last_orphan_sweep["names"] == ["old orphan"]
+    assert manager.last_orphan_sweep["foreign_names"] == ["foreign seed"]
     assert manager.status()["orphan_sweep"]["removed"] == 1
+    assert manager.status()["orphan_sweep"]["foreign"] == 1
+
+
+@pytest.mark.asyncio
+async def test_orphan_sweep_recognises_tankarr_torrents_beyond_the_recent_jobs(
+    tmp_path: Path,
+):
+    """The ledger, not a window over recent jobs, decides what is Tankarr's."""
+
+    import time
+
+    database, qbit, manager, job = _seeded_manager(tmp_path, "seed")
+    old = time.time() - 48 * 3600
+    # A job older than any listing window: still referenced, so kept, and a
+    # deleted one of the same age: Tankarr's, so removed.
+    kept = database.create_torrent_download(
+        "kamui", {**release(info_hash="d" * 40), "id": "rel-d"}
+    )
+    gone = database.create_torrent_download(
+        "kamui", {**release(info_hash="e" * 40), "id": "rel-e"}
+    )
+    database.delete_torrent_download(gone["id"])
+    for index in range(600):
+        filler = database.create_torrent_download(
+            "kamui", {**release(info_hash=f"{index:040x}"), "id": f"rel-{index}"}
+        )
+        database.delete_torrent_download(filler["id"])
+    qbit.category_torrents = [
+        {"hash": kept["info_hash"], "name": "kept", "added_on": old},
+        {"hash": gone["info_hash"], "name": "gone", "added_on": old},
+    ]
+    result = await manager.sweep_orphans()
+    assert result == {"seen": 2, "removed": 1, "foreign": 0}
+    assert qbit.deleted == [("e" * 40, True)]
+    assert job["info_hash"] not in {hash_ for hash_, _ in qbit.deleted}
 
 
 class FakeSAB:
