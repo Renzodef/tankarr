@@ -1,3 +1,4 @@
+import { serverUrl } from "./serverUrl";
 import type {
   InternetArchiveProbe,
   LibraryOrphans,
@@ -171,7 +172,7 @@ async function performRequest<T>(
   try {
     let response: Response;
     try {
-      response = await fetch(path, {
+      response = await fetch(serverUrl(path), {
         ...options,
         credentials: "same-origin",
         headers,
@@ -727,7 +728,7 @@ export const api = {
     language: string,
     onEvent: (event: SuwayomiTestEvent) => void,
   ): Promise<void> => {
-    const response = await fetch("/api/system/suwayomi/test", {
+    const response = await fetch(serverUrl("/api/system/suwayomi/test"), {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },

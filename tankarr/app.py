@@ -163,6 +163,7 @@ from tankarr.suwayomi_runtime import (
 )
 from tankarr.torrents import TorrentManager
 from tankarr.updates import UpdateChecker
+from tankarr.url_base import UrlBaseMiddleware
 from tankarr.worker import DownloadWorker
 
 
@@ -1787,6 +1788,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(CrossOriginProtectionMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=4)
     app.add_middleware(SecurityHeadersMiddleware)
+    if settings.url_base:
+        # Outermost: every other middleware and route sees the base as the
+        # ASGI root_path and keeps working with root-relative paths.
+        app.add_middleware(UrlBaseMiddleware, url_base=settings.url_base)
     app.state.settings = settings
     app.state.database = database
     app.state.provider = provider
@@ -1854,7 +1859,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 or forwarded_scheme.strip().casefold() == "https"
             ),
             "samesite": "lax",
-            "path": "/",
+            "path": settings.url_base or "/",
         }
         if credentials.remember_me:
             cookie_options["max_age"] = 30 * 24 * 60 * 60
@@ -1869,7 +1874,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = JSONResponse(
             {"authenticated": False}, headers={"Cache-Control": "no-store"}
         )
-        response.delete_cookie(SESSION_COOKIE, path="/", samesite="lax")
+        response.delete_cookie(
+            SESSION_COOKIE, path=settings.url_base or "/", samesite="lax"
+        )
         return response
 
     @app.get("/api/auth/api-key")

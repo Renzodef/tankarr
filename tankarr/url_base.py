@@ -22,6 +22,20 @@ ROOT_HEALTH_PATHS = frozenset(
 )
 
 
+def route_path(scope: Scope) -> str:
+    """The path inside the application: the request path without the URL base."""
+
+    path = str(scope.get("path") or "")
+    root = str(scope.get("root_path") or "")
+    if (
+        root
+        and path.startswith(root)
+        and (len(path) == len(root) or path[len(root)] == "/")
+    ):
+        return path[len(root) :] or "/"
+    return path
+
+
 def normalize_url_base(value: object) -> str:
     """``/tankarr`` from ``tankarr``, ``/tankarr/`` or `` /tankarr ``; ``""`` for the root."""
 

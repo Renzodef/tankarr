@@ -25,6 +25,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from tankarr.config import Settings
+from tankarr.url_base import route_path
 
 logger = logging.getLogger(__name__)
 
@@ -558,7 +559,7 @@ class AuthenticationMiddleware:
         self.manager = manager
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        path = str(scope.get("path") or "")
+        path = route_path(scope)
         if scope["type"] == "websocket":
             if self.manager.configured and not self.manager.request_authenticated(
                 scope
@@ -726,7 +727,7 @@ class RestoreSafetyMiddleware:
         self.app, self.settings = app, settings
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        path = scope.get("path", "")
+        path = route_path(scope)
         inspections = {
             "/api/system/preflight",
             "/api/acquisition/preview",

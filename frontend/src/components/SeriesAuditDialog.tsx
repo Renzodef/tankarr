@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal, Spinner, StatusPill, formatBytes, humanize, languageName } from "../components";
+import { serverUrl } from "../serverUrl";
 
 import type { SeriesAuditFile, SeriesAuditSourceKey, SeriesAuditReport, SeriesAuditPreview, SeriesAuditResult } from "../types";
 
@@ -20,7 +21,7 @@ function AuditThumbnail({ file, edge, onLoaded }: { file: SeriesAuditFile; edge:
   const url = edge === "first" ? file.first_thumbnail_url : file.last_thumbnail_url;
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   return <figure style={{ margin: 0 }}>
-    {url && url !== failedUrl ? <img src={url} loading="lazy" width={192} height={272} alt={`${edge === "first" ? "First" : "Last"} page of ${fileLabel(file)} from ${sourceLabel(file)}`} style={{ width: "100%", height: 200, objectFit: "contain" }} onLoad={onLoaded} onError={() => setFailedUrl(url)} /> : <div className="muted small" style={{ height: 200, display: "grid", placeItems: "center" }}>Preview unavailable</div>}
+    {url && url !== failedUrl ? <img src={serverUrl(url)} loading="lazy" width={192} height={272} alt={`${edge === "first" ? "First" : "Last"} page of ${fileLabel(file)} from ${sourceLabel(file)}`} style={{ width: "100%", height: 200, objectFit: "contain" }} onLoad={onLoaded} onError={() => setFailedUrl(url)} /> : <div className="muted small" style={{ height: 200, display: "grid", placeItems: "center" }}>Preview unavailable</div>}
     <figcaption className="muted small">{edge === "first" ? "First page" : "Last page"}</figcaption>
   </figure>;
 }

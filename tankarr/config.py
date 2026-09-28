@@ -59,6 +59,8 @@ class Settings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 8787
+    # Sub-path behind a reverse proxy ("/tankarr"); empty serves the root.
+    url_base: str = ""
     data_dir: Path = Path("data")
     library_dir: Path = Path("data/library")
     import_dir: Path | None = None
@@ -263,6 +265,13 @@ class Settings(BaseSettings):
     mangaupdates_api_url: str = "https://api.mangaupdates.com/v1"
     anilist_api_url: str = "https://graphql.anilist.co"
     myanimelist_api_url: str = "https://api.myanimelist.net/v2"
+
+    @field_validator("url_base")
+    @classmethod
+    def validate_url_base(cls, value: object) -> str:
+        from tankarr.url_base import normalize_url_base
+
+        return normalize_url_base(value)
 
     @field_validator("setup_completed_at")
     @classmethod

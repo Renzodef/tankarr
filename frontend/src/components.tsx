@@ -1,4 +1,5 @@
 import { ReactNode, createContext, useContext, useEffect, useId, useRef, useState } from "react";
+import { URL_BASE, serverUrl } from "./serverUrl";
 import type { Health, Manga, MonitorMode } from "./types";
 
 /* ---------------------------------- icons --------------------------------- */
@@ -647,13 +648,15 @@ function coverThumbnailWidth(className?: string): number | null {
 export function artworkThumbnailUrl(url: string | null, width: number): string | null {
   if (!url) return null;
   try {
-    const parsed = new URL(url, window.location.origin);
+    const resolved = serverUrl(url);
+    const parsed = new URL(resolved, window.location.origin);
     if (parsed.origin !== window.location.origin) return url;
-    const isSeries = /^\/api\/metadata\/artwork\/[^/]+\/series$/.test(parsed.pathname);
-    const isVolume = /^\/api\/metadata\/artwork\/[^/]+\/volumes\/[^/]+$/.test(parsed.pathname);
-    if (!isSeries && !isVolume) return url;
-    parsed.pathname = `${parsed.pathname}/thumbnail/${width}`;
-    return `${parsed.pathname}${parsed.search}`;
+    // Tankarr's own artwork routes, seen without the URL base they live under.
+    const pathname = URL_BASE && parsed.pathname.startsWith(`${URL_BASE}/`) ? parsed.pathname.slice(URL_BASE.length) : parsed.pathname;
+    const isSeries = /^\/api\/metadata\/artwork\/[^/]+\/series$/.test(pathname);
+    const isVolume = /^\/api\/metadata\/artwork\/[^/]+\/volumes\/[^/]+$/.test(pathname);
+    if (!isSeries && !isVolume) return resolved;
+    return `${URL_BASE}${pathname}/thumbnail/${width}${parsed.search}`;
   } catch {
     return url;
   }
@@ -663,7 +666,7 @@ type CoverProps = { url: string | null; title: string; className?: string; prior
 
 export function Cover({ url, title, className, priority = false }: CoverProps) {
   const thumbnailWidth = coverThumbnailWidth(className);
-  const source = thumbnailWidth ? artworkThumbnailUrl(url, thumbnailWidth) : url;
+  const source = thumbnailWidth ? artworkThumbnailUrl(url, thumbnailWidth) : url ? serverUrl(url) : null;
   // Each source owns its image and error state. An old request's error cannot
   // hide a replacement image, and React handles cancellation on unmount.
   return (
