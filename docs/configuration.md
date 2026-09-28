@@ -392,18 +392,30 @@ addresses are listed under [Advanced](#advanced).
 | `TANKARR_METADATA_REFRESH_INTERVAL_HOURS` | `168` | How long the metadata of an existing series is kept before the catalogues are asked again, in hours: 1 to 8760 (168 is one week). New series are looked up within minutes. Settings → Metadata (advanced). |
 | `TANKARR_AUTHOR_REFRESH_INTERVAL_HOURS` | `24` | How often each author's list of works is refreshed from MangaBaka, in hours: 1 to 720. Restart required. |
 
-## Notifications (ntfy)
+## Notifications
 
-Tankarr sends notifications to an ntfy server when both the URL and the topic
-are set. Imports and decisions use normal priority, failures high priority.
+Tankarr sends the same events to every channel that is configured: an ntfy
+topic, a generic webhook, a Discord channel, a Telegram chat and an Apprise
+server, which reaches most other services. Imports and decisions use normal
+priority, failures high priority. A failed notification never fails the import
+or the job that triggered it, and failures are logged by type and HTTP status
+only, never with the URL, which may hold a token.
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `TANKARR_NTFY_ON_CHAPTER_IMPORTED` | `true` | Notify when a chapter or book has been written to the library. Applies to every channel. Settings → Notifications. |
+| `TANKARR_NTFY_ON_DOWNLOAD_FAILED` | `true` | Notify, with high priority, when a download job fails. Applies to every channel. Settings → Notifications. |
+| `TANKARR_NTFY_ON_DECISION_NEEDED` | `true` | Notify once for each new match review and for each Wanted item that every source has given up on ("Not obtainable"). Applies to every channel. Settings → Notifications. |
 | `TANKARR_NTFY_URL` | *unset* | Root address of the ntfy server, for example `https://ntfy.sh` or `http://nas.local:8081`. On iOS it must match the default server of the ntfy app exactly. Settings → Notifications. |
 | `TANKARR_NTFY_TOPIC` | `tankarr` | Topic to publish to; subscribe to the same topic in the ntfy app. Settings → Notifications. |
-| `TANKARR_NTFY_ON_CHAPTER_IMPORTED` | `true` | Notify when a chapter or book has been written to the library. Settings → Notifications. |
-| `TANKARR_NTFY_ON_DOWNLOAD_FAILED` | `true` | Notify, with high priority, when a download job fails. Settings → Notifications. |
-| `TANKARR_NTFY_ON_DECISION_NEEDED` | `true` | Notify once for each new match review and for each Wanted item that every source has given up on ("Not obtainable"). Settings → Notifications. |
+| `TANKARR_WEBHOOK_URL` | *unset* | Address that receives one JSON document per event (`event`, `title`, `message`, `priority`, `tags`, `at`, `data`, `application`, `version`) by POST, for Home Assistant, n8n or a script of your own. Settings → Notifications. |
+| `TANKARR_WEBHOOK_TOKEN` | *unset* | Sent as `Authorization: Bearer <token>` with every webhook request. Secret; stored in the secrets file. Settings → Notifications. |
+| `TANKARR_DISCORD_WEBHOOK_URL` | *unset* | Webhook URL of a Discord channel (Channel settings → Integrations → Webhooks). Events arrive as embeds, red for failures. Secret; stored in the secrets file. Settings → Notifications. |
+| `TANKARR_TELEGRAM_BOT_TOKEN` | *unset* | Token of a Telegram bot created with @BotFather; set together with the chat ID. Secret; stored in the secrets file. Settings → Notifications. |
+| `TANKARR_TELEGRAM_CHAT_ID` | *unset* | Chat, group or channel the bot posts to (a number, negative for groups). Settings → Notifications. |
+| `TANKARR_APPRISE_URL` | *unset* | Root address of an [Apprise API](https://github.com/caronc/apprise-api) server, for example `http://apprise:8000`. Set together with a configuration key or notification URLs. Settings → Notifications. |
+| `TANKARR_APPRISE_KEY` | *unset* | Key of a configuration stored on the Apprise server; Tankarr posts to `/notify/<key>`. Settings → Notifications. |
+| `TANKARR_APPRISE_URLS` | *unset* | Comma-separated Apprise notification URLs (`mailto://…`, `pover://…`, …) sent with each request when no configuration key is set. Secret; stored in the secrets file. Settings → Notifications. |
 
 ## Translation
 

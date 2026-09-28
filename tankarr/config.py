@@ -226,6 +226,15 @@ class Settings(BaseSettings):
     # A human has to decide: a new match review, or a slot every channel
     # has given up on.
     ntfy_on_decision_needed: bool = True
+    # More notification channels; the three ntfy_on_* switches gate them all.
+    webhook_url: str | None = None
+    webhook_token: str | None = Field(default=None, repr=False)
+    discord_webhook_url: str | None = Field(default=None, repr=False)
+    telegram_bot_token: str | None = Field(default=None, repr=False)
+    telegram_chat_id: str | None = None
+    apprise_url: str | None = None
+    apprise_key: str | None = None
+    apprise_urls: str | None = Field(default=None, repr=False)
     # Reader shortcut (independent of the optional Komga managed sync):
     # tankarr | auto | komga | kavita | stump | url | none.
     # The built-in reader needs no second catalogue or synchronization job.

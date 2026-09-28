@@ -778,6 +778,11 @@ export const api = {
       "/api/settings/test/ntfy",
       { method: "POST", body: JSON.stringify(changes) },
     ),
+  testNotificationChannel: (channel: string, changes: Record<string, string>) =>
+    request<{ ok: boolean; error?: string; status_code?: number; topic?: string }>(
+      `/api/settings/test/notifications/${encodeURIComponent(channel)}`,
+      { method: "POST", body: JSON.stringify(changes) },
+    ),
   testDownloadProvider: (provider: string, changes: Record<string, string>) =>
     request<{
       ok: boolean;

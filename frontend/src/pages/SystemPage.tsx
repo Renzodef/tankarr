@@ -506,7 +506,7 @@ export default function SystemPage() {
               </dl>
             </>
           ) : null}
-          <SystemIntegrationHealth alignment={alignment} ntfyConfigured={status.ntfy_configured} metadata={status.metadata} />
+          <SystemIntegrationHealth alignment={alignment} ntfyConfigured={status.ntfy_configured} notifications={status.notifications} metadata={status.metadata} />
           <h3 style={{ marginTop: 18 }}>Metadata catalogues</h3>
           <table className="table" style={{ marginTop: 14 }}>
             <tbody>

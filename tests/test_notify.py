@@ -166,3 +166,204 @@ def test_ntfy_test_endpoint_uses_unsaved_url_and_topic(tmp_path: Path):
     assert settings.ntfy_url is None
     assert settings.ntfy_topic == "tankarr"
     client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_webhook_receives_one_json_document_per_event_with_its_token():
+    from tankarr.notify import Notifier
+
+    route = respx.post("https://hooks.example.test/tankarr").mock(
+        return_value=httpx.Response(204)
+    )
+    notifier = Notifier(
+        Settings(
+            webhook_url="https://hooks.example.test/tankarr",
+            webhook_token="fixture-token",
+        )
+    )
+
+    delivered = await notifier.job_failed("Example", "network error")
+
+    assert delivered is True
+    request = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer fixture-token"
+    payload = json.loads(request.content)
+    assert payload["application"] == "Tankarr"
+    assert payload["event"] == "download_failed"
+    assert payload["priority"] == "high"
+    assert payload["title"] == "Download failed — Example"
+    assert payload["message"] == "network error"
+    assert payload["tags"] == ["books", "warning"]
+    assert payload["data"] == {"manga_title": "Example"}
+    assert payload["at"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_discord_embed_and_telegram_message_carry_the_event():
+    from tankarr.notify import Notifier
+
+    discord = respx.post("https://discord.test/api/webhooks/1/fixture-secret").mock(
+        return_value=httpx.Response(204)
+    )
+    telegram = respx.post("https://api.telegram.org/botfixture-token/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    notifier = Notifier(
+        Settings(
+            discord_webhook_url="https://discord.test/api/webhooks/1/fixture-secret",
+            telegram_bot_token="fixture-token",
+            telegram_chat_id="12345",
+        )
+    )
+
+    delivered = await notifier.chapter_imported(
+        {"id": "m1", "title": "Example"},
+        {"chapter": "3", "language": "en", "provider": "local"},
+    )
+
+    assert delivered is True
+    body = json.loads(discord.calls[0].request.content)
+    assert body["username"] == "Tankarr"
+    assert body["embeds"][0]["title"] == "Example — Chapter 3"
+    assert body["embeds"][0]["description"] == "Imported [en] from local"
+    assert body["embeds"][0]["color"] == 0x3498DB
+    assert json.loads(telegram.calls[0].request.content) == {
+        "chat_id": "12345",
+        "text": "Example — Chapter 3\n\nImported [en] from local",
+        "disable_web_page_preview": True,
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_apprise_uses_the_configuration_key_or_the_urls():
+    from tankarr.notify import Notifier
+
+    keyed = respx.post("http://apprise.test/notify/tankarr").mock(
+        return_value=httpx.Response(200)
+    )
+    direct = respx.post("http://apprise.test/notify").mock(
+        return_value=httpx.Response(200)
+    )
+    with_key = Notifier(
+        Settings(apprise_url="http://apprise.test/", apprise_key="tankarr")
+    )
+    assert await with_key.send("Title", "Body", priority="high") is True
+    assert json.loads(keyed.calls[0].request.content) == {
+        "title": "Title",
+        "body": "Body",
+        "type": "failure",
+        "format": "text",
+    }
+
+    with_urls = Notifier(
+        Settings(
+            apprise_url="http://apprise.test", apprise_urls="json://example.test/hook"
+        )
+    )
+    assert await with_urls.send("Title", "Body") is True
+    payload = json.loads(direct.calls[0].request.content)
+    assert payload["type"] == "info"
+    assert payload["urls"] == "json://example.test/hook"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_failing_channel_hides_neither_the_others_nor_its_secret(caplog):
+    from tankarr.notify import Notifier
+
+    respx.post("https://discord.test/api/webhooks/1/fixture-secret").mock(
+        return_value=httpx.Response(500)
+    )
+    ntfy = respx.post(BASE_URL).mock(return_value=httpx.Response(200))
+    notifier = Notifier(
+        Settings(
+            ntfy_url=BASE_URL,
+            ntfy_topic="tankarr",
+            discord_webhook_url="https://discord.test/api/webhooks/1/fixture-secret",
+        )
+    )
+    assert notifier.configured_channels() == {
+        "ntfy": True,
+        "webhook": False,
+        "discord": True,
+        "telegram": False,
+        "apprise": False,
+    }
+
+    with caplog.at_level("WARNING"):
+        delivered = await notifier.send("Title", "Body")
+
+    assert delivered is True
+    assert ntfy.called
+    assert "HTTP 500" in caplog.text
+    assert "fixture-secret" not in caplog.text
+    probe = await notifier.test_delivery("discord")
+    assert probe == {"ok": False, "error": "Discord rejected the test with HTTP 500"}
+    assert await notifier.test_delivery("pager") == {
+        "ok": False,
+        "error": "Unknown notification channel",
+    }
+    assert await notifier.test_delivery("telegram") == {
+        "ok": False,
+        "error": "Set both the Telegram bot token and chat ID before testing",
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_event_switches_gate_every_channel():
+    from tankarr.notify import Notifier
+
+    notifier = Notifier(
+        Settings(
+            webhook_url="https://hooks.example.test/tankarr",
+            ntfy_on_download_failed=False,
+            ntfy_on_chapter_imported=False,
+            ntfy_on_decision_needed=False,
+        )
+    )
+    assert await notifier.job_failed("Example", "boom") is False
+    assert (
+        await notifier.chapter_imported({"title": "Example"}, {"chapter": "1"}) is False
+    )
+    assert await notifier.decision_needed("review", "detail") is False
+
+
+@respx.mock
+def test_notification_test_endpoint_probes_one_channel_with_unsaved_values(
+    tmp_path: Path,
+):
+    route = respx.post("https://hooks.example.test/tankarr").mock(
+        return_value=httpx.Response(200)
+    )
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        suwayomi_enabled=False,
+        update_check_enabled=False,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/settings/test/notifications/webhook",
+        json={"webhook_url": "https://hooks.example.test/tankarr"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "status_code": 200}
+    assert route.called
+    assert settings.webhook_url is None
+    assert (
+        client.post("/api/settings/test/notifications/pager", json={}).status_code
+        == 404
+    )
+    refused = client.post(
+        "/api/settings/test/notifications/webhook", json={"ntfy_url": BASE_URL}
+    )
+    assert refused.status_code == 400
+    status = client.get("/api/system/status").json()
+    assert status["notifications"]["webhook"] is False
+    client.close()

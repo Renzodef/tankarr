@@ -45,6 +45,10 @@ MANAGED_SECRET_ENV: dict[str, str] = {
     "reader_api_key": "TANKARR_READER_API_KEY",
     "reader_password": "TANKARR_READER_PASSWORD",
     "komga_password": "TANKARR_KOMGA_PASSWORD",
+    "webhook_token": "TANKARR_WEBHOOK_TOKEN",
+    "discord_webhook_url": "TANKARR_DISCORD_WEBHOOK_URL",
+    "telegram_bot_token": "TANKARR_TELEGRAM_BOT_TOKEN",
+    "apprise_urls": "TANKARR_APPRISE_URLS",
 }
 
 
@@ -153,6 +157,14 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "ntfy_on_chapter_imported": SettingSpec("bool"),
     "ntfy_on_download_failed": SettingSpec("bool"),
     "ntfy_on_decision_needed": SettingSpec("bool"),
+    "webhook_url": SettingSpec("optional_str", max_length=500),
+    "webhook_token": SettingSpec("optional_str", secret=True, max_length=500),
+    "discord_webhook_url": SettingSpec("optional_str", secret=True, max_length=500),
+    "telegram_bot_token": SettingSpec("optional_str", secret=True, max_length=200),
+    "telegram_chat_id": SettingSpec("optional_str", max_length=100),
+    "apprise_url": SettingSpec("optional_str", max_length=500),
+    "apprise_key": SettingSpec("optional_str", max_length=200),
+    "apprise_urls": SettingSpec("optional_str", secret=True, max_length=2_000),
 }
 
 

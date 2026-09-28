@@ -1013,6 +1013,7 @@ export type Health = {
   library_alignment: LibraryAlignment | null;
   komga_refresh: KomgaRefreshStatus;
   ntfy_configured: boolean;
+  notifications?: Record<string, boolean>;
   library:
     | { available: true; root: string }
     | { available: false; reason: string };
@@ -1277,6 +1278,7 @@ export type SystemStatus = {
   library_alignment: LibraryAlignment | null;
   komga_refresh: KomgaRefreshStatus;
   ntfy_configured: boolean;
+  notifications?: Record<string, boolean>;
   monitor: MonitorStatus;
   metadata: MetadataStatus;
   torrents: TorrentStatus;

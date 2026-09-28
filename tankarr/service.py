@@ -76,7 +76,7 @@ from tankarr.naming import (
     chapter_filename,
     final_library_path,
 )
-from tankarr.notify import NtfyNotifier
+from tankarr.notify import Notifier
 from tankarr.official_evidence import (
     NAVER_WEBTOON_HOST,
     fetch_naver_webtoon_items,
@@ -398,7 +398,7 @@ class TankarrService:
         database: Database,
         provider: Provider | dict[str, Provider],
         komga: KomgaClient,
-        notifier: NtfyNotifier | None = None,
+        notifier: Notifier | None = None,
     ):
         self.settings = settings
         self.database = database
@@ -408,7 +408,7 @@ class TankarrService:
         else:
             self.providers = {getattr(provider, "name", "suwayomi"): provider}
         self.komga = komga
-        self.notifier = notifier or NtfyNotifier(settings)
+        self.notifier = notifier or Notifier(settings)
         self._mutation_lock = asyncio.Lock()
         self._komga_reconciliation_lock = asyncio.Lock()
         self._komga_refresh_lock = asyncio.Lock()

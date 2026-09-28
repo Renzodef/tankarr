@@ -104,7 +104,7 @@ from tankarr.models import (
 from tankarr.monitor import ReleaseMonitor
 from tankarr.monitoring import BACKLOG_MONITOR_MODES, FUTURE_MONITOR_MODES
 from tankarr.native_reader import NativeReaderLibrary, register_native_reader_routes
-from tankarr.notify import NtfyNotifier
+from tankarr.notify import CHANNEL_SETTINGS, Notifier
 from tankarr.official_platforms import extensions_to_install, official_platforms_for
 from tankarr.operations import register_operations_routes
 from tankarr.operator_map import register_chapter_map_routes
@@ -1920,6 +1920,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "library_alignment": reader_alignment_status(),
             "komga_refresh": service.komga_refresh_status(),
             "ntfy_configured": service.notifier.configured,
+            "notifications": service.notifier.configured_channels(),
             "library": service.library_status(),
             "deletion_recovery": service.last_deletion_recovery,
             "library_organization": service.last_library_organization,
@@ -4012,6 +4013,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ),
                 "komga_refresh": service.komga_refresh_status(),
                 "ntfy_configured": service.notifier.configured,
+                "notifications": service.notifier.configured_channels(),
                 "monitor": monitor.status(),
                 "metadata": metadata.status(),
                 "torrents": torrents.status(),
@@ -4791,7 +4793,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return await NtfyNotifier(candidate).test_delivery()
+        return await Notifier(candidate).test_delivery()
+
+    @app.post("/api/settings/test/notifications/{channel}")
+    async def test_notification_channel(
+        channel: str, changes: dict[str, object] | None = None
+    ):
+        allowed = CHANNEL_SETTINGS.get(channel)
+        if allowed is None:
+            raise HTTPException(status_code=404, detail="Unknown notification channel")
+        try:
+            candidate = preview_settings(settings, changes or {}, allowed=set(allowed))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return await Notifier(candidate).test_delivery(channel)
 
     @app.post("/api/settings/test/metadata/{source_name}")
     async def test_metadata_source(

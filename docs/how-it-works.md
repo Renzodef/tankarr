@@ -344,7 +344,7 @@ languages they are recorded as unavailable.
 
 With **On decision needed** turned on in the notification settings, each new
 match to confirm and each item that becomes **Not obtainable** is announced
-once, see [Notifications (ntfy)](integrations.md#notifications-ntfy).
+once, see [Notifications](integrations.md#notifications).
 
 ## Source ranking and health
 
