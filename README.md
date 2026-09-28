@@ -13,6 +13,7 @@
   <a href="https://github.com/Renzodef/tankarr/releases"><img src="https://img.shields.io/github/v/release/Renzodef/tankarr?sort=semver&include_prereleases" alt="Latest release"></a>
   <a href="https://github.com/Renzodef/tankarr/pkgs/container/tankarr"><img src="https://img.shields.io/badge/image-ghcr.io%2Frenzodef%2Ftankarr-2496ED?logo=docker&logoColor=white" alt="Docker image on GitHub Container Registry"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Renzodef/tankarr" alt="License: GPL-3.0"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/Renzodef/tankarr"><img src="https://api.scorecard.dev/projects/github.com/Renzodef/tankarr/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://renzodef.github.io/tankarr/"><img src="https://img.shields.io/badge/docs-renzodef.github.io%2Ftankarr-informational" alt="Documentation"></a>
 </p>
 

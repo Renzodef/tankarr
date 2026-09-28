@@ -21,6 +21,9 @@ def main() -> None:
         "--repo", type=Path, default=Path(__file__).resolve().parents[1]
     )
     parser.add_argument("--snapshot", type=Path)
+    parser.add_argument(
+        "--url-base", default="", help="Serve under a sub-path, like TANKARR_URL_BASE"
+    )
     parser.add_argument("--artwork-root", type=Path)
     parser.add_argument(
         "--temp-root",
@@ -127,6 +130,7 @@ def main() -> None:
             auth_password=None,
             auth_required=False,
             preferred_unit="chapters",
+            url_base=options.url_base,
         )
         app = create_app(settings)
         # Lifespan is disabled below: exercise the real rendering/API routes
@@ -140,20 +144,23 @@ def main() -> None:
         async def disposable_api(request: Request, call_next):
             # Only metadata-only PATCH is needed for the search invalidation
             # test. Everything else remains a display/read-only benchmark.
+            path = request.url.path
+            if settings.url_base and path.startswith(f"{settings.url_base}/"):
+                path = path[len(settings.url_base) :]
             metadata_patch = (
                 request.method == "PATCH"
-                and request.url.path.startswith("/api/manga/")
-                and request.url.path.count("/") == 3
+                and path.startswith("/api/manga/")
+                and path.count("/") == 3
             )
             fixture_rename = (
                 options.snapshot is None
                 and request.method == "POST"
-                and request.url.path.startswith("/api/manga/browser-")
-                and request.url.path.endswith("/rename")
+                and path.startswith("/api/manga/browser-")
+                and path.endswith("/rename")
             )
             # Actual operator previews against disposable SQLite; no provider
             # is enabled and no acquisition/import/apply endpoint is allowed.
-            operator_preview = request.method == "POST" and request.url.path in {
+            operator_preview = request.method == "POST" and path in {
                 "/api/acquisition/preview",
                 "/api/library/list/preview",
                 "/api/library/repair/preview",

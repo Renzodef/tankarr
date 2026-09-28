@@ -1013,6 +1013,7 @@ export type Health = {
   library_alignment: LibraryAlignment | null;
   komga_refresh: KomgaRefreshStatus;
   ntfy_configured: boolean;
+  notifications?: Record<string, boolean>;
   library:
     | { available: true; root: string }
     | { available: false; reason: string };
@@ -1249,6 +1250,15 @@ export type SystemStatus = {
     signature?: string;
   }[];
   version: string;
+  update?: {
+    enabled: boolean;
+    current: string;
+    latest: string | null;
+    update_available: boolean;
+    url: string | null;
+    checked_at: string | null;
+    error: string | null;
+  };
   python: string;
   platform: string;
   started_at: string;
@@ -1268,6 +1278,7 @@ export type SystemStatus = {
   library_alignment: LibraryAlignment | null;
   komga_refresh: KomgaRefreshStatus;
   ntfy_configured: boolean;
+  notifications?: Record<string, boolean>;
   monitor: MonitorStatus;
   metadata: MetadataStatus;
   torrents: TorrentStatus;

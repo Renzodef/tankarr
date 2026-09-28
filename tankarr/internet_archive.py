@@ -28,6 +28,7 @@ import httpx
 
 from tankarr import USER_AGENT
 from tankarr.config import Settings
+from tankarr.http import async_client
 from tankarr.language_audit import automatic_english_decision
 from tankarr.providers.base import ProviderHTTP
 from tankarr.torrent_utils import release_match_score, release_number_hints
@@ -364,7 +365,7 @@ class InternetArchiveClient:
         if offset:
             headers["Range"] = f"bytes={offset}-"
         timeout = httpx.Timeout(60.0, read=120.0)
-        async with httpx.AsyncClient(
+        async with async_client(
             headers=headers, timeout=timeout, follow_redirects=True
         ) as client:
             async with client.stream("GET", url) as response:

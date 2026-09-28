@@ -171,16 +171,37 @@ Tankarr needs no inbound connection from them.
 
 ## Reverse proxy
 
-Tankarr serves its interface and API from the root path, so publish it on its
-own host name (for example `tankarr.example.com`) rather than under a
-sub-path. Any reverse proxy works; forward the `Host` header and allow request
-bodies of a few megabytes for cover uploads. A minimal Caddy example:
+Any reverse proxy works; forward the `Host` header and allow request bodies of
+a few megabytes for cover uploads. On its own host name, a minimal Caddy
+example:
 
 ```caddyfile
 tankarr.example.com {
     reverse_proxy tankarr:8787
 }
 ```
+
+To publish Tankarr under a sub-path of a shared host name, like the other *arr
+applications, set `TANKARR_URL_BASE=/tankarr` and restart. The interface then
+answers at `https://home.example.com/tankarr/` and the API at
+`/tankarr/api/...`; the proxy forwards the path unchanged, never stripping the
+prefix:
+
+```caddyfile
+home.example.com {
+    reverse_proxy /tankarr* tankarr:8787
+}
+```
+
+```nginx
+location /tankarr/ {
+    proxy_pass http://tankarr:8787;
+    proxy_set_header Host $host;
+}
+```
+
+Outside the base only the health checks (`/api/health`, `/api/ready`) answer,
+so the image's own health check keeps working without knowing it.
 
 Do not expose port 8787 directly to the internet. Keep Tankarr on your local
 network or VPN, or put it behind HTTPS with authentication enabled.

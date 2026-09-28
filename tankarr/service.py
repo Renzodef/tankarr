@@ -58,6 +58,7 @@ from tankarr.database import (
     local_release_identity,
     local_series_identity,
 )
+from tankarr.http import async_client
 from tankarr.komga import KomgaClient
 from tankarr.metadata.correlations import CORRELATION_LABELS, correlation_url
 from tankarr.metadata.publications import publication_metadata_key
@@ -75,7 +76,7 @@ from tankarr.naming import (
     chapter_filename,
     final_library_path,
 )
-from tankarr.notify import NtfyNotifier
+from tankarr.notify import Notifier
 from tankarr.official_evidence import (
     NAVER_WEBTOON_HOST,
     fetch_naver_webtoon_items,
@@ -397,7 +398,7 @@ class TankarrService:
         database: Database,
         provider: Provider | dict[str, Provider],
         komga: KomgaClient,
-        notifier: NtfyNotifier | None = None,
+        notifier: Notifier | None = None,
     ):
         self.settings = settings
         self.database = database
@@ -407,7 +408,7 @@ class TankarrService:
         else:
             self.providers = {getattr(provider, "name", "suwayomi"): provider}
         self.komga = komga
-        self.notifier = notifier or NtfyNotifier(settings)
+        self.notifier = notifier or Notifier(settings)
         self._mutation_lock = asyncio.Lock()
         self._komga_reconciliation_lock = asyncio.Lock()
         self._komga_refresh_lock = asyncio.Lock()
@@ -1661,7 +1662,7 @@ class TankarrService:
         ):
             return 0
         try:
-            async with httpx.AsyncClient(
+            async with async_client(
                 timeout=self.settings.request_timeout_seconds
             ) as client:
                 host, items = await fetch_naver_webtoon_items(client, naver_links[0])
@@ -5679,15 +5680,11 @@ class TankarrService:
         except LibraryUnavailable as exc:
             return {"available": False, "reason": str(exc), "count": 0, "folders": []}
         tracked: set[Path] = set()
-        for manga in self.database.list_manga():
-            for chapter in self.database.list_all_chapters(manga["id"]):
-                recorded = chapter.get("library_path")
-                if not chapter.get("downloaded") or not recorded:
-                    continue
-                try:
-                    tracked.add(self._recorded_library_path(str(recorded), root))
-                except (UnsafeLibraryPath, ValueError):
-                    continue
+        for recorded in self.database.list_tracked_library_paths():
+            try:
+                tracked.add(self._recorded_library_path(recorded, root))
+            except (UnsafeLibraryPath, ValueError):
+                continue
         by_folder: dict[str, dict[str, Any]] = {}
         total = 0
         total_bytes = 0

@@ -70,6 +70,7 @@ from tankarr.catalogue import (
 from tankarr.chapter_mapping import build_chapter_index, canonical_number
 from tankarr.config import Settings, get_settings
 from tankarr.database import ActiveDownloadJobsError, Database
+from tankarr.http import async_client
 from tankarr.importer import LanguageReviewRequired, LibraryImporter
 from tankarr.internet_archive import InternetArchiveClient
 from tankarr.komga import KomgaClient
@@ -103,7 +104,7 @@ from tankarr.models import (
 from tankarr.monitor import ReleaseMonitor
 from tankarr.monitoring import BACKLOG_MONITOR_MODES, FUTURE_MONITOR_MODES
 from tankarr.native_reader import NativeReaderLibrary, register_native_reader_routes
-from tankarr.notify import NtfyNotifier
+from tankarr.notify import CHANNEL_SETTINGS, Notifier
 from tankarr.official_platforms import extensions_to_install, official_platforms_for
 from tankarr.operations import register_operations_routes
 from tankarr.operator_map import register_chapter_map_routes
@@ -161,6 +162,8 @@ from tankarr.suwayomi_runtime import (
     default_java_executable,
 )
 from tankarr.torrents import TorrentManager
+from tankarr.updates import UpdateChecker
+from tankarr.url_base import UrlBaseMiddleware
 from tankarr.worker import DownloadWorker
 
 
@@ -647,6 +650,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     translations.acquisition = TranslationAcquisition(translations, torrents)
     torrents.translations = translations.acquisition
     authentication = AuthenticationManager(settings)
+    authentication.api_key()
+    updates = UpdateChecker(__version__, enabled=settings.update_check_enabled)
     snapshot_validators = SnapshotValidators()
     started_at = datetime.now(UTC).isoformat()
 
@@ -1337,18 +1342,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     }
     wanted_cache_lock = asyncio.Lock()
 
+    def compact_wanted_chapter(chapter: dict[str, Any]) -> dict[str, Any]:
+        compact = {
+            key: chapter.get(key) for key in wanted_chapter_fields if key in chapter
+        }
+        recovery = compact.get("recovery")
+        # A slot nobody has searched yet carries the same boilerplate verdict
+        # as every other one; the page says as much when the key is absent.
+        # For a freshly added library it was half of the Wanted payload.
+        if (
+            isinstance(recovery, dict)
+            and recovery.get("verdict") == "unsearched"
+            and not recovery.get("channels")
+        ):
+            del compact["recovery"]
+        return compact
+
     def render_wanted_payloads(revision: tuple[str, ...]) -> tuple[bytes, bytes]:
         records = service.list_wanted()
         compact_records = [
             {
                 **{key: value for key, value in entry.items() if key != "chapters"},
                 "chapters": [
-                    {
-                        key: chapter.get(key)
-                        for key in wanted_chapter_fields
-                        if key in chapter
-                    }
-                    for chapter in entry["chapters"]
+                    compact_wanted_chapter(chapter) for chapter in entry["chapters"]
                 ],
             }
             for entry in records
@@ -1723,6 +1739,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     asyncio.create_task(
                         suwayomi_maintenance_loop(), name="tankarr-suwayomi-maintenance"
                     ),
+                    asyncio.create_task(updates.run(), name="tankarr-update-check"),
                     asyncio.create_task(
                         maintenance.run(), name="tankarr-nightly-maintenance"
                     ),
@@ -1771,6 +1788,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(CrossOriginProtectionMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=4)
     app.add_middleware(SecurityHeadersMiddleware)
+    if settings.url_base:
+        # Outermost: every other middleware and route sees the base as the
+        # ASGI root_path and keeps working with root-relative paths.
+        app.add_middleware(UrlBaseMiddleware, url_base=settings.url_base)
     app.state.settings = settings
     app.state.database = database
     app.state.provider = provider
@@ -1838,7 +1859,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 or forwarded_scheme.strip().casefold() == "https"
             ),
             "samesite": "lax",
-            "path": "/",
+            "path": settings.url_base or "/",
         }
         if credentials.remember_me:
             cookie_options["max_age"] = 30 * 24 * 60 * 60
@@ -1853,8 +1874,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = JSONResponse(
             {"authenticated": False}, headers={"Cache-Control": "no-store"}
         )
-        response.delete_cookie(SESSION_COOKIE, path="/", samesite="lax")
+        response.delete_cookie(
+            SESSION_COOKIE, path=settings.url_base or "/", samesite="lax"
+        )
         return response
+
+    @app.get("/api/auth/api-key")
+    async def read_api_key():
+        key = await run_api_blocking(authentication.api_key)
+        return JSONResponse({"api_key": key}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/auth/api-key/regenerate")
+    async def regenerate_api_key(request: Request):
+        key = await run_api_blocking(authentication.regenerate_api_key)
+        logger.info("API key regenerated from %s", client_address(request.scope))
+        return JSONResponse({"api_key": key}, headers={"Cache-Control": "no-store"})
 
     def reader_alignment_status() -> dict[str, Any]:
         kind = effective_reader_kind(settings)
@@ -1886,6 +1920,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "library_alignment": reader_alignment_status(),
             "komga_refresh": service.komga_refresh_status(),
             "ntfy_configured": service.notifier.configured,
+            "notifications": service.notifier.configured_channels(),
             "library": service.library_status(),
             "deletion_recovery": service.last_deletion_recovery,
             "library_organization": service.last_library_organization,
@@ -3884,6 +3919,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "detail": str(metadata_status.get("last_cycle_error"))[:200],
                 }
             )
+        update = updates.status()
+        if update.get("update_available"):
+            alert = {
+                "level": "info",
+                "key": "update_available",
+                "title": f"Tankarr {update['latest']} is available",
+                "detail": (
+                    f"This installation runs {update['current']}. Pull the new "
+                    "image and restart the container; the release notes say "
+                    "what changed."
+                ),
+            }
+            if update.get("url"):
+                alert["href"] = str(update["url"])
+            alerts.append(alert)
         order = {"danger": 0, "warn": 1, "info": 2}
         alerts.sort(key=lambda item: order.get(item["level"], 3))
         # An acknowledged alert stays hidden until its own content changes,
@@ -3920,6 +3970,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             jobs = database.list_jobs(500)
             return {
                 "version": __version__,
+                "update": updates.status(),
                 "python": platform.python_version(),
                 "platform": platform.platform(),
                 "started_at": started_at,
@@ -3962,6 +4013,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ),
                 "komga_refresh": service.komga_refresh_status(),
                 "ntfy_configured": service.notifier.configured,
+                "notifications": service.notifier.configured_channels(),
                 "monitor": monitor.status(),
                 "metadata": metadata.status(),
                 "torrents": torrents.status(),
@@ -4248,7 +4300,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "/"
         )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with async_client(timeout=15.0) as client:
                 if kind == "none":
                     return {"ok": True, "detail": "No reader shortcut configured"}
                 if kind == "tankarr":
@@ -4741,7 +4793,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return await NtfyNotifier(candidate).test_delivery()
+        return await Notifier(candidate).test_delivery()
+
+    @app.post("/api/settings/test/notifications/{channel}")
+    async def test_notification_channel(
+        channel: str, changes: dict[str, object] | None = None
+    ):
+        allowed = CHANNEL_SETTINGS.get(channel)
+        if allowed is None:
+            raise HTTPException(status_code=404, detail="Unknown notification channel")
+        try:
+            candidate = preview_settings(settings, changes or {}, allowed=set(allowed))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return await Notifier(candidate).test_delivery(channel)
 
     @app.post("/api/settings/test/metadata/{source_name}")
     async def test_metadata_source(
@@ -4876,8 +4941,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # date merely because its official counterpart falls outside the
         # requested window.
         unit_filtered: list[dict[str, Any]] = []
+        policy = _acquisition_policy()
         for context in calendar_inputs:
-            manga_row = context["manga"]
+            # The snapshot already carries every input of the unit choice;
+            # embedding it spares three queries per series.
+            manga_row = {
+                **context["manga"],
+                "_unit_context": {
+                    "preferred": settings.preferred_unit,
+                    "acquisition_policy": policy,
+                    **(context.get("unit_context") or {}),
+                },
+            }
             metadata_row = context["metadata"]
             calendar_candidates: list[dict[str, Any]] = []
             for release in context["chapters"]:

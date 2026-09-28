@@ -5338,3 +5338,22 @@ select.input option {
   .modal-footer .btn { min-width: 0; white-space: normal; }
   .form-row .input { width: 100%; max-width: 100%; }
 }
+
+/* Settings → Security: the API key for other applications. */
+.api-key-block {
+  margin-top: 0.75rem;
+}
+
+.api-key-block > p {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.api-key-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
+  user-select: all;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(127, 127, 127, 0.14);
+}

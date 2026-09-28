@@ -18,10 +18,10 @@ import zipfile
 from contextlib import suppress
 from pathlib import Path
 
-import httpx
 from PIL import Image, ImageDraw, ImageFont
 
 from tankarr.archive import sha256
+from tankarr.http import async_client
 
 OCR_LANGUAGES = {
     "en": "eng",
@@ -329,7 +329,7 @@ async def translate_archive(source: Path, output: Path, request: dict, progress)
     partial = output.with_suffix(".partial")
     texts, translated_texts = [], []
     try:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=False) as client:
+        async with async_client(timeout=120, follow_redirects=False) as client:
             with (
                 zipfile.ZipFile(source) as archive,
                 zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_STORED) as result,

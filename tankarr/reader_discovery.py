@@ -14,6 +14,7 @@ from typing import Any, Literal
 import httpx
 
 from tankarr.config import Settings
+from tankarr.http import async_client
 from tankarr.readers import READER_LABELS, effective_reader_kind
 
 ReaderKind = Literal["stump", "komga", "kavita"]
@@ -260,7 +261,7 @@ async def discover_reader(
     targets = reader_targets(settings)
     owned = client is None
     if client is None:
-        client = httpx.AsyncClient(
+        client = async_client(
             timeout=httpx.Timeout(3.0, connect=1.0), follow_redirects=True
         )
     try:

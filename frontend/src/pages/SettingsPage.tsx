@@ -58,6 +58,8 @@ type SectionDef = {
   title: string;
   group: SettingsTab;
   description?: string;
+  /** A notification channel with its own "Send test notification" button. */
+  notificationChannel?: string;
   fields: FieldDef[];
   providerTest?: {
     name: DownloadProvider;
@@ -764,22 +766,10 @@ const SECTIONS: SectionDef[] = [
     ],
   },
   {
-    title: "Notifications (ntfy)",
+    title: "Notifications (events)",
     group: "notifications",
-    description: "Notify after a verified import, a failed download, or a new decision that needs your review. Imports and decisions use normal priority; failures use high priority. Routine queue activity and searches stay quiet. The test sends immediately using the values shown, even before you save them.",
+    description: "Notify after a verified import, a failed download, or a new decision that needs your review. Imports and decisions use normal priority; failures use high priority. Routine queue activity and searches stay quiet. These switches apply to every channel below; each channel's test sends immediately using the values shown, even before you save them.",
     fields: [
-      {
-        key: "ntfy_url",
-        label: "ntfy URL",
-        hint: "Server root, for example https://ntfy.sh or your own ntfy server. On iOS, this must exactly match the ntfy app's Default Server.",
-        kind: "text",
-      },
-      {
-        key: "ntfy_topic",
-        label: "Topic",
-        hint: "Subscribe to this exact topic on the configured server. URL and topic together enable ntfy.",
-        kind: "text",
-      },
       {
         key: "ntfy_on_chapter_imported",
         label: "On chapter imported",
@@ -800,7 +790,115 @@ const SECTIONS: SectionDef[] = [
       },
     ],
   },
+  {
+    title: "Notifications (ntfy)",
+    group: "notifications",
+    notificationChannel: "ntfy",
+    description: "Push notifications through a public or self-hosted ntfy server.",
+    fields: [
+      {
+        key: "ntfy_url",
+        label: "ntfy URL",
+        hint: "Server root, for example https://ntfy.sh or your own ntfy server. On iOS, this must exactly match the ntfy app's Default Server.",
+        kind: "text",
+      },
+      {
+        key: "ntfy_topic",
+        label: "Topic",
+        hint: "Subscribe to this exact topic on the configured server. URL and topic together enable ntfy.",
+        kind: "text",
+      },
+    ],
+  },
+  {
+    title: "Notifications (webhook)",
+    group: "notifications",
+    notificationChannel: "webhook",
+    description: "One JSON document per event (event, title, message, priority, tags, data), by POST, for Home Assistant, n8n or a script of your own.",
+    fields: [
+      {
+        key: "webhook_url",
+        label: "Webhook URL",
+        hint: "Address that receives the POST requests. Empty disables the webhook.",
+        kind: "text",
+      },
+      {
+        key: "webhook_token",
+        label: "Bearer token",
+        hint: "Optional. Sent as Authorization: Bearer <token> with every request.",
+        kind: "password",
+      },
+    ],
+  },
+  {
+    title: "Notifications (Discord)",
+    group: "notifications",
+    notificationChannel: "discord",
+    description: "Events arrive as embeds in a Discord channel, red for failures.",
+    fields: [
+      {
+        key: "discord_webhook_url",
+        label: "Discord webhook URL",
+        hint: "Channel settings → Integrations → Webhooks → New webhook. The URL holds the webhook's secret, so it is stored like a password.",
+        kind: "password",
+      },
+    ],
+  },
+  {
+    title: "Notifications (Telegram)",
+    group: "notifications",
+    notificationChannel: "telegram",
+    description: "A Telegram bot posts the events to a chat, group or channel it is a member of.",
+    fields: [
+      {
+        key: "telegram_bot_token",
+        label: "Bot token",
+        hint: "From @BotFather. Token and chat ID together enable Telegram.",
+        kind: "password",
+      },
+      {
+        key: "telegram_chat_id",
+        label: "Chat ID",
+        hint: "The chat the bot posts to: a number, negative for groups.",
+        kind: "text",
+      },
+    ],
+  },
+  {
+    title: "Notifications (Apprise)",
+    group: "notifications",
+    notificationChannel: "apprise",
+    description: "An Apprise API server forwards the events to most other services: e-mail, Matrix, Pushover, Gotify, Slack and many more.",
+    fields: [
+      {
+        key: "apprise_url",
+        label: "Apprise server URL",
+        hint: "Root address of the apprise-api server, for example http://apprise:8000.",
+        kind: "text",
+      },
+      {
+        key: "apprise_key",
+        label: "Configuration key",
+        hint: "Key of a configuration stored on the server; Tankarr posts to /notify/<key>. Leave empty to send the URLs below instead.",
+        kind: "text",
+      },
+      {
+        key: "apprise_urls",
+        label: "Notification URLs",
+        hint: "Comma-separated Apprise URLs (mailto://…, pover://…) sent with each request when no configuration key is set. Stored like a password.",
+        kind: "password",
+      },
+    ],
+  },
 ];
+
+const NOTIFICATION_CHANNEL_KEYS: Record<string, string[]> = {
+  ntfy: ["ntfy_url", "ntfy_topic"],
+  webhook: ["webhook_url", "webhook_token"],
+  discord: ["discord_webhook_url"],
+  telegram: ["telegram_bot_token", "telegram_chat_id"],
+  apprise: ["apprise_url", "apprise_key", "apprise_urls"],
+};
 
 export default function SettingsPage() {
   const { notify, refreshHealth } = useApp();
@@ -828,10 +926,27 @@ export default function SettingsPage() {
   const [komgaTest, setKomgaTest] = useState<string | null>(null);
   const [readerTest, setReaderTest] = useState<string | null>(null);
   const [readerDiscovery, setReaderDiscovery] = useState<string | null>(null);
-  const [ntfyTest, setNtfyTest] = useState<string | null>(null);
+  const [notificationTests, setNotificationTests] = useState<Record<string, string | null>>({});
   const [sabTest, setSabTest] = useState<string | null>(null);
   const [prowlarrIndexers, setProwlarrIndexers] = useState<ProwlarrIndexer[]>([]);
   const [prowlarrCategories, setProwlarrCategories] = useState<ProwlarrCategory[]>([]);
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const [apiKeyBusy, setApiKeyBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .apiKey()
+      .then((result) => {
+        if (!cancelled) setApiKey(result.api_key);
+      })
+      .catch(() => {
+        if (!cancelled) setApiKey(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const load = async (submittedValues?: Record<string, string>) => {
     try {
@@ -1114,22 +1229,58 @@ export default function SettingsPage() {
     }
   };
 
-  const testNtfy = async () => {
-    setNtfyTest("…");
+  const copyApiKey = async () => {
+    if (!apiKey) return;
     try {
-      const result = await api.testNtfy(pickValues(["ntfy_url", "ntfy_topic"]));
+      await navigator.clipboard.writeText(apiKey);
+      notify("success", "API key copied to the clipboard.");
+    } catch {
+      notify("error", "Copying failed: show the key and copy it by hand.");
+    }
+  };
+
+  const regenerateApiKey = async () => {
+    if (
+      !window.confirm(
+        "Regenerate the API key? Every application using the current key stops working until it gets the new one.",
+      )
+    ) {
+      return;
+    }
+    setApiKeyBusy(true);
+    try {
+      const result = await api.regenerateApiKey();
+      setApiKey(result.api_key);
+      setApiKeyVisible(true);
+      notify("success", "A new API key is in use; the old one no longer works.");
+    } catch (caught) {
+      notify("error", String(caught));
+    } finally {
+      setApiKeyBusy(false);
+    }
+  };
+
+  const testNotification = async (channel: string) => {
+    const setResult = (message: string | null) =>
+      setNotificationTests((current) => ({ ...current, [channel]: message }));
+    setResult("…");
+    try {
+      const result = await api.testNotificationChannel(channel, pickValues(NOTIFICATION_CHANNEL_KEYS[channel] ?? []));
       if (!result.ok) {
         const message = `Failed: ${result.error ?? "unknown error"}`;
-        setNtfyTest(message);
+        setResult(message);
         notify("error", message);
         return;
       }
-      const message = `Sent — ntfy accepted the test for topic ${result.topic ?? values.ntfy_topic}.`;
-      setNtfyTest(message);
+      const message =
+        channel === "ntfy"
+          ? `Sent — ntfy accepted the test for topic ${result.topic ?? values.ntfy_topic}.`
+          : `Sent — the test notification was accepted (HTTP ${result.status_code ?? 200}).`;
+      setResult(message);
       notify("success", message);
     } catch (caught) {
       const message = String(caught);
-      setNtfyTest(message);
+      setResult(message);
       notify("error", message);
     }
   };
@@ -1569,18 +1720,41 @@ export default function SettingsPage() {
                 ) : null}
               </div>
             ) : null}
-            {section.title === "Notifications (ntfy)" ? (
+            {section.title === "Security" ? (
+              <div className="api-key-block">
+                <strong>API key</strong>
+                <p className="muted small">
+                  Lets other applications (dashboards, scripts, mobile clients) use the API without your login: they send it in the{" "}
+                  <code>X-Api-Key</code> header. It grants the same access as the login, so treat it like the password and regenerate it if it leaks.
+                </p>
+                <div className="form-row setting-test-row">
+                  <code className="api-key-value" aria-label="API key">
+                    {apiKey === null ? "…" : apiKeyVisible ? apiKey : "•".repeat(32)}
+                  </code>
+                  <button type="button" className="btn btn-small" disabled={!apiKey} onClick={() => setApiKeyVisible((visible) => !visible)}>
+                    {apiKeyVisible ? "Hide" : "Show"}
+                  </button>
+                  <button type="button" className="btn btn-small" disabled={!apiKey} onClick={() => void copyApiKey()}>
+                    Copy
+                  </button>
+                  <button type="button" className="btn btn-small" disabled={apiKeyBusy} onClick={() => void regenerateApiKey()}>
+                    <Icon name="refresh" size={14} /> Regenerate
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {section.notificationChannel ? (
               <div className="form-row setting-test-row">
                 <button
                   type="button"
                   className="btn btn-small"
-                  disabled={ntfyTest === "…"}
-                  onClick={() => void testNtfy()}
+                  disabled={notificationTests[section.notificationChannel] === "…"}
+                  onClick={() => void testNotification(section.notificationChannel!)}
                 >
                   <Icon name="check" size={14} /> Send test notification
                 </button>
-                {ntfyTest ? (
-                  <p className="muted small setting-test-result">{ntfyTest}</p>
+                {notificationTests[section.notificationChannel] ? (
+                  <p className="muted small setting-test-result">{notificationTests[section.notificationChannel]}</p>
                 ) : null}
               </div>
             ) : null}

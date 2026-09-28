@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { Icon, StatusPill } from "../components";
+import { serverUrl } from "../serverUrl";
 import type { SuwayomiExtension, SuwayomiRuntimeStatus, SuwayomiSourceTest } from "../types";
 
 function formatBytes(value: number) {
@@ -457,7 +458,7 @@ export function SuwayomiManager({
               {visibleExtensions.map((item) => (
                 <div key={item.pkg_name} className={`suwayomi-extension${item.installed ? " installed" : ""}`}>
                   {item.icon_url ? (
-                    <img src={item.icon_url} alt="" className="suwayomi-extension-icon" loading="lazy" />
+                    <img src={serverUrl(item.icon_url)} alt="" className="suwayomi-extension-icon" loading="lazy" />
                   ) : (
                     <span className="suwayomi-extension-icon placeholder" />
                   )}

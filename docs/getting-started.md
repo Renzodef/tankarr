@@ -134,7 +134,8 @@ originals are never modified or deleted.
 
 ## 8. Notifications and backups
 
-- **Settings → Notifications** sends [ntfy](https://ntfy.sh) notifications for
+- **Settings → Notifications** sends notifications, through [ntfy](https://ntfy.sh),
+  a webhook, Discord, Telegram or Apprise, for
   imported chapters, failed downloads and decisions that need you.
 - **Settings → Data** keeps automatic application backups (seven by default)
   and a recycle bin for removed files. **System** can create a verified backup

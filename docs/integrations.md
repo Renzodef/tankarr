@@ -26,7 +26,7 @@ Every setting also has a `TANKARR_*` environment variable. The
 | [SABnzbd](#sabnzbd) | Downloading the Usenet releases found through Prowlarr | Indexers & torrents |
 | [Internet Archive](#internet-archive) | Whole volumes downloaded directly from archive.org | Indexers & torrents |
 | [Readers](#readers) | Opening the library in the built-in reader, Komga, Kavita, Stump or another reader | Reader |
-| [ntfy](#notifications-ntfy) | Push notifications | Notifications |
+| [ntfy, webhook, Discord, Telegram, Apprise](#notifications) | Notifications | Notifications |
 | [Metadata catalogues](#metadata-catalogues) | Identifying works: titles, creators, covers, counts | Metadata |
 | [AI provider](#translation-fallback) | Optional machine translation of missing books and chapters | Translation |
 
@@ -393,23 +393,31 @@ It does not start Kavita scans.
 `https://reader.example.com/search?q={title}`. The placeholders are `{title}`,
 `{title_raw}`, `{folder}` and `{id}`.
 
-## Notifications (ntfy)
+## Notifications
 
-Tankarr can publish push notifications to an [ntfy](https://ntfy.sh) server,
-the public one or your own. In **Settings → Notifications**, panel
-**Notifications (ntfy)**:
+Tankarr sends the same three events to every channel you configure under
+**Settings → Notifications**, each panel with its own **Send test
+notification** button:
 
-| Field | Variable | Default |
+| Panel | Fields | Variables |
 | --- | --- | --- |
-| **ntfy URL** | `TANKARR_NTFY_URL` | unset |
-| **Topic** | `TANKARR_NTFY_TOPIC` | `tankarr` |
-| **On chapter imported** | `TANKARR_NTFY_ON_CHAPTER_IMPORTED` | on |
-| **On download failed** | `TANKARR_NTFY_ON_DOWNLOAD_FAILED` | on |
-| **On decision needed** | `TANKARR_NTFY_ON_DECISION_NEEDED` | on |
+| **Events** | On chapter imported, On download failed, On decision needed | `TANKARR_NTFY_ON_CHAPTER_IMPORTED`, `TANKARR_NTFY_ON_DOWNLOAD_FAILED`, `TANKARR_NTFY_ON_DECISION_NEEDED` |
+| **ntfy** | ntfy URL, Topic | `TANKARR_NTFY_URL`, `TANKARR_NTFY_TOPIC` |
+| **Webhook** | URL, Bearer token | `TANKARR_WEBHOOK_URL`, `TANKARR_WEBHOOK_TOKEN` |
+| **Discord** | Webhook URL | `TANKARR_DISCORD_WEBHOOK_URL` |
+| **Telegram** | Bot token, Chat ID | `TANKARR_TELEGRAM_BOT_TOKEN`, `TANKARR_TELEGRAM_CHAT_ID` |
+| **Apprise** | Server URL, Configuration key, Notification URLs | `TANKARR_APPRISE_URL`, `TANKARR_APPRISE_KEY`, `TANKARR_APPRISE_URLS` |
 
-Notifications are active when both the URL (the server root) and the topic are
-set. Tankarr publishes without credentials, so use a topic that accepts
-anonymous publishing. The three events are:
+[ntfy](https://ntfy.sh) is active when both the server root and the topic are
+set; Tankarr publishes without credentials, so use a topic that accepts
+anonymous publishing. The webhook receives one JSON document per event, with
+`event`, `title`, `message`, `priority`, `tags`, `at` and event `data` such as
+the series and chapter, for Home Assistant, n8n or a script of your own.
+Discord gets an embed, red for failures. Telegram needs a bot token from
+@BotFather and the chat ID the bot posts to. An
+[Apprise API](https://github.com/caronc/apprise-api) server forwards to most
+other services, through a stored configuration key or the notification URLs
+you give Tankarr. The three events are:
 
 - **Chapter imported**: a verified file was written to the library (normal
   priority).

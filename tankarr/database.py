@@ -966,6 +966,12 @@ class Database:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=30000")
+        # In WAL mode NORMAL is safe from corruption and durable against an
+        # application crash; only an OS crash or a power cut can lose the last
+        # transactions, which the nightly backup covers. FULL fsyncs the WAL on
+        # every commit, which dominates import time on a hard disk or a NAS.
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute("PRAGMA temp_store=MEMORY")
         try:
             yield connection
             connection.commit()
@@ -4416,6 +4422,31 @@ class Database:
                 signals[str(row["manga_id"])].setdefault(
                     "official", str(row["publication_status"])
                 )
+            # The unit context of every series, loaded once: resolving the
+            # unit per series used to open three connections for each of
+            # them, a third of a cold Calendar render.
+            indexer_volumes: dict[str, set[int]] = defaultdict(set)
+            for row in connection.execute("SELECT manga_id, volume FROM indexer_offer"):
+                try:
+                    indexer_volumes[str(row["manga_id"])].add(int(float(row["volume"])))
+                except (TypeError, ValueError):
+                    continue
+            unobtainable_volumes: dict[str, set[int]] = defaultdict(set)
+            for row in connection.execute(
+                """
+                SELECT manga_id, slot_key FROM wanted_attempt
+                WHERE channel='indexer_book'
+                  AND outcome IN ('not_offered', 'ambiguous', 'error')
+                  AND slot_key LIKE 'volume:%'
+                """
+            ):
+                try:
+                    unobtainable_volumes[str(row["manga_id"])].add(
+                        int(float(str(row["slot_key"]).split(":", 1)[1]))
+                    )
+                except ValueError:
+                    continue
+            pending_volumes = self.pending_book_volumes()
 
         records: dict[str, dict[str, Any]] = {}
         for row in manga_rows:
@@ -4439,6 +4470,13 @@ class Database:
                 "metadata": metadata,
                 "chapters": [],
                 "publication_signals": signals.get(str(manga["id"]), {}),
+                "unit_context": {
+                    "indexer_volumes": indexer_volumes.get(str(manga["id"]), set()),
+                    "unobtainable_volumes": unobtainable_volumes.get(
+                        str(manga["id"]), set()
+                    ),
+                    "pending_volumes": pending_volumes.get(str(manga["id"]), set()),
+                },
             }
 
         for row in chapter_rows:
@@ -5818,6 +5856,21 @@ class Database:
                 (manga_id,),
             ).fetchall()
         return [self._decode_chapter(row) for row in rows]
+
+    def list_tracked_library_paths(self) -> list[str]:
+        """Every library file a downloaded release claims, in one query.
+
+        The orphan scan used to decode every release of every series to read
+        this one column: thirty thousand rows and three hundred connections
+        for a three-hundred-series library, on every System page load.
+        """
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT library_path FROM chapter_release "
+                "WHERE downloaded=1 AND library_path IS NOT NULL AND library_path<>''"
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
     def list_downloaded_chapters(
         self, manga_ids: Iterable[str] | None = None
@@ -9570,12 +9623,18 @@ class Database:
     @staticmethod
     def _decode_chapter(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
-        result["groups"] = json.loads(result.pop("groups_json", "[]"))
+        # Most rows carry the empty defaults; a Calendar or System render
+        # decodes every release, so two json.loads per row were measurable.
+        groups_json = result.pop("groups_json", "[]")
+        result["groups"] = (
+            [] if groups_json in ("[]", "", None) else json.loads(groups_json)
+        )
         from tankarr.assembly_provenance import assembly_provenance
 
         result["assembled_from"] = assembly_provenance(result.get("assembled_from"))
-        result["numbering_evidence"] = json.loads(
-            result.pop("numbering_evidence_json", "{}") or "{}"
+        evidence_json = result.pop("numbering_evidence_json", "{}")
+        result["numbering_evidence"] = (
+            {} if evidence_json in ("{}", "", None) else json.loads(evidence_json)
         )
         canonical = result.get("canonical_chapter")
         if (

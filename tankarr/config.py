@@ -59,6 +59,8 @@ class Settings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 8787
+    # Sub-path behind a reverse proxy ("/tankarr"); empty serves the root.
+    url_base: str = ""
     data_dir: Path = Path("data")
     library_dir: Path = Path("data/library")
     import_dir: Path | None = None
@@ -215,6 +217,8 @@ class Settings(BaseSettings):
     # Without a login, the first start creates one and prints it to the log.
     # false leaves an instance without credentials open: development only.
     auth_required: bool = True
+    # Ask GitHub once a day whether a newer release exists (System page).
+    update_check_enabled: bool = True
     ntfy_url: str | None = None
     ntfy_topic: str = "tankarr"
     ntfy_on_chapter_imported: bool = True
@@ -222,6 +226,15 @@ class Settings(BaseSettings):
     # A human has to decide: a new match review, or a slot every channel
     # has given up on.
     ntfy_on_decision_needed: bool = True
+    # More notification channels; the three ntfy_on_* switches gate them all.
+    webhook_url: str | None = None
+    webhook_token: str | None = Field(default=None, repr=False)
+    discord_webhook_url: str | None = Field(default=None, repr=False)
+    telegram_bot_token: str | None = Field(default=None, repr=False)
+    telegram_chat_id: str | None = None
+    apprise_url: str | None = None
+    apprise_key: str | None = None
+    apprise_urls: str | None = Field(default=None, repr=False)
     # Reader shortcut (independent of the optional Komga managed sync):
     # tankarr | auto | komga | kavita | stump | url | none.
     # The built-in reader needs no second catalogue or synchronization job.
@@ -261,6 +274,13 @@ class Settings(BaseSettings):
     mangaupdates_api_url: str = "https://api.mangaupdates.com/v1"
     anilist_api_url: str = "https://graphql.anilist.co"
     myanimelist_api_url: str = "https://api.myanimelist.net/v2"
+
+    @field_validator("url_base")
+    @classmethod
+    def validate_url_base(cls, value: object) -> str:
+        from tankarr.url_base import normalize_url_base
+
+        return normalize_url_base(value)
 
     @field_validator("setup_completed_at")
     @classmethod

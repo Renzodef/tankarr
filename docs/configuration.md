@@ -109,6 +109,7 @@ The same file publishes the web interface on the host port given by
 | --- | --- | --- |
 | `TANKARR_HOST` | `0.0.0.0` | Address the web server listens on. `0.0.0.0` accepts connections on every interface, `127.0.0.1` only from the same machine. While it is anything other than `127.0.0.1`, `::1` or `localhost`, the Settings page refuses to remove the login. Restart required. |
 | `TANKARR_PORT` | `8787` | Port of the web interface and the API. Restart required. |
+| `TANKARR_URL_BASE` | *empty* | Path Tankarr is served under behind a reverse proxy, for example `/tankarr`: the interface answers at `/tankarr/`, the API at `/tankarr/api/...`, and outside the base only the health checks (`/api/health`, `/api/ready`) answer, so a container runtime need not know it. The proxy must forward the path unchanged. Empty serves everything from the root. Restart required. |
 | `TANKARR_DATA_DIR` | `data`; image: `/config` | Directory for Tankarr's own data: the database, the secrets file, covers, caches, staging space for downloads, login sessions, the managed Suwayomi server and, unless `TANKARR_BACKUP_DIRECTORY` is set, the backups. A relative path starts from the working directory. Must be writable. Restart required. |
 | `TANKARR_LIBRARY_DIR` | `data/library`; image: `/library` | The library Tankarr writes, one folder per series. Point your reader at the same folder. Must be writable. Restart required. |
 | `TANKARR_IMPORT_DIR` | *unset*; image: `/import` | Folder that **Library Import** scans for files you already own; read access is enough. Without it, Library Import only takes files uploaded from the browser. Restart required. |
@@ -321,6 +322,17 @@ to the log and keeps it in `generated-login.json` in the data directory (mode
 Failed sign-ins are logged with the client address and slowed down after five
 attempts from the same address, up to one attempt per minute.
 
+Other applications (dashboards, scripts, a mobile client) authenticate with the
+**API key** instead of the login: they send it in the `X-Api-Key` header. The
+key is created on the first start in `api-key` in the data directory (mode
+0600) and shown under **Settings → Security**, where it can be regenerated; the
+old key stops working at once. It grants the same access as the login, and a
+wrong key is slowed down like a wrong password.
+
+```sh
+curl -H "X-Api-Key: $API_KEY" http://localhost:8787/api/system/health
+```
+
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TANKARR_AUTH_METHOD` | `forms` | `forms`: a login page with a session cookie that lasts 12 hours, or 30 days with **Remember me**. `basic`: the browser's own credential prompt. API clients can always use HTTP Basic authentication. Settings → Security. |
@@ -380,18 +392,30 @@ addresses are listed under [Advanced](#advanced).
 | `TANKARR_METADATA_REFRESH_INTERVAL_HOURS` | `168` | How long the metadata of an existing series is kept before the catalogues are asked again, in hours: 1 to 8760 (168 is one week). New series are looked up within minutes. Settings → Metadata (advanced). |
 | `TANKARR_AUTHOR_REFRESH_INTERVAL_HOURS` | `24` | How often each author's list of works is refreshed from MangaBaka, in hours: 1 to 720. Restart required. |
 
-## Notifications (ntfy)
+## Notifications
 
-Tankarr sends notifications to an ntfy server when both the URL and the topic
-are set. Imports and decisions use normal priority, failures high priority.
+Tankarr sends the same events to every channel that is configured: an ntfy
+topic, a generic webhook, a Discord channel, a Telegram chat and an Apprise
+server, which reaches most other services. Imports and decisions use normal
+priority, failures high priority. A failed notification never fails the import
+or the job that triggered it, and failures are logged by type and HTTP status
+only, never with the URL, which may hold a token.
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `TANKARR_NTFY_ON_CHAPTER_IMPORTED` | `true` | Notify when a chapter or book has been written to the library. Applies to every channel. Settings → Notifications. |
+| `TANKARR_NTFY_ON_DOWNLOAD_FAILED` | `true` | Notify, with high priority, when a download job fails. Applies to every channel. Settings → Notifications. |
+| `TANKARR_NTFY_ON_DECISION_NEEDED` | `true` | Notify once for each new match review and for each Wanted item that every source has given up on ("Not obtainable"). Applies to every channel. Settings → Notifications. |
 | `TANKARR_NTFY_URL` | *unset* | Root address of the ntfy server, for example `https://ntfy.sh` or `http://nas.local:8081`. On iOS it must match the default server of the ntfy app exactly. Settings → Notifications. |
 | `TANKARR_NTFY_TOPIC` | `tankarr` | Topic to publish to; subscribe to the same topic in the ntfy app. Settings → Notifications. |
-| `TANKARR_NTFY_ON_CHAPTER_IMPORTED` | `true` | Notify when a chapter or book has been written to the library. Settings → Notifications. |
-| `TANKARR_NTFY_ON_DOWNLOAD_FAILED` | `true` | Notify, with high priority, when a download job fails. Settings → Notifications. |
-| `TANKARR_NTFY_ON_DECISION_NEEDED` | `true` | Notify once for each new match review and for each Wanted item that every source has given up on ("Not obtainable"). Settings → Notifications. |
+| `TANKARR_WEBHOOK_URL` | *unset* | Address that receives one JSON document per event (`event`, `title`, `message`, `priority`, `tags`, `at`, `data`, `application`, `version`) by POST, for Home Assistant, n8n or a script of your own. Settings → Notifications. |
+| `TANKARR_WEBHOOK_TOKEN` | *unset* | Sent as `Authorization: Bearer <token>` with every webhook request. Secret; stored in the secrets file. Settings → Notifications. |
+| `TANKARR_DISCORD_WEBHOOK_URL` | *unset* | Webhook URL of a Discord channel (Channel settings → Integrations → Webhooks). Events arrive as embeds, red for failures. Secret; stored in the secrets file. Settings → Notifications. |
+| `TANKARR_TELEGRAM_BOT_TOKEN` | *unset* | Token of a Telegram bot created with @BotFather; set together with the chat ID. Secret; stored in the secrets file. Settings → Notifications. |
+| `TANKARR_TELEGRAM_CHAT_ID` | *unset* | Chat, group or channel the bot posts to (a number, negative for groups). Settings → Notifications. |
+| `TANKARR_APPRISE_URL` | *unset* | Root address of an [Apprise API](https://github.com/caronc/apprise-api) server, for example `http://apprise:8000`. Set together with a configuration key or notification URLs. Settings → Notifications. |
+| `TANKARR_APPRISE_KEY` | *unset* | Key of a configuration stored on the Apprise server; Tankarr posts to `/notify/<key>`. Settings → Notifications. |
+| `TANKARR_APPRISE_URLS` | *unset* | Comma-separated Apprise notification URLs (`mailto://…`, `pover://…`, …) sent with each request when no configuration key is set. Secret; stored in the secrets file. Settings → Notifications. |
 
 ## Translation
 
@@ -419,6 +443,7 @@ Internal settings and service addresses that rarely need changing.
 | `TANKARR_PROVIDER_PRIORITY` | `suwayomi` | Order of the direct chapter-download providers. `suwayomi` is currently the only one; an unknown name stops Tankarr at startup. It is also the backlog order when `TANKARR_SOURCE_PRIORITY_BACKFILL` is empty. Restart required. |
 | `TANKARR_LEGACY_LIBRARY_ROOTS` | *empty* | Comma-separated absolute paths where an earlier setup of this installation kept its library, for example a host path used before moving to Docker. Files recorded under them are looked up at the same relative path inside the current library directory; `/library` is always treated this way. Restart required. |
 | `TANKARR_SETUP_COMPLETED_AT` | *unset* | When the first-run setup checklist was completed: an ISO 8601 timestamp with a time zone, stored in UTC. The checklist writes it; while it is unset and a required check fails, the web interface opens the checklist. |
+| `TANKARR_UPDATE_CHECK_ENABLED` | `true` | Ask GitHub once a day whether a newer Tankarr release exists and show it on the System page, under About and in Needs attention. Nothing is downloaded or installed, and the request carries only the running version in its user agent. `false` disables it, for hosts without internet access. Restart required. |
 | `TANKARR_RESTORED_SAFE_MODE` | `false` | Safe mode of a restored backup. Restoring writes `restored-settings.json` into the new data directory with this set to `true`, and with the monitor, the Wanted search, metadata lookups, automatic import and duplicate cleanup saved as off; that file fills in whatever the environment does not set. In safe mode no background automation runs and the web interface and API refuse changes, so the restored installation can be checked first. Restart with `false` to leave it. Restart required. |
 | `TANKARR_MANGABAKA_API_URL` | `https://api.mangabaka.org/v1` | Base URL of the MangaBaka API, the catalogue that identifies works. Restart required. |
 | `TANKARR_MANGAUPDATES_API_URL` | `https://api.mangaupdates.com/v1` | Base URL of the MangaUpdates API. Restart required. |

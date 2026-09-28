@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from tankarr.config import Settings
+from tankarr.http import async_client
 from tankarr.redaction import redact_secrets
 
 
@@ -50,7 +51,7 @@ class SABnzbdClient:
             **params,
         }
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with async_client(timeout=30.0) as client:
                 response = await client.get(
                     str(self.settings.sabnzbd_url).rstrip("/") + "/api", params=query
                 )

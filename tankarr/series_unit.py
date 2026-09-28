@@ -37,6 +37,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from typing import Any
 
 from tankarr.series_form import _is_webtoon
@@ -48,15 +49,23 @@ AUTOMATIC = "automatic"
 SMALL_WORK_VOLUMES = 3
 
 
-def _number(value: object) -> Decimal | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
+@lru_cache(maxsize=8192)
+def _parse_number(raw: str) -> Decimal | None:
+    # Labels repeat across every series ("1" to "200"), and a render parses
+    # each one a dozen times; Decimal objects are immutable, so sharing them
+    # is safe.
     try:
         number = Decimal(raw)
     except (InvalidOperation, ValueError):
         return None
     return number if number.is_finite() else None
+
+
+def _number(value: object) -> Decimal | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    return _parse_number(raw)
 
 
 def _positive_int(value: object) -> int | None:
@@ -69,10 +78,13 @@ def _positive_int(value: object) -> int | None:
 def is_volume_release(release: dict[str, Any]) -> bool:
     """A whole-book release: flagged as such, or a volume without a chapter."""
 
-    if str(release.get("release_unit") or "chapter") == "volume":
+    unit = release.get("release_unit")
+    if unit is not None and unit != "chapter" and str(unit) == "volume":
         return True
-    has_chapter = str(release.get("chapter") or "").strip() != ""
-    has_volume = str(release.get("volume") or "").strip() != ""
+    chapter = release.get("chapter")
+    volume = release.get("volume")
+    has_chapter = bool(chapter) and str(chapter).strip() != ""
+    has_volume = bool(volume) and str(volume).strip() != ""
     return has_volume and not has_chapter
 
 

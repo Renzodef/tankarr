@@ -26,6 +26,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 import httpx
 
 from tankarr.config import Settings
+from tankarr.http import async_client
 from tankarr.naming import series_directory_name
 
 READER_KINDS = ("tankarr", "auto", "komga", "kavita", "stump", "url", "none")
@@ -311,7 +312,7 @@ class KavitaReader:
     ) -> dict[str, Any]:
         managed_books = managed_books or []
         owned = self._client is None
-        client = self._client or httpx.AsyncClient(timeout=15.0)
+        client = self._client or async_client(timeout=15.0)
         try:
             auth = await client.post(
                 f"{self.api_url}/api/Plugin/authenticate",
@@ -497,7 +498,7 @@ class StumpReader:
     ) -> dict[str, Any]:
         managed_books = managed_books or []
         owned = self._client is None
-        client = self._client or httpx.AsyncClient(timeout=15.0)
+        client = self._client or async_client(timeout=15.0)
         try:
             auth = await client.post(
                 f"{self.api_url}/api/v2/auth/login",

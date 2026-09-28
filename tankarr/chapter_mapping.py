@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any
 
 from tankarr.catalogue_consensus import managed_volume_count
@@ -192,6 +193,14 @@ def canonical_number(value: object) -> str | None:
     raw = str(value if value is not None else "").strip()
     if not raw:
         return None
+    return _canonical_label(raw)
+
+
+@lru_cache(maxsize=8192)
+def _canonical_label(raw: str) -> str:
+    # The same few hundred labels come back for every series and every
+    # render; parsing a Decimal each time was a measurable share of a
+    # Library rebuild.
     try:
         number = Decimal(raw)
     except (InvalidOperation, ValueError):

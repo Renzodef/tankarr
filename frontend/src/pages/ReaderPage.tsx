@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon, Spinner, navigate } from "../components";
+import { serverUrl } from "../serverUrl";
 import type { ReaderBook } from "../types";
 
 function pageUrl(id: string, index: number, version?: string): string {
-  const path = `/api/reader/books/${encodeURIComponent(id)}/pages/${index}`;
+  const path = serverUrl(`/api/reader/books/${encodeURIComponent(id)}/pages/${index}`);
   return version ? `${path}?v=${encodeURIComponent(version)}` : path;
 }
 

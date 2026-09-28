@@ -1,3 +1,4 @@
+import { serverUrl } from "./serverUrl";
 import type {
   InternetArchiveProbe,
   LibraryOrphans,
@@ -171,7 +172,7 @@ async function performRequest<T>(
   try {
     let response: Response;
     try {
-      response = await fetch(path, {
+      response = await fetch(serverUrl(path), {
         ...options,
         credentials: "same-origin",
         headers,
@@ -309,6 +310,9 @@ export const api = {
     return request(`/api/manga/${encodeURIComponent(mangaId)}/translations/upload?${query}`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
   },
   authStatus: () => request<AuthStatus>("/api/auth/status"),
+  apiKey: () => request<{ api_key: string }>("/api/auth/api-key"),
+  regenerateApiKey: () =>
+    request<{ api_key: string }>("/api/auth/api-key/regenerate", { method: "POST" }),
   login: (username: string, password: string, rememberMe: boolean) =>
     request<AuthStatus>("/api/auth/login", {
       method: "POST",
@@ -724,7 +728,7 @@ export const api = {
     language: string,
     onEvent: (event: SuwayomiTestEvent) => void,
   ): Promise<void> => {
-    const response = await fetch("/api/system/suwayomi/test", {
+    const response = await fetch(serverUrl("/api/system/suwayomi/test"), {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -772,6 +776,11 @@ export const api = {
   testNtfy: (changes: Record<string, string>) =>
     request<{ ok: boolean; error?: string; status_code?: number; topic?: string }>(
       "/api/settings/test/ntfy",
+      { method: "POST", body: JSON.stringify(changes) },
+    ),
+  testNotificationChannel: (channel: string, changes: Record<string, string>) =>
+    request<{ ok: boolean; error?: string; status_code?: number; topic?: string }>(
+      `/api/settings/test/notifications/${encodeURIComponent(channel)}`,
       { method: "POST", body: JSON.stringify(changes) },
     ),
   testDownloadProvider: (provider: string, changes: Record<string, string>) =>
