@@ -1,8 +1,9 @@
 name: Dependabot auto-merge
 
 # Dependabot's pull requests are merged as soon as the required checks pass.
-# A major update of a runtime dependency is the exception: it is labelled
-# needs-review and waits for a maintainer.
+# Two exceptions are labelled needs-review and wait for a maintainer: a major
+# update of a runtime dependency (judged per dependency, so a group is not
+# held back by a major bump of a development tool) and base image changes.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -24,14 +25,31 @@ jobs:
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Decide per dependency
+        id: policy
+        env:
+          UPDATED: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+        run: |
+          # A group is merged automatically unless one of its members is a major
+          # update of a runtime dependency; base image changes always wait.
+          blocked="$(jq '[.[] | select(.updateType == "version-update:semver-major" and .dependencyType == "direct:production")] | length' <<< "$UPDATED")"
+          if [ "$ECOSYSTEM" = "docker" ] || [ "$blocked" != "0" ]; then
+            echo "decision=review" >> "$GITHUB_OUTPUT"
+          else
+            echo "decision=merge" >> "$GITHUB_OUTPUT"
+          fi
       - name: Enable auto-merge
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major' || steps.metadata.outputs.dependency-type == 'direct:development'
+        if: steps.policy.outputs.decision == 'merge'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
-      - name: Leave a major runtime update to a maintainer
-        if: steps.metadata.outputs.update-type == 'version-update:semver-major' && steps.metadata.outputs.dependency-type != 'direct:development'
+        run: |
+          # An already mergeable pull request cannot have auto-merge enabled:
+          # merge it right away instead.
+          gh pr merge --auto --squash "$PR_URL" || gh pr merge --squash "$PR_URL"
+      - name: Leave it to a maintainer
+        if: steps.policy.outputs.decision == 'review'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
