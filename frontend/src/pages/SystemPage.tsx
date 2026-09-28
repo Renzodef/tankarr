@@ -284,7 +284,23 @@ export default function SystemPage() {
           <h2>About</h2>
           <dl className="kv">
             <dt>Version</dt>
-            <dd>{status.version}</dd>
+            <dd>
+              {status.version}
+              {status.update?.update_available && status.update.latest ? (
+                <>
+                  {" · "}
+                  {status.update.url ? (
+                    <a href={status.update.url} target="_blank" rel="noreferrer">
+                      {status.update.latest} available
+                    </a>
+                  ) : (
+                    <span>{status.update.latest} available</span>
+                  )}
+                </>
+              ) : status.update?.checked_at && !status.update.error ? (
+                <span className="muted small"> · up to date</span>
+              ) : null}
+            </dd>
             <dt>Python</dt>
             <dd>{status.python}</dd>
             <dt>Platform</dt>

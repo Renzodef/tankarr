@@ -215,6 +215,8 @@ class Settings(BaseSettings):
     # Without a login, the first start creates one and prints it to the log.
     # false leaves an instance without credentials open: development only.
     auth_required: bool = True
+    # Ask GitHub once a day whether a newer release exists (System page).
+    update_check_enabled: bool = True
     ntfy_url: str | None = None
     ntfy_topic: str = "tankarr"
     ntfy_on_chapter_imported: bool = True

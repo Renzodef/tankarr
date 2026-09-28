@@ -1249,6 +1249,15 @@ export type SystemStatus = {
     signature?: string;
   }[];
   version: string;
+  update?: {
+    enabled: boolean;
+    current: string;
+    latest: string | null;
+    update_available: boolean;
+    url: string | null;
+    checked_at: string | null;
+    error: string | null;
+  };
   python: string;
   platform: string;
   started_at: string;
