@@ -140,6 +140,15 @@ is verbose, so use it while investigating a problem. The System page also lists
 alerts, pending decisions and the health of every integration, and can produce
 redacted diagnostics for a bug report.
 
+### What runs in the background?
+
+**System → Scheduled tasks** lists every recurring job (the release monitor,
+Wanted recovery, the metadata refresh, the download-client poll, the torrent
+orphan sweep, the nightly maintenance, the Komga refresh, the update check and
+the managed Suwayomi maintenance) with its schedule, its last run and its next
+one, and a **Run now** button that starts one pass at once. A task that is
+already running is left alone.
+
 ## Still stuck?
 
 Search the [issues](https://github.com/Renzodef/tankarr/issues) and

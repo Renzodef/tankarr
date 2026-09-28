@@ -1,6 +1,7 @@
 import { serverUrl } from "./serverUrl";
 import type {
   SystemLogs,
+  SystemTask,
   InternetArchiveProbe,
   LibraryOrphans,
   ArtworkSelection,
@@ -635,6 +636,12 @@ export const api = {
   monitorStatus: (signal?: AbortSignal) => request<MonitorStatus>("/api/monitor/status", signal ? { signal } : undefined),
   systemStatus: () => request<SystemStatus>("/api/system/status"),
   systemLogs: () => request<SystemLogs>("/api/system/logs"),
+  systemTasks: () => request<{ tasks: SystemTask[] }>("/api/system/tasks"),
+  runSystemTask: (id: string) =>
+    request<{ ok: boolean; error: string | null; task: SystemTask }>(
+      `/api/system/tasks/${encodeURIComponent(id)}/run`,
+      { method: "POST" },
+    ),
   systemLogTail: (lines: number, level?: string) =>
     request<{ lines: string[] }>(
       `/api/system/logs/tail?lines=${lines}${level ? `&level=${encodeURIComponent(level)}` : ""}`,

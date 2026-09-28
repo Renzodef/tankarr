@@ -5,7 +5,7 @@ import MaintenanceNotice, { maintenanceErrors } from "../components/MaintenanceN
 import SystemIntegrationHealth from "../components/SystemIntegrationHealth";
 import type { MaintenanceStatus } from "../operationTypes";
 import { Icon, Spinner, StatusPill, formatBytes, formatDate, useApp, Cover, seriesPath } from "../components";
-import type { ProviderProbe, SystemStatus, SystemLogs, MatchReview, LibraryOrphans } from "../types";
+import type { ProviderProbe, SystemStatus, SystemLogs, SystemTask, MatchReview, LibraryOrphans } from "../types";
 
 export default function SystemPage() {
   const { health, notify, refreshHealth } = useApp();
@@ -38,6 +38,28 @@ export default function SystemPage() {
   };
   const [probes, setProbes] = useState<ProviderProbe[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tasks, setTasks] = useState<SystemTask[] | null>(null);
+  const [taskBusy, setTaskBusy] = useState<string | null>(null);
+  const loadTasks = async () => {
+    try {
+      setTasks((await api.systemTasks()).tasks);
+    } catch {
+      setTasks(null);
+    }
+  };
+  const runTask = async (id: string) => {
+    setTaskBusy(id);
+    try {
+      const outcome = await api.runSystemTask(id);
+      if (outcome.ok) notify("success", `${outcome.task.name} finished.`);
+      else notify("error", `${outcome.task.name} failed: ${outcome.error ?? "unknown error"}`);
+      await loadTasks();
+    } catch (caught) {
+      notify("error", String(caught));
+    } finally {
+      setTaskBusy(null);
+    }
+  };
   const [logs, setLogs] = useState<SystemLogs | null>(null);
   const [logTail, setLogTail] = useState<string[]>([]);
   const [logFilter, setLogFilter] = useState("");
@@ -82,6 +104,7 @@ export default function SystemPage() {
     try {
       void loadOrphans();
       void loadLogTail(logFilter);
+      void loadTasks();
       void api.maintenanceStatus().then((result) => { setMaintenance(result); setMaintenanceError(null); }).catch((caught: unknown) => setMaintenanceError(String(caught)));
       setStatus(await api.systemStatus());
       await loadReviews();
@@ -334,6 +357,49 @@ export default function SystemPage() {
             setDiagnosticsBusy(true);
             void downloadReport("/api/system/diagnostics/export", "tankarr-diagnostics.json").catch((caught: unknown) => notify("error", String(caught))).finally(() => setDiagnosticsBusy(false));
           }}>Download diagnostics</button>
+        </section>
+
+        <section className="panel">
+          <h2>Scheduled tasks</h2>
+          <p className="muted small">What runs on its own, when it last ran and when it is due next. Run now starts one pass without waiting; a task that is already running is left alone.</p>
+          <div className="data-table-frame">
+            <table className="table responsive-list-table">
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Schedule</th>
+                  <th>Last run</th>
+                  <th>Next run</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {(tasks ?? []).map((task) => (
+                  <tr key={task.id}>
+                    <td data-label="Task">
+                      <strong>{task.name}</strong>
+                      <div className="muted small">{task.description}</div>
+                    </td>
+                    <td data-label="Schedule">{task.enabled ? task.schedule : "Disabled"}</td>
+                    <td data-label="Last run">
+                      {task.last_run_at ? formatDate(task.last_run_at) : "Never"}
+                      {task.last_error ? <div className="warn-text small">{task.last_error}</div> : null}
+                    </td>
+                    <td data-label="Next run">
+                      {task.running ? <StatusPill kind="muted">Running…</StatusPill> : task.next_run_at ? formatDate(task.next_run_at) : "—"}
+                    </td>
+                    <td data-label="">
+                      {task.can_run ? (
+                        <button type="button" className="btn btn-small" disabled={task.running || taskBusy === task.id} onClick={() => void runTask(task.id)}>
+                          <Icon name="retry" size={14} /> Run now
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section className="panel">

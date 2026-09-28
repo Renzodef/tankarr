@@ -413,6 +413,10 @@ class SuwayomiRuntime:
     def running(self) -> bool:
         return self._process is not None and self._process.returncode is None
 
+    @property
+    def last_update_check_at(self) -> str | None:
+        return self._last_update_check_at
+
     def status(self) -> dict[str, Any]:
         installed = self.installed()
         jar = installed["path"] if installed else None
