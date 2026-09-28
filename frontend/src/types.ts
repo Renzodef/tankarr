@@ -1182,6 +1182,12 @@ export type WantedEntry = {
   expected_source: string | null;
 };
 
+export type SystemLogs = {
+  level: string;
+  directory: string;
+  files: { name: string; size: number; modified: string }[];
+};
+
 export type DiskInfo = {
   path: string;
   total: number | null;

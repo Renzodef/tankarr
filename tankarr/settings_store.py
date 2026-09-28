@@ -165,6 +165,7 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "apprise_url": SettingSpec("optional_str", max_length=500),
     "apprise_key": SettingSpec("optional_str", max_length=200),
     "apprise_urls": SettingSpec("optional_str", secret=True, max_length=2_000),
+    "log_level": SettingSpec("str", min_length=4, max_length=8),
 }
 
 
@@ -212,6 +213,10 @@ def coerce_setting(name: str, raw: str) -> Any:
             )
         if name == "release_acquisition_policy":
             return normalize_acquisition_policy(value)
+        if name == "log_level":
+            from tankarr.logs import normalize_log_level
+
+            return normalize_log_level(value)
         if (
             name == "auth_username"
             and value

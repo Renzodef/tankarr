@@ -132,7 +132,11 @@ clearly unreadable when another source has them.
 
 ### Where are the logs?
 
-`docker logs tankarr` shows the application log. The **System** page lists
+`docker logs tankarr` shows the application log, and **System → Logs** shows
+its last lines, filters them by level and downloads the log files
+(`logs/tankarr.log` in the data directory, rotated at 5 MB). The level is set
+under **Settings → General** (advanced) or with `TANKARR_LOG_LEVEL`; `debug`
+is verbose, so use it while investigating a problem. The System page also lists
 alerts, pending decisions and the health of every integration, and can produce
 redacted diagnostics for a bug report.
 

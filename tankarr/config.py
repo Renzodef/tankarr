@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     port: int = 8787
     # Sub-path behind a reverse proxy ("/tankarr"); empty serves the root.
     url_base: str = ""
+    # debug, info, warning or error; the console and the log file share it.
+    log_level: str = "info"
     data_dir: Path = Path("data")
     library_dir: Path = Path("data/library")
     import_dir: Path | None = None
@@ -281,6 +283,13 @@ class Settings(BaseSettings):
         from tankarr.url_base import normalize_url_base
 
         return normalize_url_base(value)
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: object) -> str:
+        from tankarr.logs import normalize_log_level
+
+        return normalize_log_level(value)
 
     @field_validator("setup_completed_at")
     @classmethod

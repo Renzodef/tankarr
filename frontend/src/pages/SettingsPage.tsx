@@ -274,6 +274,19 @@ const SECTIONS: SectionDef[] = [
         kind: "boolean",
       },
       {
+        key: "log_level",
+        advanced: true,
+        label: "Log level",
+        hint: "Applies at once to the console and the log file (System → Logs). Debug is verbose: use it while investigating a problem, then go back to info.",
+        kind: "select",
+        options: [
+          ["debug", "Debug"],
+          ["info", "Info"],
+          ["warning", "Warning"],
+          ["error", "Error"],
+        ],
+      },
+      {
         key: "monitor_interval_seconds",
         advanced: true,
         label: "Monitor interval (seconds)",

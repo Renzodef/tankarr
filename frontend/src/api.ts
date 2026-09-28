@@ -1,5 +1,6 @@
 import { serverUrl } from "./serverUrl";
 import type {
+  SystemLogs,
   InternetArchiveProbe,
   LibraryOrphans,
   ArtworkSelection,
@@ -633,6 +634,11 @@ export const api = {
   searchWanted: () => request<WantedSearchResult>("/api/wanted/search", { method: "POST" }),
   monitorStatus: (signal?: AbortSignal) => request<MonitorStatus>("/api/monitor/status", signal ? { signal } : undefined),
   systemStatus: () => request<SystemStatus>("/api/system/status"),
+  systemLogs: () => request<SystemLogs>("/api/system/logs"),
+  systemLogTail: (lines: number, level?: string) =>
+    request<{ lines: string[] }>(
+      `/api/system/logs/tail?lines=${lines}${level ? `&level=${encodeURIComponent(level)}` : ""}`,
+    ),
   refreshKomga: () =>
     request<LibraryAlignment>("/api/system/komga/refresh", { method: "POST" }),
   providersStatus: () => request<ProviderProbe[]>("/api/providers/status"),

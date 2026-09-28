@@ -5,7 +5,7 @@ import MaintenanceNotice, { maintenanceErrors } from "../components/MaintenanceN
 import SystemIntegrationHealth from "../components/SystemIntegrationHealth";
 import type { MaintenanceStatus } from "../operationTypes";
 import { Icon, Spinner, StatusPill, formatBytes, formatDate, useApp, Cover, seriesPath } from "../components";
-import type { ProviderProbe, SystemStatus, MatchReview, LibraryOrphans } from "../types";
+import type { ProviderProbe, SystemStatus, SystemLogs, MatchReview, LibraryOrphans } from "../types";
 
 export default function SystemPage() {
   const { health, notify, refreshHealth } = useApp();
@@ -38,6 +38,23 @@ export default function SystemPage() {
   };
   const [probes, setProbes] = useState<ProviderProbe[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [logs, setLogs] = useState<SystemLogs | null>(null);
+  const [logTail, setLogTail] = useState<string[]>([]);
+  const [logFilter, setLogFilter] = useState("");
+  const [logsBusy, setLogsBusy] = useState(false);
+
+  const loadLogTail = async (level: string) => {
+    setLogsBusy(true);
+    try {
+      const [listing, tail] = await Promise.all([api.systemLogs(), api.systemLogTail(200, level || undefined)]);
+      setLogs(listing);
+      setLogTail(tail.lines);
+    } catch (caught) {
+      notify("error", String(caught));
+    } finally {
+      setLogsBusy(false);
+    }
+  };
 
   const loadOrphans = async () => {
     try {
@@ -64,6 +81,7 @@ export default function SystemPage() {
   const load = useCallback(async () => {
     try {
       void loadOrphans();
+      void loadLogTail(logFilter);
       void api.maintenanceStatus().then((result) => { setMaintenance(result); setMaintenanceError(null); }).catch((caught: unknown) => setMaintenanceError(String(caught)));
       setStatus(await api.systemStatus());
       await loadReviews();
@@ -316,6 +334,44 @@ export default function SystemPage() {
             setDiagnosticsBusy(true);
             void downloadReport("/api/system/diagnostics/export", "tankarr-diagnostics.json").catch((caught: unknown) => notify("error", String(caught))).finally(() => setDiagnosticsBusy(false));
           }}>Download diagnostics</button>
+        </section>
+
+        <section className="panel">
+          <h2>Logs</h2>
+          <p className="muted small">
+            Level <strong>{logs?.level ?? "…"}</strong>, changed under Settings → General (advanced).
+            {logs?.directory ? <> The file lives in <code>{logs.directory}</code> and rotates at 5 MB; <code>docker logs</code> shows the same lines.</> : null}
+          </p>
+          <div className="toolbar-group" style={{ marginBottom: 8, flexWrap: "wrap" }}>
+            <select
+              className="input"
+              aria-label="Minimum log level"
+              value={logFilter}
+              onChange={(event) => {
+                setLogFilter(event.target.value);
+                void loadLogTail(event.target.value);
+              }}
+            >
+              <option value="">Everything</option>
+              <option value="info">Info and above</option>
+              <option value="warning">Warnings and errors</option>
+              <option value="error">Errors only</option>
+            </select>
+            <button type="button" className="btn btn-small" disabled={logsBusy} onClick={() => void loadLogTail(logFilter)}>
+              <Icon name="refresh" size={14} /> Refresh
+            </button>
+            {logs?.files.map((file) => (
+              <button
+                key={file.name}
+                type="button"
+                className="btn btn-small"
+                onClick={() => void downloadReport(`/api/system/logs/${encodeURIComponent(file.name)}/download`, file.name).catch((caught: unknown) => notify("error", String(caught)))}
+              >
+                <Icon name="download" size={14} /> {file.name} ({formatBytes(file.size)})
+              </button>
+            ))}
+          </div>
+          <pre className="log-tail" aria-label="Last log lines">{logTail.length ? logTail.join("\n") : "No log lines yet."}</pre>
         </section>
 
         <section className="panel">

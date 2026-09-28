@@ -77,6 +77,13 @@ from tankarr.komga import KomgaClient
 from tankarr.languages import normalize_language_code
 from tankarr.library_reader import ReaderIndependentLibrary
 from tankarr.library_snapshot import changed_inputs, manga_revisions
+from tankarr.logs import (
+    apply_log_level,
+    log_directory,
+    log_files,
+    normalize_log_level,
+    tail_log,
+)
 from tankarr.maintenance import MaintenanceWorker
 from tankarr.metadata import build_metadata_sources
 from tankarr.metadata.service import MAX_ARTWORK_BYTES, MetadataService
@@ -4037,6 +4044,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _list_backups() -> list[dict]:
         return backups.list(limit=settings.backup_retention_count)
 
+    @app.get("/api/system/logs")
+    async def list_system_logs():
+        return {
+            "level": settings.log_level,
+            "directory": str(log_directory(settings)),
+            "files": await run_api_blocking(log_files, settings),
+        }
+
+    @app.get("/api/system/logs/tail")
+    async def tail_system_log(
+        lines: int = Query(default=200, ge=1, le=2000),
+        level: str | None = Query(default=None, max_length=10),
+    ):
+        try:
+            minimum = normalize_log_level(level) if level else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"lines": await run_api_blocking(tail_log, settings, lines, minimum)}
+
+    @app.get("/api/system/logs/{name}/download")
+    async def download_system_log(name: str):
+        # Only the names the listing shows: no path can reach outside the folder.
+        known = {item["name"] for item in await run_api_blocking(log_files, settings)}
+        path = log_directory(settings) / name
+        if name not in known or not path.is_file():
+            raise HTTPException(status_code=404, detail="Unknown log file")
+        return FileResponse(
+            path,
+            media_type="text/plain; charset=utf-8",
+            filename=name,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.post("/api/system/backup")
     async def backup_database():
         """Verified private control-plane backup; library media stay separate."""
@@ -4123,6 +4163,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         refresh = None
+        if "log_level" in applied:
+            apply_log_level(settings)
         if settings.metadata_enabled and not metadata_was_enabled:
             refresh = metadata.start_bulk_refresh(force=True)
         if {
