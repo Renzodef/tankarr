@@ -28,8 +28,23 @@ other project.
 - **Incremental server work.** Library reads its inputs in batches and
   rebuilds only the series cards that changed, including changes to recovery
   evidence and publication dates. Canonical unit selection reuses its
-  normalisation and coverage work. Pure source classification and URL host
-  parsing use bounded caches.
+  normalisation and coverage work. Pure source classification, URL host
+  parsing and chapter-label parsing use bounded caches.
+- **No per-series queries in a render.** Calendar loads the unit choice of
+  every series (indexer offers, refused books, books on their way) in the same
+  snapshot as the releases, and the System page reads the library paths every
+  release claims in one query instead of decoding each series' releases. On a
+  synthetic catalogue of 300 series and 30,000 releases this took a cold
+  Calendar from 2.4 s to 1.2 s and a System page load from 1.2 s to 0.15 s.
+- **Compact Wanted rows.** The page requests `compact=true`, which keeps only
+  the fields it renders and omits the boilerplate verdict of slots no recovery
+  pass has searched yet: for a freshly added library that verdict was half of
+  the payload.
+- **SQLite settings.** The database runs in WAL mode with `synchronous=NORMAL`
+  (safe from corruption, durable against an application crash; only a power
+  cut can lose the last transactions, which the nightly backup covers) and
+  keeps temporary tables in memory. `FULL` fsyncs the WAL on every commit,
+  which dominates import time on a hard disk or a NAS.
 - **Precise invalidation.** Time-dependent caches expire without requiring a
   database write. Changes to source ranking, health, recovery evidence and
   monitoring invalidate the relevant snapshots. Related SQLite reads share one

@@ -1340,18 +1340,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     }
     wanted_cache_lock = asyncio.Lock()
 
+    def compact_wanted_chapter(chapter: dict[str, Any]) -> dict[str, Any]:
+        compact = {
+            key: chapter.get(key) for key in wanted_chapter_fields if key in chapter
+        }
+        recovery = compact.get("recovery")
+        # A slot nobody has searched yet carries the same boilerplate verdict
+        # as every other one; the page says as much when the key is absent.
+        # For a freshly added library it was half of the Wanted payload.
+        if (
+            isinstance(recovery, dict)
+            and recovery.get("verdict") == "unsearched"
+            and not recovery.get("channels")
+        ):
+            del compact["recovery"]
+        return compact
+
     def render_wanted_payloads(revision: tuple[str, ...]) -> tuple[bytes, bytes]:
         records = service.list_wanted()
         compact_records = [
             {
                 **{key: value for key, value in entry.items() if key != "chapters"},
                 "chapters": [
-                    {
-                        key: chapter.get(key)
-                        for key in wanted_chapter_fields
-                        if key in chapter
-                    }
-                    for chapter in entry["chapters"]
+                    compact_wanted_chapter(chapter) for chapter in entry["chapters"]
                 ],
             }
             for entry in records
@@ -4907,8 +4918,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # date merely because its official counterpart falls outside the
         # requested window.
         unit_filtered: list[dict[str, Any]] = []
+        policy = _acquisition_policy()
         for context in calendar_inputs:
-            manga_row = context["manga"]
+            # The snapshot already carries every input of the unit choice;
+            # embedding it spares three queries per series.
+            manga_row = {
+                **context["manga"],
+                "_unit_context": {
+                    "preferred": settings.preferred_unit,
+                    "acquisition_policy": policy,
+                    **(context.get("unit_context") or {}),
+                },
+            }
             metadata_row = context["metadata"]
             calendar_candidates: list[dict[str, Any]] = []
             for release in context["chapters"]:

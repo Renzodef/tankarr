@@ -300,3 +300,118 @@ async def test_atomic_nas_publication_does_not_block_the_event_loop(
 
     assert released_while_waiting == [True]
     assert database.get_job(job["id"])["status"] == "completed"
+
+
+def _seed_series(database: Database, count: int, *, downloaded: bool = False) -> None:
+    for number in range(count):
+        record = {**manga(), "id": f"bulk-{number}", "title": f"Bulk {number}"}
+        database.upsert_manga(record, "en", "all")
+        database.upsert_chapters(
+            record["id"],
+            [
+                {
+                    **chapter(),
+                    "id": f"bulk-{number}-chapter-{index}",
+                    "chapter": str(index),
+                    "volume": None,
+                    "pages": 20,
+                    "publish_at": "2026-09-20T00:00:00Z",
+                }
+                for index in range(1, 4)
+            ],
+        )
+        if downloaded:
+            database.mark_chapter_downloaded(
+                f"bulk-{number}-chapter-1", f"/library/bulk-{number}/c001.cbz"
+            )
+
+
+def test_calendar_resolves_every_unit_from_its_own_snapshot(
+    tmp_path: Path, monkeypatch
+):
+    """Three queries per series made the unit choice a third of a cold render."""
+
+    from tankarr import series_unit
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        komga_link_enabled=False,
+    )
+    provision_library_identity(settings)
+    app = create_app(settings)
+    _seed_series(app.state.database, 5)
+    installed = series_unit.unit_context
+    assert installed is not None
+    per_series_lookups: list[str] = []
+
+    def counting(manga_id: str):
+        per_series_lookups.append(manga_id)
+        return installed(manga_id)
+
+    monkeypatch.setattr(series_unit, "unit_context", counting)
+    with TestClient(app) as client:
+        response = client.get("/api/calendar?days=30&ahead=30")
+    assert response.status_code == 200
+    assert per_series_lookups == []
+
+
+def test_library_orphans_read_tracked_paths_in_one_query(tmp_path: Path, monkeypatch):
+    """The System page scanned every release of every series for one column."""
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        komga_link_enabled=False,
+    )
+    provision_library_identity(settings)
+    app = create_app(settings)
+    database = app.state.database
+    _seed_series(database, 3)
+    root = settings.library_dir
+    tracked = root / "Bulk 0" / "Bulk 0 - c001 [en].cbz"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+    database.mark_chapter_downloaded("bulk-0-chapter-1", str(tracked))
+    orphan = root / "Gone Work" / "Gone Work - c001 [en].cbz"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+
+    def never(*_args, **_kwargs):
+        raise AssertionError("the orphan scan must not decode releases per series")
+
+    monkeypatch.setattr(database, "list_all_chapters", never)
+    monkeypatch.setattr(database, "list_manga", never)
+    report = app.state.service.library_orphans()
+
+    assert report["count"] == 1
+    assert [item["folder"] for item in report["folders"]] == ["Gone Work"]
+
+
+def test_compact_wanted_omits_the_boilerplate_verdict_of_unsearched_slots(
+    tmp_path: Path,
+):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        komga_link_enabled=False,
+    )
+    provision_library_identity(settings)
+    app = create_app(settings)
+    _seed_series(app.state.database, 1)
+    with TestClient(app) as client:
+        full = client.get("/api/wanted?fresh=true").json()
+        compact = client.get("/api/wanted?compact=true&fresh=true").json()
+    full_chapters = full[0]["chapters"]
+    compact_chapters = compact[0]["chapters"]
+    assert len(full_chapters) == len(compact_chapters) == 3
+    assert full_chapters[0]["recovery"]["verdict"] == "unsearched"
+    assert all("recovery" not in item for item in compact_chapters)
+    # The page's row model still gets every field it renders.
+    assert set(compact_chapters[0]) >= {"id", "chapter", "volume", "title", "slot_key"}

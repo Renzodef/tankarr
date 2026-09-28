@@ -5679,15 +5679,11 @@ class TankarrService:
         except LibraryUnavailable as exc:
             return {"available": False, "reason": str(exc), "count": 0, "folders": []}
         tracked: set[Path] = set()
-        for manga in self.database.list_manga():
-            for chapter in self.database.list_all_chapters(manga["id"]):
-                recorded = chapter.get("library_path")
-                if not chapter.get("downloaded") or not recorded:
-                    continue
-                try:
-                    tracked.add(self._recorded_library_path(str(recorded), root))
-                except (UnsafeLibraryPath, ValueError):
-                    continue
+        for recorded in self.database.list_tracked_library_paths():
+            try:
+                tracked.add(self._recorded_library_path(recorded, root))
+            except (UnsafeLibraryPath, ValueError):
+                continue
         by_folder: dict[str, dict[str, Any]] = {}
         total = 0
         total_bytes = 0
