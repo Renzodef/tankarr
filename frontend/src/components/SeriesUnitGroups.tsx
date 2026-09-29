@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Icon, StatusPill } from "../components";
 import type { ReaderLink, SeriesBookGroup, SeriesUnitChapter, SeriesUnits, VolumeMonitorState } from "../types";
+import { msg, t, tn } from "../i18n";
 
 type UnitFilter = "all" | "problems" | "missing" | "downloaded" | "monitored";
 type UnitOrder = "ascending" | "descending";
@@ -47,14 +48,14 @@ function matchesBook(book: SeriesBookGroup, filter: UnitFilter): boolean {
 function orderedRows<T>(items: T[], order: UnitOrder): T[] {
   return order === "descending" ? [...items].reverse() : items;
 }
-const PLAN_LABEL: Record<PlanState, string> = { book: "Book", assemble: "From chapters", partial: "In part", missing: "Missing" };
+const PLAN_LABEL: Record<PlanState, string> = { book: msg("Book"), assemble: msg("From chapters"), partial: msg("In part"), missing: msg("Missing") };
 const PLAN_KIND: Record<PlanState, string> = { book: "success", assemble: "info", partial: "warn", missing: "danger" };
 
 function ChapterTable({ chapters, book, order, renderRows }: { chapters: SeriesUnitChapter[]; book: SeriesBookGroup | null; order: UnitOrder; renderRows: GroupActions["renderChapterRows"] }) {
   const ordered = orderedRows(chapters, order);
   return <div className="data-table-frame">
     <table className="table chapter-table">
-      <thead><tr><th className="col-monitor" aria-label="Monitored" /><th className="col-chapter">Chapter</th><th className="col-status">Status</th><th className="col-actions" aria-label="Actions" /></tr></thead>
+      <thead><tr><th className="col-monitor" aria-label={t("Monitored")} /><th className="col-chapter">{t("Chapter")}</th><th className="col-status">{t("Status")}</th><th className="col-actions" aria-label={t("Actions")} /></tr></thead>
       <tbody>{renderRows(ordered, book)}</tbody>
     </table>
   </div>;
@@ -79,30 +80,30 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
     || book.files.some((file) => file.id === bookmark.chapter_id)
     || book.chapters.some((chapter) => chapter.releases.some((release) => release.id === bookmark.chapter_id))
   );
-  const range = book.chapter_range ? `ch. ${book.chapter_range.first}–${book.chapter_range.last}` : "chapters not known";
+  const range = book.chapter_range ? t("ch. {first}–{last}", { first: book.chapter_range.first, last: book.chapter_range.last }) : t("chapters not known");
   const text = book.plan_text
-    ?? (plan === "book" ? (book.pages ? `${book.pages} pages` : "On disk")
-      : plan === "assemble" ? "All chapters on disk"
-        : plan === "partial" ? `${book.downloaded_chapter_count} of ${book.chapter_count} chapters`
-          : "Search the book, then chapters");
-  const boundarySource = book.map_sources?.includes("content") ? "pages matched to the book" : book.map_sources?.includes("source_tags") ? "from the source's volume tags" : book.estimated ? null : book.map_sources?.includes("ocr") ? "read from book" : book.map_sources?.includes("operator") ? "saved boundaries" : "catalogue boundaries";
+    ?? (plan === "book" ? (book.pages ? tn(book.pages, "{count} page", "{count} pages") : t("On disk"))
+      : plan === "assemble" ? t("All chapters on disk")
+        : plan === "partial" ? t("{downloaded} of {total} chapters", { downloaded: book.downloaded_chapter_count, total: book.chapter_count })
+          : t("Search the book, then chapters"));
+  const boundarySource = book.map_sources?.includes("content") ? t("pages matched to the book") : book.map_sources?.includes("source_tags") ? t("from the source's volume tags") : book.estimated ? null : book.map_sources?.includes("ocr") ? t("read from book") : book.map_sources?.includes("operator") ? t("saved boundaries") : t("catalogue boundaries");
   const description = book.owned
     ? `${book.chapter_range ? `${range} · ` : ""}${text}`
     : `${range} · ${text}`;
   const detail = book.owned && book.chapter_range ? [range, boundarySource, text].filter(Boolean).join(" · ") : description;
   const primary = plan === "missing" || plan === "partial"
-      ? <button type="button" className="btn btn-small" disabled={actions.busy} aria-label={`Automatically search book ${book.volume}`} onClick={() => actions.onAutomaticSearchBook(book)}>Search</button>
+      ? <button type="button" className="btn btn-small" disabled={actions.busy} aria-label={t("Automatically search book {volume}", { volume: book.volume })} onClick={() => actions.onAutomaticSearchBook(book)}>{t("Search")}</button>
       : null;
-  return <section className={`book-row${book.estimated && !book.owned ? " is-estimated" : ""}${book.ignored ? " is-ignored" : ""}`} aria-label={`Book ${book.volume}`}>
+  return <section className={`book-row${book.estimated && !book.owned ? " is-estimated" : ""}${book.ignored ? " is-ignored" : ""}`} aria-label={t("Book {volume}", { volume: book.volume })}>
     <div className="book-row-line">
       {canExpand && !book.owned
-        ? <button type="button" className="volume-toggle" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} book ${book.volume}`} onClick={() => setCollapsedOverride(!collapsed)}><Icon name={collapsed ? "chevronRight" : "chevronDown"} /></button>
+        ? <button type="button" className="volume-toggle" aria-expanded={!collapsed} aria-label={collapsed ? t("Expand book {volume}", { volume: book.volume }) : t("Collapse book {volume}", { volume: book.volume })} onClick={() => setCollapsedOverride(!collapsed)}><Icon name={collapsed ? "chevronRight" : "chevronDown"} /></button>
         : <span className="volume-toggle volume-toggle-empty" />}
-      <h3 className="book-row-title">Book {book.volume}</h3>
+      <h3 className="book-row-title">{t("Book")} {book.volume}</h3>
       <div className="book-row-mid">
-        <StatusPill kind={book.ignored ? "muted" : PLAN_KIND[plan]}>{book.ignored ? "Ignored" : PLAN_LABEL[plan]}</StatusPill>
+        <StatusPill kind={book.ignored ? "muted" : PLAN_KIND[plan]}>{book.ignored ? t("Ignored") : t(PLAN_LABEL[plan])}</StatusPill>
         {containsBookmark ? <a className="bookmark-location" href={bookmark.url} target="_blank" rel="noreferrer">
-          <Icon name="bookmark" size={14} /> {bookmark.label} · page {bookmark.page_index + 1} · Continue
+          <Icon name="bookmark" size={14} /> {t("{label} · page {page} · Continue", { label: bookmark.label, page: bookmark.page_index + 1 })}
         </a> : null}
         <span className="book-row-text muted small" title={detail}>
           {description}
@@ -110,30 +111,30 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
       </div>
       <div className="book-row-actions">
         {primary}
-        {url ? <a className="btn btn-ghost btn-small btn-icon" href={url} target="_blank" rel="noreferrer" aria-label={`Read book ${book.volume} in ${actions.readerLabel}`} title={url.startsWith("#/") ? "Read" : `Read in ${actions.readerLabel}`}><Icon name="library" size={14} /></a> : null}
+        {url ? <a className="btn btn-ghost btn-small btn-icon" href={url} target="_blank" rel="noreferrer" aria-label={t("Read book {volume} in {reader}", { volume: book.volume, reader: actions.readerLabel })} title={url.startsWith("#/") ? t("Read") : t("Read in {reader}", { reader: actions.readerLabel })}><Icon name="library" size={14} /></a> : null}
         <details className="row-menu">
-          <summary className="btn btn-ghost btn-small btn-icon" aria-label={`More actions for book ${book.volume}`} title="More">⋯</summary>
+          <summary className="btn btn-ghost btn-small btn-icon" aria-label={t("More actions for book {volume}", { volume: book.volume })} title={t("More")}>⋯</summary>
           <div className="row-menu-panel">
-            <label className="row-menu-item">Monitoring
-              <select className="input volume-monitor-select" aria-label={`Monitoring for book ${book.volume}`} value={book.volume_monitor_state} disabled={actions.busy || actions.monitoringLocked} title={actions.monitoringLocked ? "The series is manually marked up to date" : undefined} onChange={(event) => actions.onSetBookMonitoring(book, event.target.value as VolumeMonitorState)}>
-                <option value="automatic">Automatic</option><option value="monitored">Monitored</option><option value="ignored">Ignored</option>
+            <label className="row-menu-item">{t("Monitoring")}
+              <select className="input volume-monitor-select" aria-label={t("Monitoring for book {volume}", { volume: book.volume })} value={book.volume_monitor_state} disabled={actions.busy || actions.monitoringLocked} title={actions.monitoringLocked ? t("The series is manually marked up to date") : undefined} onChange={(event) => actions.onSetBookMonitoring(book, event.target.value as VolumeMonitorState)}>
+                <option value="automatic">{t("Automatic")}</option><option value="monitored">{t("Monitored")}</option><option value="ignored">{t("Ignored")}</option>
               </select>
             </label>
-            {book.owned && canExpand ? <button type="button" className="row-menu-item" aria-expanded={!collapsed} aria-label={`${collapsed ? "Show" : "Hide"} separate chapter releases for book ${book.volume}`} onClick={() => setCollapsedOverride(!collapsed)}>{collapsed ? "Show" : "Hide"} separate chapter releases</button> : null}
-            {plan === "assemble" ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={`Automatically search book ${book.volume}`} onClick={() => actions.onAutomaticSearchBook(book)}><Icon name="search" size={14} /> Search the book file</button> : null}
-            <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={`Interactive search for book ${book.volume}`} onClick={() => actions.onSearchBook(book)}><Icon name="user" size={14} /> Interactive search</button>
-            {book.duplicate_file_count > 0 && book.duplicate_release_ids.length > 0 ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={`Retire duplicate chapters in book ${book.volume}`} onClick={() => actions.onRetireDuplicates(book)}>Retire {book.duplicate_file_count} duplicate chapter file{book.duplicate_file_count === 1 ? "" : "s"}…</button> : null}
-            {book.files.length > 0 ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={`Delete files for book ${book.volume}`} onClick={() => actions.onDeleteBookFiles(book)}><Icon name="trash" size={14} /> Delete files…</button> : null}
+            {book.owned && canExpand ? <button type="button" className="row-menu-item" aria-expanded={!collapsed} aria-label={collapsed ? t("Show separate chapter releases for book {volume}", { volume: book.volume }) : t("Hide separate chapter releases for book {volume}", { volume: book.volume })} onClick={() => setCollapsedOverride(!collapsed)}>{collapsed ? t("Show separate chapter releases") : t("Hide separate chapter releases")}</button> : null}
+            {plan === "assemble" ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={t("Automatically search book {volume}", { volume: book.volume })} onClick={() => actions.onAutomaticSearchBook(book)}><Icon name="search" size={14} /> {t("Search the book file")}</button> : null}
+            <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={t("Interactive search for book {volume}", { volume: book.volume })} onClick={() => actions.onSearchBook(book)}><Icon name="user" size={14} /> {t("Interactive search")}</button>
+            {book.duplicate_file_count > 0 && book.duplicate_release_ids.length > 0 ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={t("Retire duplicate chapters in book {volume}", { volume: book.volume })} onClick={() => actions.onRetireDuplicates(book)}>{tn(book.duplicate_file_count, "Retire {count} duplicate chapter file…", "Retire {count} duplicate chapter files…")}</button> : null}
+            {book.files.length > 0 ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={t("Delete files for book {volume}", { volume: book.volume })} onClick={() => actions.onDeleteBookFiles(book)}><Icon name="trash" size={14} /> {t("Delete files…")}</button> : null}
           </div>
         </details>
       </div>
     </div>
-    {book.redundant_book ? <p className="book-row-note muted small">This book is redundant: the whole series completes from chapters.</p> : null}
+    {book.redundant_book ? <p className="book-row-note muted small">{t("This book is redundant: the whole series completes from chapters.")}</p> : null}
     {canExpand && !collapsed
       ? <div className="book-row-detail">
-        {book.suspect && book.chapters.length > 0 ? <p className="muted small">{book.retirement_note || "Separate chapter files are preserved until their contents can be matched to this book."}</p> : null}
-        {plan === "book" ? <p className="muted small book-row-plan">Book on disk. Separate chapter releases:</p> : null}
-        {visibleChapters.length > 0 ? <ChapterTable key={filter} chapters={visibleChapters} book={book} order={order} renderRows={actions.renderChapterRows} /> : <p className="muted small">No chapters match this filter.</p>}
+        {book.suspect && book.chapters.length > 0 ? <p className="muted small">{book.retirement_note || t("Separate chapter files are preserved until their contents can be matched to this book.")}</p> : null}
+        {plan === "book" ? <p className="muted small book-row-plan">{t("Book on disk. Separate chapter releases:")}</p> : null}
+        {visibleChapters.length > 0 ? <ChapterTable key={filter} chapters={visibleChapters} book={book} order={order} renderRows={actions.renderChapterRows} /> : <p className="muted small">{t("No chapters match this filter.")}</p>}
       </div>
       : null}
   </section>;
@@ -141,15 +142,15 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
 
 function describeConfidence(data: SeriesUnits): string {
   const confidence = data.map_confidence;
-  if (!confidence) return data.mode === "grouped" ? "Book boundaries: exact map." : "Book boundaries: not known.";
-  const sources = confidence.sources.length ? confidence.sources.join(", ") : "none";
+  if (!confidence) return data.mode === "grouped" ? t("Book boundaries: exact map.") : t("Book boundaries: not known.");
+  const sources = confidence.sources.length ? confidence.sources.join(", ") : t("none");
   if (confidence.level === "exact") return confidence.sources.includes("operator")
-    ? "Book boundaries: manually saved; editorial accuracy has not been independently verified."
-    : `Book boundaries: mapped (${sources}).`;
-  if (confidence.level === "estimated") return "Chapters are laid out evenly across the books.";
-  if (confidence.level === "partial" && confidence.unknown_books) return `Book boundaries: ${sources}; ${confidence.unknown_books} book${confidence.unknown_books === 1 ? " has" : "s have"} no verified chapter assignment.`;
-  if (confidence.level === "partial") return `Book boundaries: ${sources}; ${confidence.estimated_books} book${confidence.estimated_books === 1 ? "" : "s"} laid out between known neighbours.`;
-  return "Book boundaries: not known.";
+    ? t("Book boundaries: manually saved; editorial accuracy has not been independently verified.")
+    : t("Book boundaries: mapped ({sources}).", { sources });
+  if (confidence.level === "estimated") return t("Chapters are laid out evenly across the books.");
+  if (confidence.level === "partial" && confidence.unknown_books) return tn(confidence.unknown_books, "Book boundaries: {sources}; {count} book has no verified chapter assignment.", "Book boundaries: {sources}; {count} books have no verified chapter assignment.", { sources });
+  if (confidence.level === "partial") return tn(confidence.estimated_books, "Book boundaries: {sources}; {count} book laid out between known neighbours.", "Book boundaries: {sources}; {count} books laid out between known neighbours.", { sources });
+  return t("Book boundaries: not known.");
 }
 
 function CompletenessSummary({ data }: { data: SeriesUnits }) {
@@ -159,11 +160,11 @@ function CompletenessSummary({ data }: { data: SeriesUnits }) {
   const mappedBookCoverage = counts.owned_books > 0 && counts.indexed_chapters > 0 && chapters.length > 0
     && chapters.every((chapter) => chapter.downloaded || Boolean(chapter.covered_by_volume));
   const unmappedBookCoverage = counts.owned_books > 0 && counts.indexed_chapters_on_disk < counts.indexed_chapters && !mappedBookCoverage;
-  return <p className="muted small" aria-label="Library completeness">
-    {mappedBookCoverage ? <><b>{counts.indexed_chapters}</b> chapters indexed; covered by the owned books. </>
-      : unmappedBookCoverage ? <><b>{counts.indexed_chapters}</b> chapters indexed; their coverage inside the owned books is not fully mapped. </>
-        : counts.indexed_chapters > 0 ? <>Indexed chapter content: <b>{counts.indexed_chapters_on_disk}/{counts.indexed_chapters}</b> on disk. </> : <>Chapter coverage is not enumerated. </>}
-    Edition files: <b>{counts.owned_books}/{counts.expected_books ?? "?"}</b> books.
+  return <p className="muted small" aria-label={t("Library completeness")}>
+    {mappedBookCoverage ? <><b>{counts.indexed_chapters}</b> {t("chapters indexed; covered by the owned books.")} </>
+      : unmappedBookCoverage ? <>{t("{count} chapters indexed; their coverage inside the owned books is not fully mapped.", { count: counts.indexed_chapters })} </>
+        : counts.indexed_chapters > 0 ? <>{t("Indexed chapter content: {onDisk}/{indexed} on disk.", { onDisk: counts.indexed_chapters_on_disk, indexed: counts.indexed_chapters })} </> : <>{t("Chapter coverage is not enumerated.")} </>}
+    {t("Edition files: {owned}/{expected} books.", { owned: counts.owned_books, expected: counts.expected_books ?? "?" })}
   </p>;
 }
 
@@ -199,62 +200,62 @@ export default function SeriesUnitGroups({ data, onSetBoundaries, ...actions }: 
     const all = [...data.books.flatMap((book) => book.chapters), ...data.unassigned_chapters];
     const onDisk = all.filter((chapter) => chapter.downloaded).length;
     const ownedBooks = orderedRows(data.books.filter((book) => book.owned), order);
-    return <section aria-label="Series chapters">
+    return <section aria-label={t("Series chapters")}>
       <div className="toolbar">
-        <h2>Chapters</h2>
+        <h2>{t("Chapters")}</h2>
         <div className="toolbar-group">
-          <label>Show <select className="input" aria-label="Filter series units" value={filter} onChange={(event) => setFilter(event.target.value as UnitFilter)}>
-            <option value="all">All</option><option value="missing">Missing</option><option value="downloaded">Downloaded</option><option value="monitored">Monitored</option>
+          <label>{t("Show")} <select className="input" aria-label={t("Filter series units")} value={filter} onChange={(event) => setFilter(event.target.value as UnitFilter)}>
+            <option value="all">{t("All")}</option><option value="missing">{t("Missing")}</option><option value="downloaded">{t("Downloaded")}</option><option value="monitored">{t("Monitored")}</option>
           </select></label>
-          <label>Number <select className="input" aria-label="Order series units" value={order} onChange={(event) => setOrder(event.target.value as UnitOrder)}>
-            <option value="ascending">Ascending</option><option value="descending">Descending</option>
+          <label>{t("Number")} <select className="input" aria-label={t("Order series units")} value={order} onChange={(event) => setOrder(event.target.value as UnitOrder)}>
+            <option value="ascending">{t("Ascending")}</option><option value="descending">{t("Descending")}</option>
           </select></label>
         </div>
       </div>
-      <p className="muted small units-summary">{`${onDisk} of ${all.length} chapters on disk${data.form_reason ? ` · ${data.form_reason}` : ""}.`}</p>
+      <p className="muted small units-summary">{t("{onDisk} of {total} chapters on disk{reason}.", { onDisk, total: all.length, reason: data.form_reason ? ` · ${data.form_reason}` : "" })}</p>
       <CompletenessSummary data={data} />
-      {ownedBooks.length > 0 ? <section className="volume-section" aria-label="Readable books">
-        <header className="volume-header"><h2>Books on disk</h2><span className="muted small">Open a book to read chapters stored inside it.</span></header>
+      {ownedBooks.length > 0 ? <section className="volume-section" aria-label={t("Readable books")}>
+        <header className="volume-header"><h2>{t("Books on disk")}</h2><span className="muted small">{t("Open a book to read chapters stored inside it.")}</span></header>
         {ownedBooks.map((book) => <BookRow key={book.key} book={book} chapters={[]} filter={filter} order={order} {...actions} />)}
       </section> : null}
-      {data.books.length > 0 ? <p className="muted small units-map"><button type="button" className="link-button" onClick={onSetBoundaries}>Edit book boundaries</button></p> : null}
+      {data.books.length > 0 ? <p className="muted small units-map"><button type="button" className="link-button" onClick={onSetBoundaries}>{t("Edit book boundaries")}</button></p> : null}
       {data.warning ? <p className="muted">{data.warning}</p> : null}
-      <section className="volume-section" aria-label="Chapters">
-        {allChapters.length ? <ChapterTable key={filter} chapters={allChapters} book={null} order={order} renderRows={actions.renderChapterRows} /> : <p className="muted small">{filter === "all" ? "No chapters are indexed." : "No chapters match this filter."}</p>}
+      <section className="volume-section" aria-label={t("Chapters")}>
+        {allChapters.length ? <ChapterTable key={filter} chapters={allChapters} book={null} order={order} renderRows={actions.renderChapterRows} /> : <p className="muted small">{filter === "all" ? t("No chapters are indexed.") : t("No chapters match this filter.")}</p>}
       </section>
     </section>;
   }
 
-  return <section aria-label="Series books and chapters">
+  return <section aria-label={t("Series books and chapters")}>
     <div className="toolbar">
-      <h2>Books</h2>
+      <h2>{t("Books")}</h2>
       <div className="toolbar-group">
-        <label>Show <select className="input" aria-label="Filter series units" value={filter} onChange={(event) => setFilter(event.target.value as UnitFilter)}>
-          <option value="all">All</option><option value="problems">Problems only</option><option value="missing">Missing</option><option value="downloaded">Downloaded</option><option value="monitored">Monitored</option>
+        <label>{t("Show")} <select className="input" aria-label={t("Filter series units")} value={filter} onChange={(event) => setFilter(event.target.value as UnitFilter)}>
+          <option value="all">{t("All")}</option><option value="problems">{t("Problems only")}</option><option value="missing">{t("Missing")}</option><option value="downloaded">{t("Downloaded")}</option><option value="monitored">{t("Monitored")}</option>
         </select></label>
-        <label>Number <select className="input" aria-label="Order series units" value={order} onChange={(event) => setOrder(event.target.value as UnitOrder)}>
-          <option value="ascending">Ascending</option><option value="descending">Descending</option>
+        <label>{t("Number")} <select className="input" aria-label={t("Order series units")} value={order} onChange={(event) => setOrder(event.target.value as UnitOrder)}>
+          <option value="ascending">{t("Ascending")}</option><option value="descending">{t("Descending")}</option>
         </select></label>
       </div>
     </div>
     <p className="muted small units-summary">
-      {completeBooks ? <><b>{owned}</b> book{owned === 1 ? "" : "s"} on disk · All expected book files present</> : <>
-      <b>{owned}</b> book{owned === 1 ? "" : "s"} on disk · <b>{assemble}</b> groups covered by chapters · <b>{problems}</b> incomplete
-      {" · "}form: <b>{uniform === "books" ? "all books" : uniform === "chapters" ? "all chapters" : "mixed"}</b>
-      {" · "}preference: <b>{preference === "chapters" ? "chapters first" : "books first"}</b>
-      {data.edition_book_count !== null ? <> · Managed edition: {data.edition_book_count} books.</> : null}
+      {completeBooks ? <>{tn(owned, "{count} book on disk · All expected book files present", "{count} books on disk · All expected book files present")}</> : <>
+      {tn(owned, "{count} book on disk", "{count} books on disk")} · {t("{count} groups covered by chapters", { count: assemble })} · {t("{count} incomplete", { count: problems })}
+      {" · "}{t("form:")} <b>{uniform === "books" ? t("all books") : uniform === "chapters" ? t("all chapters") : t("mixed")}</b>
+      {" · "}{t("preference:")} <b>{preference === "chapters" ? t("chapters first") : t("books first")}</b>
+      {data.edition_book_count !== null ? <> · {t("Managed edition: {count} books.", { count: data.edition_book_count })}</> : null}
       {data.form_reason ? <> · {data.form_reason}</> : null}
       </>}
     </p>
     <CompletenessSummary data={data} />
     {data.content_notes?.length ? <p className="muted small units-map">{data.content_notes.join(" ")}</p> : null}
-    <p className="muted small units-map">{describeConfidence(data)} <button type="button" className="link-button" onClick={onSetBoundaries}>{completeBooks ? "Edit book boundaries" : data.mode === "flat" ? "Set boundaries" : "Correct the map"}</button>{hasProblem && filter === "all" ? <> · <button type="button" className="link-button" onClick={() => setFilter("problems")}>Problems only</button></> : null}</p>
+    <p className="muted small units-map">{describeConfidence(data)} <button type="button" className="link-button" onClick={onSetBoundaries}>{completeBooks ? t("Edit book boundaries") : data.mode === "flat" ? t("Set boundaries") : t("Correct the map")}</button>{hasProblem && filter === "all" ? <> · <button type="button" className="link-button" onClick={() => setFilter("problems")}>{t("Problems only")}</button></> : null}</p>
     {data.warning ? <p className="muted">{data.warning}</p> : null}
     {books.map(({ book, chapters }) => <BookRow key={book.key} book={book} chapters={chapters} filter={filter} order={order} {...actions} />)}
-    {!books.length ? <p className="muted">{filter === "all" ? "No book releases are available." : filter === "problems" ? "No problems: every book is on disk or completes from its chapters." : "No books match this filter."}</p> : null}
-    {data.unassigned_chapters.length > 0 ? <section className="volume-section" aria-label="Chapters without a book assignment">
-      <header className="volume-header"><h2>Chapters without a book assignment</h2><span className="muted small">{data.unassigned_chapters.filter((chapter) => chapter.downloaded).length}/{data.unassigned_chapters.length} on disk · The available chapter map does not establish which book contains these chapters.</span></header>
-      {unassigned.length ? <ChapterTable key={filter} chapters={unassigned} book={null} order={order} renderRows={actions.renderChapterRows} /> : <p className="muted small">No chapters match this filter.</p>}
+    {!books.length ? <p className="muted">{filter === "all" ? t("No book releases are available.") : filter === "problems" ? t("No problems: every book is on disk or completes from its chapters.") : t("No books match this filter.")}</p> : null}
+    {data.unassigned_chapters.length > 0 ? <section className="volume-section" aria-label={t("Chapters without a book assignment")}>
+      <header className="volume-header"><h2>{t("Chapters without a book assignment")}</h2><span className="muted small">{t("{onDisk}/{total} on disk · The available chapter map does not establish which book contains these chapters.", { onDisk: data.unassigned_chapters.filter((chapter) => chapter.downloaded).length, total: data.unassigned_chapters.length })}</span></header>
+      {unassigned.length ? <ChapterTable key={filter} chapters={unassigned} book={null} order={order} renderRows={actions.renderChapterRows} /> : <p className="muted small">{t("No chapters match this filter.")}</p>}
     </section> : null}
   </section>;
 }

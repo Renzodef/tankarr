@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { api } from "../api";
 import { Logo } from "../components";
 import type { AuthStatus } from "../types";
+import { t } from "../i18n";
 
 export default function LoginPage({
   onAuthenticated,
@@ -22,7 +23,7 @@ export default function LoginPage({
       onAuthenticated(await api.login(username, password, rememberMe));
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
-      setError(message || "Login failed");
+      setError(message || t("Login failed"));
       setPassword("");
     } finally {
       setSubmitting(false);
@@ -38,7 +39,7 @@ export default function LoginPage({
         </div>
         <form onSubmit={(event) => void submit(event)}>
           <div className="form-row">
-            <label htmlFor="login-username">Username</label>
+            <label htmlFor="login-username">{t("Username")}</label>
             <input
               id="login-username"
               className="input"
@@ -52,7 +53,7 @@ export default function LoginPage({
             />
           </div>
           <div className="form-row">
-            <label htmlFor="login-password">Password</label>
+            <label htmlFor="login-password">{t("Password")}</label>
             <input
               id="login-password"
               className="input"
@@ -69,7 +70,7 @@ export default function LoginPage({
               checked={rememberMe}
               onChange={(event) => setRememberMe(event.target.checked)}
             />
-            <span>Remember me</span>
+            <span>{t("Remember me")}</span>
           </label>
           {error ? (
             <div className="login-error" role="alert">
@@ -77,7 +78,7 @@ export default function LoginPage({
             </div>
           ) : null}
           <button className="btn btn-primary login-submit" type="submit" disabled={submitting}>
-            {submitting ? "Signing in…" : "Log In"}
+            {submitting ? t("Signing in…") : t("Log In")}
           </button>
         </form>
       </section>

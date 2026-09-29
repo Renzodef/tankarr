@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { t } from "../i18n";
 
 export class RouteErrorBoundary extends Component<
   { children: ReactNode },
@@ -14,16 +15,15 @@ export class RouteErrorBoundary extends Component<
     if (!this.state.failed) return this.props.children;
     return (
       <section className="page" role="alert">
-        <h1 className="page-title">This page could not be loaded</h1>
+        <h1 className="page-title">{t("This page could not be loaded")}</h1>
         <p className="muted">
-          The connection may have been interrupted, or Tankarr was updated while this tab was open.
-          Reload to try again.
+          {t("The connection may have been interrupted, or Tankarr was updated while this tab was open. Reload to try again.")}
         </p>
         <div className="toolbar-group">
           <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
-            Reload app
+            {t("Reload app")}
           </button>
-          <a className="btn" href="#/">Back to library</a>
+          <a className="btn" href="#/">{t("Back to library")}</a>
         </div>
       </section>
     );

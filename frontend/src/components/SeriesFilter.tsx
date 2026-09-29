@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Icon } from "../components";
+import { t } from "../i18n";
 
 type SeriesFilterProps = {
   value: string;
@@ -118,10 +119,10 @@ export function SeriesFilter({
       <button
         type="button"
         className="series-filter-toggle"
-        aria-label={open ? "Hide available series" : "Show available series"}
+        aria-label={open ? t("Hide available series") : t("Show available series")}
         aria-expanded={open}
         aria-controls={listId}
-        title={open ? "Hide available series" : "Show available series"}
+        title={open ? t("Hide available series") : t("Show available series")}
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
           setOpen((current) => !current);
@@ -131,7 +132,7 @@ export function SeriesFilter({
         <Icon name="chevronDown" size={17} />
       </button>
       {open ? (
-        <ul className="series-filter-menu" id={listId} role="listbox" aria-label="Available series">
+        <ul className="series-filter-menu" id={listId} role="listbox" aria-label={t("Available series")}>
           <li
             id={`${listId}-option-0`}
             className={`series-filter-option${activeIndex === 0 ? " is-active" : ""}${!value.trim() ? " is-selected" : ""}`}
@@ -139,7 +140,7 @@ export function SeriesFilter({
             aria-selected={!value.trim()}
             onClick={() => select("")}
           >
-            All series
+            {t("All series")}
           </li>
           {visibleTitles.map(({ title }, index) => (
             <li
@@ -154,9 +155,9 @@ export function SeriesFilter({
             </li>
           ))}
           {matchingTitles.length > MAX_VISIBLE_CHOICES ? (
-            <li className="series-filter-empty">Type to narrow {matchingTitles.length} matching series.</li>
+            <li className="series-filter-empty">{t("Type to narrow {count} matching series.", { count: matchingTitles.length })}</li>
           ) : null}
-          {!matchingTitles.length ? <li className="series-filter-empty">No matching series</li> : null}
+          {!matchingTitles.length ? <li className="series-filter-empty">{t("No matching series")}</li> : null}
         </ul>
       ) : null}
     </div>

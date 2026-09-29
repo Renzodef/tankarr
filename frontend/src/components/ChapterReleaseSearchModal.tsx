@@ -15,6 +15,7 @@ import {
   humanize,
   useApp,
 } from "../components";
+import { locale, t, tn } from "../i18n";
 
 type SeriesTarget = {
   id: string;
@@ -118,7 +119,10 @@ export function ChapterReleaseSearchModal({
     if (
       replace &&
       !window.confirm(
-        `Replace the file already in the library for ${chapterLabel(release.volume, release.chapter)} with this release from ${release.source_name || release.provider}? The current file is kept until the replacement is verified and imported.`,
+        t("Replace the file already in the library for {chapter} with this release from {source}? The current file is kept until the replacement is verified and imported.", {
+          chapter: chapterLabel(release.volume, release.chapter),
+          source: release.source_name || release.provider,
+        }),
       )
     ) {
       return;
@@ -129,7 +133,7 @@ export function ChapterReleaseSearchModal({
       setQueuedIds((current) => new Set(current).add(release.id));
       notify(
         "success",
-        `${chapterLabel(release.volume, release.chapter)} queued from ${release.provider}.`,
+        t("{chapter} queued from {source}.", { chapter: chapterLabel(release.volume, release.chapter), source: release.provider }),
       );
       await onQueued();
     } catch (caught) {
@@ -146,7 +150,7 @@ export function ChapterReleaseSearchModal({
       setQueuedIds((current) =>
         new Set(current).add(`${release.provider}:${release.id}`),
       );
-      notify("success", `${release.title} added to qBittorrent.`);
+      notify("success", t("{title} added to qBittorrent.", { title: release.title }));
       await onQueued();
     } catch (caught) {
       notify("error", String(caught));
@@ -158,22 +162,22 @@ export function ChapterReleaseSearchModal({
   return (
     <Modal
       wide
-      title={`Interactive Search · ${manga.title} · ${chapterLabel(target.volume, target.chapter)}`}
+      title={t("Interactive Search · {title} · {chapter}", { title: manga.title, chapter: chapterLabel(target.volume, target.chapter) })}
       onClose={onClose}
-      footer={<button type="button" className="btn" onClick={onClose}>Close</button>}
+      footer={<button type="button" className="btn" onClick={onClose}>{t("Close")}</button>}
     >
       <div className="search-scope manual-search-scope">
         <StatusPill kind="provider">
-          Exact {target.volume && !target.chapter ? "volume" : "chapter"}
+          {t("Exact")} {target.volume && !target.chapter ? "volume" : "chapter"}
         </StatusPill>
-        <span className="muted small">Direct providers and Prowlarr indexers</span>
+        <span className="muted small">{t("Direct providers and Prowlarr indexers")}</span>
       </div>
       {loading ? <Spinner /> : null}
       {error ? <div className="banner banner-warn"><Icon name="alert" /> {error}</div> : null}
       {!loading && result ? (
         <div className="manual-release-sections">
           <section>
-            <h3>Direct providers</h3>
+            <h3>{t("Direct providers")}</h3>
             <div className="source-search-summary">
               {result.direct_sources.map((source, index) => (
                 <span
@@ -207,20 +211,20 @@ export function ChapterReleaseSearchModal({
                       comparableNumber(release.source_chapter) !==
                         comparableNumber(release.chapter) ? (
                         <span>
-                          Canonical {release.chapter} · source item {release.source_chapter}
+                          {t("Canonical {chapter} · source item {source}", { chapter: release.chapter, source: release.source_chapter })}
                         </span>
                       ) : null}
-                      {release.selection ? <div className="muted small" aria-label="Automatic selection">
-                        {release.selection.selected ? "Automatic choice: " : "Not selected: "}{release.selection.reasons.join(" · ")}
-                        {release.selection.next_retry_at ? ` · Retry after ${new Date(release.selection.next_retry_at * 1000).toLocaleTimeString()}` : ""}
+                      {release.selection ? <div className="muted small" aria-label={t("Automatic selection")}>
+                        {release.selection.selected ? t("Automatic choice:") : t("Not selected:")} {release.selection.reasons.join(" · ")}
+                        {release.selection.next_retry_at ? " · " + t("Retry after {time}", { time: new Date(release.selection.next_retry_at * 1000).toLocaleTimeString(locale()) }) : ""}
                       </div> : null}
                       <span>v{release.version ?? 1}</span>
-                      <span>{release.publish_at ? formatDate(release.publish_at) : "Unknown date"}</span>
+                      <span>{release.publish_at ? formatDate(release.publish_at) : t("Unknown date")}</span>
                     </div>
                     <div className="manual-release-actions">
                         {release.source_url ? (
                           <a className="btn btn-ghost btn-small" href={release.source_url} target="_blank" rel="noreferrer">
-                            <Icon name="external" size={13} /> Source
+                            <Icon name="external" size={13} /> {t("Source")}
                           </a>
                         ) : null}
                         <button
@@ -230,34 +234,34 @@ export function ChapterReleaseSearchModal({
                           onClick={() => void queueDirect(release, slotDownloaded && !release.downloaded)}
                           title={
                             slotDownloaded && !release.downloaded
-                              ? "Delete the current file for this chapter and download this release instead"
+                              ? t("Delete the current file for this chapter and download this release instead")
                               : undefined
                           }
                         >
                           <Icon name={slotDownloaded && !release.downloaded ? "refresh" : "download"} size={13} />
                           {release.downloaded
-                            ? "In library"
+                            ? t("In library")
                             : release.queue_status || queuedIds.has(release.id)
-                              ? "Queued"
+                              ? t("Queued")
                               : slotDownloaded
-                                ? "Replace file"
-                                : "Grab"}
+                                ? t("Replace file")
+                                : t("Grab")}
                         </button>
                     </div>
                   </article>
                 ))}
               </div>
-            ) : <p className="muted small">No verified direct release exposes this chapter yet.</p>}
+            ) : <p className="muted small">{t("No verified direct release exposes this chapter yet.")}</p>}
           </section>
           <section>
-            <h3>Torrent indexers</h3>
+            <h3>{t("Torrent indexers")}</h3>
             {result.torrent.errors.map((item) => (
               <div className="banner banner-warn" key={`${item.provider}:${item.error}`}>
                 <Icon name="alert" /> {item.provider}: {item.error}
               </div>
             ))}
             {manga.preferred_language !== "en" ? (
-              <p className="muted small">Torrent import currently requires English for OCR verification.</p>
+              <p className="muted small">{t("Torrent import currently requires English for OCR verification.")}</p>
             ) : torrentReleases.length ? (
               <div className="manual-release-list">
                 {torrentReleases.slice(0, 25).map((release) => {
@@ -272,13 +276,13 @@ export function ChapterReleaseSearchModal({
                             {release.title}
                           </a>
                         ) : <div className="manual-release-title">{release.title}</div>}
-                        <div className="muted small">{release.size} · {release.seeders} seeds</div>
+                        <div className="muted small">{release.size} · {tn(release.seeders ?? 0, "{count} seed", "{count} seeds")}</div>
                       </div>
                       <div className="manual-release-details">
                         <StatusPill kind={match ? "success" : "muted"}>
-                          {match === "chapter" ? "Chapter match" : match === "volume" ? "Volume match" : "Series result"}
+                          {match === "chapter" ? t("Chapter match") : match === "volume" ? t("Volume match") : t("Series result")}
                         </StatusPill>
-                        <span className="muted small">{release.match_score}% match</span>
+                        <span className="muted small">{t("{percent}% match", { percent: release.match_score })}</span>
                       </div>
                       <div className="manual-release-actions">
                             <button
@@ -288,14 +292,14 @@ export function ChapterReleaseSearchModal({
                               onClick={() => void grabTorrent(release)}
                             >
                               <Icon name="download" size={13} />
-                              {release.download || queuedIds.has(key) ? "Queued" : "Grab"}
+                              {release.download || queuedIds.has(key) ? t("Queued") : t("Grab")}
                             </button>
                       </div>
                     </article>
                   );
                 })}
               </div>
-            ) : <p className="muted small">No torrent result found for “{result.torrent.query}”.</p>}
+            ) : <p className="muted small">{t("No torrent result found for “{query}”.", { query: result.torrent.query })}</p>}
           </section>
         </div>
       ) : null}

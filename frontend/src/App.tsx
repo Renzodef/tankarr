@@ -21,6 +21,7 @@ import {
 import { seriesCounts } from "./seriesStatus";
 import type { Route } from "./components";
 import type { AuthStatus, Health, Manga } from "./types";
+import { msg, t } from "./i18n";
 
 // Keep the authentication shell and navigation tiny. Most visits only need
 // one page; loading every settings panel, modal and table before first paint
@@ -124,8 +125,8 @@ const LibrarySearch = memo(function LibrarySearch() {
       <Icon name="search" size={16} />
       <input
         ref={inputRef}
-        placeholder="Search your library…"
-        aria-label="Search series in your library"
+        placeholder={t("Search your library…")}
+        aria-label={t("Search series in your library")}
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={open && Boolean(term)}
@@ -186,16 +187,16 @@ const LibrarySearch = memo(function LibrarySearch() {
             </button>
           ))}
           {loading && library === null ? (
-            <div className="search-option muted">Loading library…</div>
+            <div className="search-option muted">{t("Loading library…")}</div>
           ) : loadError ? (
             <div className="search-option muted" role="alert">
-              <span>Library search is temporarily unavailable.</span>
+              <span>{t("Library search is temporarily unavailable.")}</span>
               <button type="button" className="btn" onClick={() => void refresh().catch(() => undefined)}>
-                Retry library search
+                {t("Retry library search")}
               </button>
             </div>
           ) : matches.length === 0 ? (
-            <div className="search-option muted">No series found in your library.</div>
+            <div className="search-option muted">{t("No series found in your library.")}</div>
           ) : null}
         </div>
       ) : null}
@@ -214,21 +215,21 @@ type NavItem = {
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { path: "#/", page: "library", label: "Comics", icon: "comics", activePages: ["library", "series", "author"] },
-  { path: "#/add", page: "add", label: "Add New", icon: "add", subitem: true },
-  { path: "#/import", page: "import", label: "Library Import", icon: "upload", subitem: true },
-  { path: "#/calendar", page: "calendar", label: "Calendar", icon: "calendar", groupStart: true },
-  { path: "#/bookmarks", page: "bookmarks", label: "Bookmarks", icon: "bookmark" },
+  { path: "#/", page: "library", label: msg("Comics"), icon: "comics", activePages: ["library", "series", "author"] },
+  { path: "#/add", page: "add", label: msg("Add New"), icon: "add", subitem: true },
+  { path: "#/import", page: "import", label: msg("Library Import"), icon: "upload", subitem: true },
+  { path: "#/calendar", page: "calendar", label: msg("Calendar"), icon: "calendar", groupStart: true },
+  { path: "#/bookmarks", page: "bookmarks", label: msg("Bookmarks"), icon: "bookmark" },
   {
     path: "#/activity",
     page: "activity",
-    label: "Activity",
+    label: msg("Activity"),
     icon: "history",
     activePages: ["activity", "history"],
   },
-  { path: "#/wanted", page: "wanted", label: "Wanted", icon: "wanted" },
-  { path: "#/settings", page: "settings", label: "Settings", icon: "gears", groupStart: true },
-  { path: "#/system", page: "system", label: "System", icon: "system" },
+  { path: "#/wanted", page: "wanted", label: msg("Wanted"), icon: "wanted" },
+  { path: "#/settings", page: "settings", label: msg("Settings"), icon: "gears", groupStart: true },
+  { path: "#/system", page: "system", label: msg("System"), icon: "system" },
 ];
 
 const PageRouter = memo(function PageRouter({ route, finishSetup }: { route: Route; finishSetup: (skipped?: boolean) => void }) {
@@ -401,7 +402,7 @@ export default function App({
             <Logo />
             <span className="brand-name">tankarr</span>
           </a>
-          <nav className="sidebar-nav" aria-label="Main navigation">
+          <nav className="sidebar-nav" aria-label={t("Main navigation")}>
             {NAV_ITEMS.map((item) => (
               <a
                 key={item.page}
@@ -417,7 +418,7 @@ export default function App({
                 href={item.path}
               >
                 {item.icon ? <Icon name={item.icon} /> : null}
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
                 {item.page === "activity" && activeCount > 0 ? (
                   <span className="nav-badge">{activeCount}</span>
                 ) : null}
@@ -430,7 +431,7 @@ export default function App({
           <div className="sidebar-footer">
             <div className="sidebar-runtime">
               <span className={`health-dot ${health ? "ok" : "down"}`} />
-              <span>{health ? `v${health.version}` : "offline"}</span>
+              <span>{health ? `v${health.version}` : t("offline")}</span>
               {authentication.username ? (
                 <span className="sidebar-user">{authentication.username}</span>
               ) : null}
@@ -439,8 +440,8 @@ export default function App({
               <button
                 type="button"
                 className="sidebar-logout"
-                title="Log out"
-                aria-label="Log out"
+                title={t("Log out")}
+                aria-label={t("Log out")}
                 onClick={() => void onLogout()}
               >
                 <Icon name="logout" size={15} />
@@ -451,38 +452,37 @@ export default function App({
 
         <div className="main">
           <header className="topbar">
-            <button type="button" className="btn btn-ghost btn-icon mobile-navigation-toggle" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>
+            <button type="button" className="btn btn-ghost btn-icon mobile-navigation-toggle" aria-label={t("Open navigation")} aria-haspopup="dialog" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>
               <Icon name="menu" />
             </button>
             <LibrarySearch />
-            <a href="#/add" className="btn btn-ghost btn-icon mobile-navigation-toggle" aria-label="Add new series"><Icon name="add" /></a>
+            <a href="#/add" className="btn btn-ghost btn-icon mobile-navigation-toggle" aria-label={t("Add new series")}><Icon name="add" /></a>
           </header>
-          {mobileNavOpen ? <Modal title="Navigation" className="navigation-dialog" onClose={() => setMobileNavOpen(false)}>
-            <nav aria-label="Mobile navigation">
+          {mobileNavOpen ? <Modal title={t("Navigation")} className="navigation-dialog" onClose={() => setMobileNavOpen(false)}>
+            <nav aria-label={t("Mobile navigation")}>
               {NAV_ITEMS.map((item) => <a key={item.page} href={item.path}
                 className={`nav-item${item.groupStart ? " nav-group-start" : ""}${(item.activePages ?? [item.page]).includes(route.page) ? " active" : ""}`}
                 aria-current={(item.activePages ?? [item.page]).includes(route.page) ? "page" : undefined}
                 onClick={() => setMobileNavOpen(false)}>
-                {item.icon ? <Icon name={item.icon} /> : null}<span>{item.label}</span>
+                {item.icon ? <Icon name={item.icon} /> : null}<span>{t(item.label)}</span>
                 {item.page === "activity" && activeCount > 0 ? <span className="nav-badge">{activeCount}</span> : null}
                 {item.page === "system" && systemIssueCount > 0 ? <span className="nav-badge">{systemIssueCount}</span> : null}
               </a>)}
             </nav>
-            {authentication.configured && authentication.method === "forms" ? <button type="button" className="btn mobile-logout" onClick={() => { setMobileNavOpen(false); void onLogout(); }}><Icon name="logout" /> Log out</button> : null}
+            {authentication.configured && authentication.method === "forms" ? <button type="button" className="btn mobile-logout" onClick={() => { setMobileNavOpen(false); void onLogout(); }}><Icon name="logout" /> {t("Log out")}</button> : null}
           </Modal> : null}
 
           {setup.required && route.page === "settings" ? (
-            <div className="banner banner-warn"><a href="#/setup">Continue setup checks</a></div>
+            <div className="banner banner-warn"><a href="#/setup">{t("Continue setup checks")}</a></div>
           ) : null}
           {blocked ? (
             <div className="banner banner-danger">
-              <Icon name="alert" /> Tankarr is paused: a deletion or organization step needs attention.
-              Check the System page.
+              <Icon name="alert" /> {t("Tankarr is paused: a deletion or organization step needs attention. Check the System page.")}
             </div>
           ) : null}
           {libraryDown ? (
             <div className="banner banner-danger">
-              <Icon name="alert" /> The library mount is unavailable
+              <Icon name="alert" /> {t("The library mount is unavailable")}
               {health && !health.library.available ? `: ${health.library.reason}` : ""}.
             </div>
           ) : null}

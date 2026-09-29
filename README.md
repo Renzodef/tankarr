@@ -54,6 +54,8 @@ series complete.
 - **The *arr experience.** Library, Calendar, Activity queue, Wanted, History,
   interactive release search, monitoring profiles, and a System page with
   health checks, scheduled tasks, logs and one-click backups.
+- **In your language.** The interface is available in English and Italian,
+  chosen per browser; another language is one JSON file away.
 - **Built to be operated.** Notifications to ntfy, Discord, Telegram, Apprise
   or any webhook; an API key and Prometheus metrics; forms, basic or
   reverse-proxy (`Remote-User`) authentication; `PUID`/`PGID`; verified

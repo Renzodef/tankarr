@@ -1,6 +1,7 @@
 import { ReactNode, createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { URL_BASE, serverUrl } from "./serverUrl";
 import type { Health, Manga, MonitorMode } from "./types";
+import { locale, msg, t } from "./i18n";
 
 /* ---------------------------------- icons --------------------------------- */
 
@@ -221,8 +222,8 @@ export function Pagination({
   pageSize,
   total,
   onPageChange,
-  itemLabel = "records",
-  ariaLabel = "Pagination",
+  itemLabel = t("records"),
+  ariaLabel = t("Pagination"),
 }: {
   page: number;
   pageSize: number;
@@ -254,8 +255,8 @@ export function Pagination({
           type="button"
           className="pagination-button"
           disabled={current === 1}
-          title="First page"
-          aria-label="First page"
+          title={t("First page")}
+          aria-label={t("First page")}
           onClick={() => goTo(1)}
         >
           <Icon name="chevronsLeft" size={17} />
@@ -264,8 +265,8 @@ export function Pagination({
           type="button"
           className="pagination-button"
           disabled={current === 1}
-          title="Previous page"
-          aria-label="Previous page"
+          title={t("Previous page")}
+          aria-label={t("Previous page")}
           onClick={() => goTo(current - 1)}
         >
           <Icon name="chevronLeft" size={17} />
@@ -279,8 +280,8 @@ export function Pagination({
           type="button"
           className="pagination-button"
           disabled={current === pages}
-          title="Next page"
-          aria-label="Next page"
+          title={t("Next page")}
+          aria-label={t("Next page")}
           onClick={() => goTo(current + 1)}
         >
           <Icon name="chevronRight" size={17} />
@@ -289,15 +290,15 @@ export function Pagination({
           type="button"
           className="pagination-button"
           disabled={current === pages}
-          title="Last page"
-          aria-label="Last page"
+          title={t("Last page")}
+          aria-label={t("Last page")}
           onClick={() => goTo(pages)}
         >
           <Icon name="chevronsRight" size={17} />
         </button>
       </div>
       <span className="pagination-total">
-        {first}–{last} of {total} {itemLabel}
+        {t("{first}–{last} of {total} {items}", { first, last, total, items: itemLabel })}
       </span>
     </nav>
   );
@@ -326,50 +327,50 @@ export function Logo({ size = 26 }: { size?: number }) {
 /* --------------------------------- helpers -------------------------------- */
 
 export const LANGUAGES: readonly (readonly [string, string])[] = [
-  ["en", "English"],
-  ["it", "Italiano"],
-  ["ar", "Arabic"],
-  ["bn", "Bengali"],
-  ["bg", "Bulgarian"],
-  ["my", "Burmese"],
-  ["ca", "Catalan"],
-  ["zh", "Chinese (Simplified)"],
-  ["zh-hk", "Chinese (Traditional)"],
-  ["zh-ro", "Chinese (Romanized)"],
-  ["cs", "Czech"],
-  ["da", "Danish"],
-  ["nl", "Dutch"],
-  ["fil", "Filipino"],
-  ["fi", "Finnish"],
-  ["fr", "French"],
-  ["de", "German"],
-  ["el", "Greek"],
-  ["he", "Hebrew"],
-  ["hi", "Hindi"],
-  ["hu", "Hungarian"],
-  ["id", "Indonesian"],
-  ["ja", "Japanese"],
-  ["ja-ro", "Japanese (Romanized)"],
-  ["ko", "Korean"],
-  ["ko-ro", "Korean (Romanized)"],
-  ["lt", "Lithuanian"],
-  ["ms", "Malay"],
-  ["mn", "Mongolian"],
-  ["no", "Norwegian"],
-  ["fa", "Persian"],
-  ["pl", "Polish"],
-  ["pt-br", "Portuguese (Brazil)"],
-  ["pt", "Portuguese (Portugal)"],
-  ["ro", "Romanian"],
-  ["ru", "Russian"],
-  ["sr", "Serbo-Croatian"],
-  ["es", "Spanish (Spain)"],
-  ["es-la", "Spanish (Latin America)"],
-  ["sv", "Swedish"],
-  ["th", "Thai"],
-  ["tr", "Turkish"],
-  ["uk", "Ukrainian"],
-  ["vi", "Vietnamese"],
+  ["en", msg("English")],
+  ["it", msg("Italiano")],
+  ["ar", msg("Arabic")],
+  ["bn", msg("Bengali")],
+  ["bg", msg("Bulgarian")],
+  ["my", msg("Burmese")],
+  ["ca", msg("Catalan")],
+  ["zh", msg("Chinese (Simplified)")],
+  ["zh-hk", msg("Chinese (Traditional)")],
+  ["zh-ro", msg("Chinese (Romanized)")],
+  ["cs", msg("Czech")],
+  ["da", msg("Danish")],
+  ["nl", msg("Dutch")],
+  ["fil", msg("Filipino")],
+  ["fi", msg("Finnish")],
+  ["fr", msg("French")],
+  ["de", msg("German")],
+  ["el", msg("Greek")],
+  ["he", msg("Hebrew")],
+  ["hi", msg("Hindi")],
+  ["hu", msg("Hungarian")],
+  ["id", msg("Indonesian")],
+  ["ja", msg("Japanese")],
+  ["ja-ro", msg("Japanese (Romanized)")],
+  ["ko", msg("Korean")],
+  ["ko-ro", msg("Korean (Romanized)")],
+  ["lt", msg("Lithuanian")],
+  ["ms", msg("Malay")],
+  ["mn", msg("Mongolian")],
+  ["no", msg("Norwegian")],
+  ["fa", msg("Persian")],
+  ["pl", msg("Polish")],
+  ["pt-br", msg("Portuguese (Brazil)")],
+  ["pt", msg("Portuguese (Portugal)")],
+  ["ro", msg("Romanian")],
+  ["ru", msg("Russian")],
+  ["sr", msg("Serbo-Croatian")],
+  ["es", msg("Spanish (Spain)")],
+  ["es-la", msg("Spanish (Latin America)")],
+  ["sv", msg("Swedish")],
+  ["th", msg("Thai")],
+  ["tr", msg("Turkish")],
+  ["uk", msg("Ukrainian")],
+  ["vi", msg("Vietnamese")],
 ] as const;
 
 export const MONITOR_OPTIONS: {
@@ -380,36 +381,37 @@ export const MONITOR_OPTIONS: {
 }[] = [
   {
     value: "all",
-    title: "All chapters",
-    short: "All",
-    description: "Download every available chapter, then keep watching for new releases.",
+    title: msg("All chapters"),
+    short: msg("All"),
+    description: msg("Download every available chapter, then keep watching for new releases."),
   },
   {
     value: "future",
-    title: "Future chapters",
-    short: "Future",
-    description: "Use today's releases as a baseline and download only chapters published later.",
+    title: msg("Future chapters"),
+    short: msg("Future"),
+    description: msg("Use today's releases as a baseline and download only chapters published later."),
   },
   {
     value: "existing",
-    title: "Existing chapters",
-    short: "Existing",
-    description: "Download the chapters available now without monitoring future releases.",
+    title: msg("Existing chapters"),
+    short: msg("Existing"),
+    description: msg("Download the chapters available now without monitoring future releases."),
   },
   {
     value: "none",
-    title: "None",
-    short: "Manual",
-    description: "Track the series and its chapter index without automatic downloads.",
+    title: msg("None"),
+    short: msg("Manual"),
+    description: msg("Track the series and its chapter index without automatic downloads."),
   },
 ];
 
 export function monitorLabel(mode: MonitorMode | undefined) {
-  return MONITOR_OPTIONS.find((option) => option.value === mode)?.short ?? "Manual";
+  return t(MONITOR_OPTIONS.find((option) => option.value === mode)?.short ?? msg("Manual"));
 }
 
 export function languageName(code: string) {
-  return LANGUAGES.find(([value]) => value === code)?.[1] ?? code.toUpperCase();
+  const name = LANGUAGES.find(([value]) => value === code)?.[1];
+  return name ? t(name) : code.toUpperCase();
 }
 
 export function providerChainLabel(provider: string, sourceName?: string | null) {
@@ -419,14 +421,14 @@ export function providerChainLabel(provider: string, sourceName?: string | null)
   if (normalized === "suwayomi" && source && source.toLocaleLowerCase() !== "suwayomi") {
     return `${gateway} → ${source}`;
   }
-  return source || gateway || "Unknown";
+  return source || gateway || t("Unknown");
 }
 
 export function formatDate(value: string | null | undefined) {
-  if (!value) return "Never";
+  if (!value) return t("Never");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  return new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 export function formatBytes(value: number | null | undefined) {
@@ -442,16 +444,16 @@ export function formatBytes(value: number | null | undefined) {
 }
 
 export function humanize(value: string | null | undefined) {
-  if (!value) return "Unknown";
+  if (!value) return t("Unknown");
   return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 export function chapterLabel(volume: string | null, chapter: string | null) {
   // One canonical label everywhere, whatever the source called it:
   // "Chapter N" for chapters, "Volume N" for whole books.
-  if (chapter) return `Chapter ${chapter}`;
-  if (volume) return `Volume ${volume}`;
-  return "Book";
+  if (chapter) return t("Chapter {number}", { number: chapter });
+  if (volume) return t("Volume {number}", { number: volume });
+  return t("Book");
 }
 
 const chapterNumberCollator = new Intl.Collator(undefined, { numeric: true });
@@ -614,17 +616,17 @@ export function StatusPill({
 export function jobStatusPill(status: string): { kind: string; label: string } {
   switch (status) {
     case "completed":
-      return { kind: "success", label: "Imported" };
+      return { kind: "success", label: t("Imported") };
     case "failed":
-      return { kind: "danger", label: "Failed" };
+      return { kind: "danger", label: t("Failed") };
     case "queued":
-      return { kind: "muted", label: "Queued" };
+      return { kind: "muted", label: t("Queued") };
     case "downloading":
-      return { kind: "info", label: "Downloading" };
+      return { kind: "info", label: t("Downloading") };
     case "packaging":
-      return { kind: "info", label: "Packaging" };
+      return { kind: "info", label: t("Packaging") };
     case "importing":
-      return { kind: "info", label: "Importing" };
+      return { kind: "info", label: t("Importing") };
     default:
       return { kind: "info", label: humanize(status) };
   }
@@ -717,7 +719,7 @@ export function seriesCoverUrl(manga: Manga): string | null {
 }
 
 export function Spinner() {
-  return <div className="spinner" aria-label="Loading" />;
+  return <div className="spinner" aria-label={t("Loading")} />;
 }
 
 export function EmptyState({ icon, title, hint }: { icon: IconName; title: string; hint?: string }) {
@@ -813,7 +815,7 @@ export function Modal({
       <div ref={dialogRef} className={`modal ${wide ? "modal-wide" : ""} ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <div className="modal-header">
           <h2 id={titleId}>{title}</h2>
-          <button type="button" className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
+          <button type="button" className="btn btn-ghost btn-icon" onClick={onClose} aria-label={t("Close")}>
             <Icon name="close" />
           </button>
         </div>

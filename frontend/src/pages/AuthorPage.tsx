@@ -12,9 +12,10 @@ import {
   useApp,
 } from "../components";
 import type { AuthorPage as AuthorPageData, Manga, MangaSummary } from "../types";
-import { libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
+import { countNoun, libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
 import { workYears } from "../workYears";
 import { AddModal } from "./AddPage";
+import { locale, t, tn } from "../i18n";
 
 type WorkFilter = "all" | "in_library" | "available" | "incomplete";
 
@@ -33,8 +34,8 @@ function libraryView(work: AuthorPageData["works"][number]) {
     status: null,
   } as unknown as Manga;
   const counts = seriesCounts(shape);
-  const unit = library.effective_series_unit ?? counts.unit;
-  const noun = counts.total_count === 1 ? unit : `${unit}s`;
+  const unitKey = (library.effective_series_unit ?? counts.unit).replace(/s$/, "");
+  const noun = countNoun(unitKey === "volume" || unitKey === "issue" || unitKey === "book" ? unitKey : "chapter", counts.total_count);
   return {
     publication: publicationStatus(shape),
     availability: libraryStatus(shape),
@@ -62,10 +63,10 @@ function compareOptionalNumber(
 }
 
 function formatTimestamp(value: string | null) {
-  if (!value) return "Pending first refresh";
+  if (!value) return t("Pending first refresh");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale(), {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
@@ -191,7 +192,7 @@ export default function AuthorPage({ id }: { id: string }) {
     try {
       const refreshed = await api.refreshAuthor(id);
       setPage(refreshed);
-      notify("success", `Updated ${refreshed.author}: ${refreshed.work_count} works.`);
+      notify("success", tn(refreshed.work_count, "Updated {author}: {count} work.", "Updated {author}: {count} works.", { author: refreshed.author }));
     } catch (error) {
       notify("error", String(error));
     } finally {
@@ -209,7 +210,7 @@ export default function AuthorPage({ id }: { id: string }) {
   if (!page) {
     return (
       <div className="page">
-        <EmptyState icon="library" title="Author not found" />
+        <EmptyState icon="library" title={t("Author not found")} />
       </div>
     );
   }
@@ -245,16 +246,16 @@ export default function AuthorPage({ id }: { id: string }) {
 
       <div className="author-page-header">
         <div className="author-page-heading">
-          <a className="muted small" href="#/">Comics</a>
+          <a className="muted small" href="#/">{t("Comics")}</a>
           <h1>{page.author}</h1>
           <div className="muted small">
-            {page.work_count} works · {page.library_manga_count} in library · {workCounts.available} available to add
+            {t("{works} works · {inLibrary} in library · {available} available to add", { works: page.work_count, inLibrary: page.library_manga_count, available: workCounts.available })}
           </div>
-          {aliases.length ? <div className="muted small">Also credited as {aliases.join(" · ")}</div> : null}
-          <span className="muted small">Refreshed {formatTimestamp(page.last_refreshed_at)}</span>
+          {aliases.length ? <div className="muted small">{t("Also credited as")} {aliases.join(" · ")}</div> : null}
+          <span className="muted small">{t("Refreshed")} {formatTimestamp(page.last_refreshed_at)}</span>
         </div>
         <button type="button" className="btn" onClick={() => void refresh()} disabled={refreshing}>
-          <Icon name="refresh" /> {refreshing ? "Refreshing…" : "Refresh"}
+          <Icon name="refresh" /> {refreshing ? t("Refreshing…") : t("Refresh")}
         </button>
       </div>
 
@@ -265,60 +266,60 @@ export default function AuthorPage({ id }: { id: string }) {
       ) : null}
       {page.merged_from.length ? (
         <div className="banner banner-info small">
-          Merged duplicate MangaBaka credits: {page.merged_from.map((item) => item.name).join(" · ")}
+          {t("Merged duplicate MangaBaka credits:")} {page.merged_from.map((item) => item.name).join(" · ")}
         </div>
       ) : null}
 
       {page.works.length ? (
-        <div className="author-page-controls" aria-label="Filter and sort author works">
+        <div className="author-page-controls" aria-label={t("Filter and sort author works")}>
           <select
             className="input"
             value={workFilter}
-            aria-label="Filter author works"
+            aria-label={t("Filter author works")}
             onChange={(event) => setWorkFilter(event.target.value as WorkFilter)}
           >
-            <option value="all">Library: All ({page.work_count})</option>
+            <option value="all">{t("Library: All ({count})", { count: page.work_count })}</option>
             {workCounts.inLibrary ? (
               <>
-                <option value="in_library">Library: In library ({workCounts.inLibrary})</option>
-                <option value="incomplete">Library: Incomplete</option>
+                <option value="in_library">{t("Library: In library ({count})", { count: workCounts.inLibrary })}</option>
+                <option value="incomplete">{t("Library: Incomplete")}</option>
               </>
             ) : null}
             {workCounts.available ? (
-              <option value="available">Library: Available to add ({workCounts.available})</option>
+              <option value="available">{t("Library: Available to add ({count})", { count: workCounts.available })}</option>
             ) : null}
           </select>
           <select
             className="input"
             value={workSort}
-            aria-label="Sort author works"
+            aria-label={t("Sort author works")}
             onChange={(event) => {
               const nextSort = event.target.value as WorkSort;
               setWorkSort(nextSort);
               setSortDirection(nextSort === "rating" ? "desc" : "asc");
             }}
           >
-            <option value="title">Sort: Title</option>
-            <option value="year">Sort: Year</option>
-            <option value="rating">Sort: Rating</option>
+            <option value="title">{t("Sort: Title")}</option>
+            <option value="year">{t("Sort: Year")}</option>
+            <option value="rating">{t("Sort: Rating")}</option>
           </select>
           <button
             type="button"
             className="btn sort-direction"
             onClick={() => setSortDirection((current) => current === "asc" ? "desc" : "asc")}
-            aria-label={`Sort ${sortDirection === "asc" ? "descending" : "ascending"}`}
-            title={`Currently ${sortDirection === "asc" ? "ascending" : "descending"}; click to reverse`}
+            aria-label={sortDirection === "asc" ? t("Sort descending") : t("Sort ascending")}
+            title={sortDirection === "asc" ? t("Currently ascending; click to reverse") : t("Currently descending; click to reverse")}
           >
             <Icon name={sortDirection === "asc" ? "sortAscending" : "sortDescending"} />
-            <span>{sortDirection === "asc" ? "Ascending" : "Descending"}</span>
+            <span>{sortDirection === "asc" ? t("Ascending") : t("Descending")}</span>
           </button>
         </div>
       ) : null}
 
       {page.works.length === 0 ? (
-        <EmptyState icon="library" title="No MangaBaka works indexed" />
+        <EmptyState icon="library" title={t("No MangaBaka works indexed")} />
       ) : visibleWorks.length === 0 ? (
-        <EmptyState icon="library" title="No works match this filter" />
+        <EmptyState icon="library" title={t("No works match this filter")} />
       ) : (
         <div className="result-list author-work-list">
           {pagedWorks.map((work) => {
@@ -333,7 +334,7 @@ export default function AuthorPage({ id }: { id: string }) {
                   {work.work_type ? <StatusPill kind="muted">{work.work_type}</StatusPill> : null}
                   {work.status ? <StatusPill kind="muted">{humanize(work.status)}</StatusPill> : null}
                   {work.rating ? <StatusPill kind="info">{work.rating.toFixed(1)}</StatusPill> : null}
-                  {work.in_library ? <StatusPill kind="muted">In library</StatusPill> : null}
+                  {work.in_library ? <StatusPill kind="muted">{t("In library")}</StatusPill> : null}
                   {(() => {
                     const view = libraryView(work);
                     if (!view) return null;
@@ -354,41 +355,41 @@ export default function AuthorPage({ id }: { id: string }) {
                   if (!view) return null;
                   return (
                     <div className="muted small">
-                      In library: {view.counts}
+                      {t("In library:")} {view.counts}
                       {view.language ? ` · ${view.language}` : ""}
-                      {view.monitor ? ` · monitor ${view.monitor}` : ""}
+                      {view.monitor ? ` · ${t("monitor {mode}", { mode: view.monitor })}` : ""}
                     </div>
                   );
                 })()}
                 {work.native_title ? <div className="muted small">{work.native_title}</div> : null}
                 <div className="muted small">
                   {[
-                    work.volume_count ? `${work.volume_count} volumes` : null,
+                    work.volume_count ? tn(work.volume_count, "{count} volume", "{count} volumes") : null,
                     work.chapter_count
-                      ? `${work.chapter_count} chapters`
+                      ? tn(work.chapter_count, "{count} chapter", "{count} chapters")
                       : work.latest_release_chapter
-                        ? `${work.latest_release_chapter} chapters so far`
+                        ? t("{count} chapters so far", { count: work.latest_release_chapter })
                         : null,
                     work.genres?.length ? work.genres.slice(0, 4).join(" · ") : null,
                   ]
                     .filter(Boolean)
                     .join(" · ")}
                 </div>
-                <p className="result-description">{work.description || "No description available."}</p>
+                <p className="result-description">{work.description || t("No description available.")}</p>
               </div>
               <div className="result-actions author-work-actions">
                 {work.source_url ? (
                   <a className="btn" href={work.source_url} target="_blank" rel="noreferrer">
-                    MangaBaka <Icon name="external" size={13} />
+                    {t("MangaBaka")} <Icon name="external" size={13} />
                   </a>
                 ) : null}
                 {work.in_library ? (
                   <a className="btn" href={`#/series/${work.library_manga_id}`}>
-                    <Icon name="library" /> Open
+                    <Icon name="library" /> {t("Open")}
                   </a>
                 ) : (
                   <button type="button" className="btn btn-primary" onClick={() => setSelectedWork(work)}>
-                    <Icon name="add" /> Add
+                    <Icon name="add" /> {t("Add")}
                   </button>
                 )}
               </div>
@@ -403,8 +404,8 @@ export default function AuthorPage({ id }: { id: string }) {
           pageSize={WORK_PAGE_SIZE}
           total={visibleWorks.length}
           onPageChange={setWorkPage}
-          itemLabel="works"
-          ariaLabel="Author works pages"
+          itemLabel={t("works")}
+          ariaLabel={t("Author works pages")}
         />
       ) : null}
     </div>

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 export function LoadError({
   message,
   retryLabel,
@@ -13,7 +14,7 @@ export function LoadError({
 }) {
   return (
     <div className="banner banner-danger load-error" role="alert">
-      <span>{hasData ? "Showing the last loaded data. " : ""}{message}</span>
+      <span>{hasData ? t("Showing the last loaded data.") + " " : ""}{message}</span>
       <button type="button" className="btn" disabled={loading} onClick={retry}>
         {retryLabel}
       </button>

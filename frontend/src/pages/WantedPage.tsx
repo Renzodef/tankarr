@@ -26,6 +26,7 @@ import type {
   WantedEntry,
   WantedRecovery,
 } from "../types";
+import { msg, t, tn } from "../i18n";
 
 const PAGE_SIZE = 20;
 
@@ -70,9 +71,9 @@ type WantedSort = "series" | "item" | "published" | "state";
 type SortDirection = "asc" | "desc";
 
 function intervalLabel(seconds: number): string {
-  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
-  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
-  return `${Math.round(seconds / 60)}m`;
+  if (seconds % 86400 === 0) return t("{count}d", { count: seconds / 86400 });
+  if (seconds % 3600 === 0) return t("{count}h", { count: seconds / 3600 });
+  return t("{count}m", { count: Math.round(seconds / 60) });
 }
 
 function normalized(value: string): string {
@@ -83,7 +84,7 @@ function normalized(value: string): string {
 }
 
 function sourceLabel(chapter: WantedChapter): string {
-  if (chapter.provider === "expected") return "No indexed source";
+  if (chapter.provider === "expected") return t("No indexed source");
   return providerChainLabel(chapter.provider || "unknown", chapter.source_name);
 }
 
@@ -103,14 +104,14 @@ function wantedState(row: WantedRow): Exclude<WantedStateFilter, "all"> {
 }
 
 const RECOVERY_CHANNEL_LABELS: Record<string, string> = {
-  sources: "Sources",
-  indexer_chapter: "Indexers (chapter)",
-  indexer_book: "Indexers (book)",
+  sources: msg("Sources"),
+  indexer_chapter: msg("Indexers (chapter)"),
+  indexer_book: msg("Indexers (book)"),
 };
 
 function recoveryTooltip(recovery: WantedRecovery | undefined): string {
   if (!recovery || recovery.channels.length === 0) {
-    return "No recovery pass has run for this item yet.";
+    return t("No recovery pass has run for this item yet.");
   }
   return recovery.channels
     .map((channel) => {
@@ -336,7 +337,7 @@ export default function WantedPage() {
       const result = await api.searchWanted();
       notify(
         result.errors.length ? "info" : "success",
-        `Wanted recovery checked ${result.missing} missing chapters, discovered ${result.discovered} new direct releases and queued ${result.queued}.`,
+        t("Wanted recovery checked {missing} missing chapters, discovered {discovered} new direct releases and queued {queued}.", result),
       );
       await Promise.all([load(true), refreshJobs()]);
     } catch (caught) {
@@ -350,7 +351,7 @@ export default function WantedPage() {
     setBusy(true);
     try {
       const result = await api.searchMissing(id);
-      notify("success", `${title}: queued ${result.queued} chapters.`);
+      notify("success", t("{title}: queued {queued} chapters.", { title, queued: result.queued }));
       await Promise.all([load(true), refreshJobs()]);
     } catch (caught) {
       notify("error", String(caught));
@@ -384,13 +385,13 @@ export default function WantedPage() {
     try {
       if (chapter && !(chapter.provider ?? "").startsWith("expected")) {
         await api.setChapterMonitored(entry.manga.id, chapter.id, false);
-        notify("success", `${chapterLabel(chapter.volume, chapter.chapter)} is no longer monitored.`);
+        notify("success", t("{item} is no longer monitored.", { item: chapterLabel(chapter.volume, chapter.chapter) }));
       } else if (chapter?.volume && !chapter.chapter) {
         await api.setVolumeMonitoring(entry.manga.id, chapter.volume, "ignored");
-        notify("success", `Volume ${chapter.volume} of ${entry.manga.title} is now ignored.`);
+        notify("success", t("Volume {volume} of {title} is now ignored.", { volume: chapter.volume, title: entry.manga.title }));
       } else {
         await api.updateManga(entry.manga.id, { monitor_mode: "none" });
-        notify("success", `${entry.manga.title} is no longer monitored.`);
+        notify("success", t("{item} is no longer monitored.", { item: entry.manga.title }));
       }
       await load(true);
     } catch (caught) {
@@ -540,26 +541,26 @@ export default function WantedPage() {
     <div className="page wanted-page">
       <div className="toolbar wanted-toolbar">
         <div className="page-heading">
-          <h1 className="page-title">Wanted</h1>
+          <h1 className="page-title">{t("Wanted")}</h1>
           <span className="muted small">
             {monitor === null
-              ? monitorError ? "Recovery status unavailable" : "Loading recovery status…"
+              ? monitorError ? t("Recovery status unavailable") : t("Loading recovery status…")
               : monitor.wanted_search.enabled
-              ? `Automatic recovery every ${intervalLabel(monitor.wanted_search.interval_seconds)}${
+              ? t("Automatic recovery every {interval}", { interval: intervalLabel(monitor.wanted_search.interval_seconds) }) + (
                   monitor.wanted_search.next_search_at
-                    ? ` · next ${formatDate(monitor.wanted_search.next_search_at)}`
+                    ? ` · ${t("next {date}", { date: formatDate(monitor.wanted_search.next_search_at) })}`
                     : ""
-                }`
-              : "Automatic recovery disabled"}
+                )
+              : t("Automatic recovery disabled")}
           </span>
-          {monitor?.wanted_search.running ? <p role="status">Recovery in progress{monitor.wanted_search.progress ? ` · ${monitor.wanted_search.progress.processed}/${monitor.wanted_search.progress.total} series checked` : ""}</p> : null}
-          {monitor?.wanted_search.last_error ? <p className="banner banner-warn">Last recovery error: {monitor.wanted_search.last_error}</p> : null}
+          {monitor?.wanted_search.running ? <p role="status">{t("Recovery in progress")}{monitor.wanted_search.progress ? ` · ${t("{done}/{total} series checked", { done: monitor.wanted_search.progress.processed, total: monitor.wanted_search.progress.total })}` : ""}</p> : null}
+          {monitor?.wanted_search.last_error ? <p className="banner banner-warn">{t("Last recovery error:")} {monitor.wanted_search.last_error}</p> : null}
         </div>
         <div className="toolbar-group wanted-summary">
           <strong>{totalMissing}</strong>
-          <span className="muted">missing from library</span>
-          <button type="button" className="btn" aria-label="Refresh wanted" onClick={() => { void load(true); void loadMonitor(); }}>
-            <Icon name="refresh" /> Refresh view
+          <span className="muted">{t("missing from library")}</span>
+          <button type="button" className="btn" aria-label={t("Refresh wanted")} onClick={() => { void load(true); void loadMonitor(); }}>
+            <Icon name="refresh" /> {t("Refresh view")}
           </button>
           <button
             type="button"
@@ -567,86 +568,86 @@ export default function WantedPage() {
             disabled={busy || searchableMissing === 0}
             onClick={() => void searchAll()}
           >
-            <Icon name="refresh" /> Recover Wanted Now
+            <Icon name="refresh" /> {t("Recover Wanted Now")}
           </button>
         </div>
       </div>
 
       {loadError ? (
-        <LoadError message={loadError} retryLabel="Retry wanted" retry={() => void load(true)} loading={loading} hasData={entries !== null} />
+        <LoadError message={loadError} retryLabel={t("Retry wanted")} retry={() => void load(true)} loading={loading} hasData={entries !== null} />
       ) : null}
       {monitorError ? (
-        <LoadError message={`Recovery status unavailable: ${monitorError}`} retryLabel="Retry recovery status" retry={() => void loadMonitor()} loading={monitorLoading} />
+        <LoadError message={t("Recovery status unavailable: {error}", { error: monitorError })} retryLabel={t("Retry recovery status")} retry={() => void loadMonitor()} loading={monitorLoading} />
       ) : null}
-      {entries !== null && loading ? <p className="muted small" role="status">Updating wanted…</p> : null}
+      {entries !== null && loading ? <p className="muted small" role="status">{t("Updating wanted…")}</p> : null}
 
       {entries !== null && rows.length ? (
-        <div className="list-controls" aria-label="Filter and sort wanted items">
+        <div className="list-controls" aria-label={t("Filter and sort wanted items")}>
           <div className="list-control-fields">
             <SeriesFilter
               value={filter}
               series={seriesFilterOptions}
               onChange={setFilter}
-              placeholder="Filter series or pattern…"
-              ariaLabel="Filter wanted items by series or pattern"
+              placeholder={t("Filter series or pattern…")}
+              ariaLabel={t("Filter wanted items by series or pattern")}
             />
             <select
               className="input"
               value={stateFilter}
-              aria-label="Filter wanted items by state"
+              aria-label={t("Filter wanted items by state")}
               onChange={(event) => setStateFilter(event.target.value as WantedStateFilter)}
             >
-              <option value="all">State: All ({rows.length})</option>
-              {stateCounts.missing ? <option value="missing">State: Missing ({stateCounts.missing})</option> : null}
-              {stateCounts.queued ? <option value="queued">State: Queued ({stateCounts.queued})</option> : null}
-              {stateCounts.blocked ? <option value="blocked">State: Blocked ({stateCounts.blocked})</option> : null}
+              <option value="all">{t("State: All ({count})", { count: rows.length })}</option>
+              {stateCounts.missing ? <option value="missing">{t("State: Missing ({count})", { count: stateCounts.missing })}</option> : null}
+              {stateCounts.queued ? <option value="queued">{t("State: Queued ({count})", { count: stateCounts.queued })}</option> : null}
+              {stateCounts.blocked ? <option value="blocked">{t("State: Blocked ({count})", { count: stateCounts.blocked })}</option> : null}
               {stateCounts.exhausted ? (
-                <option value="exhausted">State: Not obtainable ({stateCounts.exhausted})</option>
+                <option value="exhausted">{t("State: Not obtainable ({count})", { count: stateCounts.exhausted })}</option>
               ) : null}
               {stateCounts.unavailable ? (
-                <option value="unavailable">State: Unavailable ({stateCounts.unavailable})</option>
+                <option value="unavailable">{t("State: Unavailable ({count})", { count: stateCounts.unavailable })}</option>
               ) : null}
             </select>
             <select
               className="input"
               value={unitFilter}
-              aria-label="Filter wanted items by type"
+              aria-label={t("Filter wanted items by type")}
               onChange={(event) => setUnitFilter(event.target.value as WantedUnitFilter)}
             >
-              <option value="all">Item: All</option>
-              {unitCounts.chapter ? <option value="chapter">Item: Chapters ({unitCounts.chapter})</option> : null}
-              {unitCounts.volume ? <option value="volume">Item: Volumes ({unitCounts.volume})</option> : null}
+              <option value="all">{t("Item: All")}</option>
+              {unitCounts.chapter ? <option value="chapter">{t("Item: Chapters ({count})", { count: unitCounts.chapter })}</option> : null}
+              {unitCounts.volume ? <option value="volume">{t("Item: Volumes ({count})", { count: unitCounts.volume })}</option> : null}
             </select>
             <select
               className="input"
               value={sort}
-              aria-label="Sort wanted items"
+              aria-label={t("Sort wanted items")}
               onChange={(event) => {
                 const nextSort = event.target.value as WantedSort;
                 setSort(nextSort);
                 setSortDirection(nextSort === "published" ? "desc" : "asc");
               }}
             >
-              <option value="series">Sort: Series and item</option>
-              <option value="item">Sort: Item number</option>
-              <option value="published">Sort: Published</option>
-              <option value="state">Sort: State</option>
+              <option value="series">{t("Sort: Series and item")}</option>
+              <option value="item">{t("Sort: Item number")}</option>
+              <option value="published">{t("Sort: Published")}</option>
+              <option value="state">{t("Sort: State")}</option>
             </select>
             <button
               type="button"
               className="btn sort-direction"
               onClick={() => setSortDirection((current) => current === "asc" ? "desc" : "asc")}
-              aria-label={`Sort ${sortDirection === "asc" ? "descending" : "ascending"}`}
-              title={`Currently ${sortDirection === "asc" ? "ascending" : "descending"}; click to reverse`}
+              aria-label={sortDirection === "asc" ? t("Sort descending") : t("Sort ascending")}
+              title={sortDirection === "asc" ? t("Currently ascending; click to reverse") : t("Currently descending; click to reverse")}
             >
               <Icon name={sortDirection === "asc" ? "sortAscending" : "sortDescending"} />
-              <span>{sortDirection === "asc" ? "Ascending" : "Descending"}</span>
+              <span>{sortDirection === "asc" ? t("Ascending") : t("Descending")}</span>
             </button>
           </div>
           <span className="muted small list-result-count">
             {filteredRows.length === rows.length
-              ? `${rows.length} actionable rows`
-              : `${filteredRows.length} of ${rows.length} rows`}
+              ? tn(rows.length, "{count} actionable row", "{count} actionable rows")
+              : t("{shown} of {total} rows", { shown: filteredRows.length, total: rows.length })}
           </span>
         </div>
       ) : null}
@@ -656,23 +657,23 @@ export default function WantedPage() {
       ) : entries.length === 0 ? (
         <EmptyState
           icon="check"
-          title="Nothing is missing"
-          hint="Every monitored backlog release is downloaded."
+          title={t("Nothing is missing")}
+          hint={t("Every monitored backlog release is downloaded.")}
         />
       ) : filteredRows.length === 0 ? (
-        <EmptyState icon="search" title="No wanted items match this filter" />
+        <EmptyState icon="search" title={t("No wanted items match this filter")} />
       ) : (
         <>
           <div className="data-table-frame">
             <table className="table responsive-list-table wanted-table">
               <thead>
                 <tr>
-                  <th>Series</th>
-                  <th className="col-wanted-item">Item</th>
-                  <th>Release</th>
-                  <th className="col-date">Published</th>
-                  <th className="col-status">Status</th>
-                  <th className="col-actions" aria-label="Actions" />
+                  <th>{t("Series")}</th>
+                  <th className="col-wanted-item">{t("Item")}</th>
+                  <th>{t("Release")}</th>
+                  <th className="col-date">{t("Published")}</th>
+                  <th className="col-status">{t("Status")}</th>
+                  <th className="col-actions" aria-label={t("Actions")} />
                 </tr>
               </thead>
               <tbody>
@@ -683,91 +684,91 @@ export default function WantedPage() {
                   const exhausted = recovery?.verdict === "exhausted";
                   return (
                     <tr key={key}>
-                      <td className="wanted-series" data-label="Series">
+                      <td className="wanted-series" data-label={t("Series")}>
                         <a className="table-link" href={seriesPath(entry.manga.id)}>
                           {entry.manga.title}
                         </a>
                       </td>
-                      <td className="col-wanted-item" data-label="Item">
+                      <td className="col-wanted-item" data-label={t("Item")}>
                         {chapter
                           ? chapterLabel(chapter.volume, chapter.chapter)
                           : noSources
-                            ? "Whole series"
-                            : `${unavailable} unindexed ${unavailable === 1 ? "item" : "items"}`}
+                            ? t("Whole series")
+                            : tn(unavailable, "{count} unindexed item", "{count} unindexed items")}
                       </td>
-                      <td className="wanted-release" data-label="Release">
+                      <td className="wanted-release" data-label={t("Release")}>
                         <span className="wanted-release-title">
                           {chapter?.title ||
                             (chapter
-                              ? "Untitled release"
+                              ? t("Untitled release")
                               : noSources
-                                ? "No installed source lists this work"
-                                : "Not offered by any configured source yet")}
+                                ? t("No installed source lists this work")
+                                : t("Not offered by any configured source yet"))}
                         </span>
                         <span className="muted small">
                           {chapter
                             ? sourceLabel(chapter)
                             : noSources
-                              ? "No catalogue count either — the indexers are asked for the whole work"
-                              : "Catalogue count only"}
+                              ? t("No catalogue count either — the indexers are asked for the whole work")
+                              : t("Catalogue count only")}
                         </span>
                       </td>
-                      <td className="col-date muted" data-label="Published">
+                      <td className="col-date muted" data-label={t("Published")}>
                         {chapter?.publish_at ? formatDate(chapter.publish_at) : "—"}
                       </td>
-                      <td className="col-status" data-label="Status">
+                      <td className="col-status" data-label={t("Status")}>
                         {pill ? (
                           <StatusPill kind={pill.kind}>{pill.label}</StatusPill>
                         ) : exhausted ? (
                           <StatusPill kind="muted">
-                            <span title={recoveryTooltip(recovery)}>Not obtainable</span>
+                            <span title={recoveryTooltip(recovery)}>{t("Not obtainable")}</span>
                           </StatusPill>
                         ) : chapter?.blocked ? (
                           <StatusPill kind="danger">
                             <span
                               title={
                                 chapter.block_reason ??
-                                "Every release for this item failed; retry it from History to unblock."
+                                t("Every release for this item failed; retry it from History to unblock.")
                               }
                             >
-                              Blocked
+                              {t("Blocked")}
                             </span>
                           </StatusPill>
                         ) : chapter?.recovery?.verdict === "needs_review" ? (
                           <StatusPill kind="warn">
                             <span title={recoveryTooltip(chapter.recovery)}>
-                              Needs review
+                              {t("Needs review")}
                             </span>
                           </StatusPill>
                         ) : chapter ? (
                           <StatusPill kind="warn">
-                            <span title={recoveryTooltip(chapter.recovery)}>Missing</span>
+                            <span title={recoveryTooltip(chapter.recovery)}>{t("Missing")}</span>
                           </StatusPill>
                         ) : noSources ? (
                           recovery?.verdict === "exhausted" ? (
                             <StatusPill kind="muted">
-                              <span title={recoveryTooltip(recovery)}>Not obtainable</span>
+                              <span title={recoveryTooltip(recovery)}>{t("Not obtainable")}</span>
                             </StatusPill>
                           ) : recovery?.verdict === "needs_review" ? (
                             <StatusPill kind="warn">
-                              <span title={recoveryTooltip(recovery)}>Needs review</span>
+                              <span title={recoveryTooltip(recovery)}>{t("Needs review")}</span>
                             </StatusPill>
                           ) : (
                             <StatusPill kind="warn">
-                              <span title={recoveryTooltip(recovery)}>No source</span>
+                              <span title={recoveryTooltip(recovery)}>{t("No source")}</span>
                             </StatusPill>
                           )
                         ) : (
-                          <StatusPill kind="muted">Unavailable</StatusPill>
+                          <StatusPill kind="muted">{t("Unavailable")}</StatusPill>
                         )}
                         {recovery && recovery.channels.length > 0 ? (
                           <span className="muted small wanted-recovery-summary">
                             {recovery.summary}
                           </span>
                         ) : null}
-                        <button type="button" className="btn btn-small" aria-label={`Why still wanted: ${entry.manga.title} ${chapter ? chapterLabel(chapter.volume, chapter.chapter) : "whole series"}`} onClick={() => setExplanationKey(key)}>Why still wanted?</button>
+                        <button type="button" className="btn btn-small" aria-label={t("Why still wanted: {title} {item}", { title: entry.manga.title, item: chapter ? chapterLabel(chapter.volume, chapter.chapter) : t("whole series") })} onClick={() => setExplanationKey(key)}>{t("Why still wanted?")}</button>
                       </td>
-                      <td className="col-actions" data-label="Actions">
+                      <td className="col-actions" data-label={t("Actions")}>
                         <div className="chapter-actions">
                           {exhausted ? (
                             <button
@@ -776,14 +777,14 @@ export default function WantedPage() {
                               disabled={busy}
                               title={
                                 chapter && !chapter.provider?.startsWith("expected")
-                                  ? "Ignore: stop monitoring this release (manual; never automatic)"
+                                  ? t("Ignore: stop monitoring this release (manual; never automatic)")
                                   : chapter?.volume && !chapter.chapter
-                                    ? `Ignore: stop monitoring volume ${chapter.volume} (manual; never automatic)`
-                                    : "Stop monitoring this series (manual; never automatic). Delete it from the series page if you want it gone."
+                                    ? t("Ignore: stop monitoring volume {volume} (manual; never automatic)", { volume: chapter.volume })
+                                    : t("Stop monitoring this series (manual; never automatic). Delete it from the series page if you want it gone.")
                               }
-                              aria-label={`Ignore ${
-                                chapter ? chapterLabel(chapter.volume, chapter.chapter) : entry.manga.title
-                              }`}
+                              aria-label={t("Ignore {item}", {
+                                item: chapter ? chapterLabel(chapter.volume, chapter.chapter) : entry.manga.title,
+                              })}
                               onClick={() => void ignoreRow(row)}
                             >
                               <Icon name="close" size={16} />
@@ -793,10 +794,10 @@ export default function WantedPage() {
                             type="button"
                             className="btn btn-ghost btn-icon"
                             disabled={busy || Boolean(chapter?.queue_status)}
-                            title="Automatic Search: queue the best verified release"
-                            aria-label={`Automatic Search for ${
-                              chapter ? chapterLabel(chapter.volume, chapter.chapter) : entry.manga.title
-                            }`}
+                            title={t("Automatic Search: queue the best verified release")}
+                            aria-label={t("Automatic Search for {item}", {
+                              item: chapter ? chapterLabel(chapter.volume, chapter.chapter) : entry.manga.title,
+                            })}
                             onClick={() =>
                               chapter
                                 ? void searchChapter(entry.manga, chapter)
@@ -810,11 +811,10 @@ export default function WantedPage() {
                               type="button"
                               className="btn btn-ghost btn-icon"
                               disabled={busy}
-                              title="Interactive Search: inspect every result"
-                              aria-label={`Interactive Search for ${chapterLabel(
-                                chapter.volume,
-                                chapter.chapter,
-                              )}`}
+                              title={t("Interactive Search: inspect every result")}
+                              aria-label={t("Interactive Search for {item}", {
+                                item: chapterLabel(chapter.volume, chapter.chapter),
+                              })}
                               onClick={() =>
                                 setInteractiveTarget({
                                   manga: entry.manga,
@@ -842,8 +842,8 @@ export default function WantedPage() {
             pageSize={PAGE_SIZE}
             total={filteredRows.length}
             onPageChange={setPage}
-            itemLabel="wanted items"
-            ariaLabel="Wanted pages"
+            itemLabel={t("wanted items")}
+            ariaLabel={t("Wanted pages")}
           />
         </>
       )}
@@ -855,7 +855,7 @@ export default function WantedPage() {
         return <WantedExplanation
           mangaId={row.entry.manga.id}
           title={row.entry.manga.title}
-          item={chapter ? chapterLabel(chapter.volume, chapter.chapter) : "Whole series"}
+          item={chapter ? chapterLabel(chapter.volume, chapter.chapter) : t("Whole series")}
           recovery={rowRecovery(row)}
           blockReason={chapter?.block_reason}
           busy={busy || Boolean(chapter?.queue_status)}

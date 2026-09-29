@@ -4,6 +4,7 @@ import { api } from "./api";
 import { Logo } from "./components";
 import LoginPage from "./pages/LoginPage";
 import type { AuthStatus } from "./types";
+import { t } from "./i18n";
 
 export default function AuthGate() {
   const [status, setStatus] = useState<AuthStatus | null>(null);
@@ -44,11 +45,11 @@ export default function AuthGate() {
             <h1>tankarr</h1>
           </div>
           <p className={error ? "login-error" : "muted"}>
-            {error ?? "Loading…"}
+            {error ?? t("Loading…")}
           </p>
           {error ? (
             <button type="button" className="btn btn-primary" onClick={() => void refresh()}>
-              Retry
+              {t("Retry")}
             </button>
           ) : null}
         </section>
@@ -69,10 +70,10 @@ export default function AuthGate() {
             <h1>tankarr</h1>
           </div>
           <p className="muted">
-            Sign in through your reverse proxy. Tankarr only accepts requests that arrive from its trusted proxies, and this one did not.
+            {t("Sign in through your reverse proxy. Tankarr only accepts requests that arrive from its trusted proxies, and this one did not.")}
           </p>
           <button type="button" className="btn btn-primary" onClick={() => void refresh()}>
-            Retry
+            {t("Retry")}
           </button>
         </section>
       </main>

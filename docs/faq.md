@@ -44,6 +44,15 @@ so different series can follow different languages. Indexer releases are
 checked with OCR before import, because a release name is only a claim about
 its language.
 
+### Can I use Tankarr in my language?
+
+The interface is available in English and Italian. Each browser chooses for
+itself: Tankarr follows the browser language, and Settings → General →
+Interface language overrides it for that browser only. Messages produced by
+the server (log lines, job errors, notifications) and file names stay in
+English. Translations are plain JSON files; [Development](development.md#translations)
+explains how to add a language.
+
 ### Which extension repository should I use?
 
 Tankarr does not ship, host or recommend one. The managed Suwayomi server

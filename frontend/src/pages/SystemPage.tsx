@@ -6,6 +6,7 @@ import SystemIntegrationHealth from "../components/SystemIntegrationHealth";
 import type { MaintenanceStatus } from "../operationTypes";
 import { Icon, Spinner, StatusPill, formatBytes, formatDate, useApp, Cover, seriesPath } from "../components";
 import type { ProviderProbe, SystemStatus, SystemLogs, SystemTask, MatchReview, LibraryOrphans } from "../types";
+import { t, tn } from "../i18n";
 
 export default function SystemPage() {
   const { health, notify, refreshHealth } = useApp();
@@ -51,8 +52,8 @@ export default function SystemPage() {
     setTaskBusy(id);
     try {
       const outcome = await api.runSystemTask(id);
-      if (outcome.ok) notify("success", `${outcome.task.name} finished.`);
-      else notify("error", `${outcome.task.name} failed: ${outcome.error ?? "unknown error"}`);
+      if (outcome.ok) notify("success", t("{task} finished.", { task: outcome.task.name }));
+      else notify("error", t("{task} failed: {error}", { task: outcome.task.name, error: outcome.error ?? t("unknown error") }));
       await loadTasks();
     } catch (caught) {
       notify("error", String(caught));
@@ -90,7 +91,7 @@ export default function SystemPage() {
     setOrphanBusy(folders?.[0] ?? "*");
     try {
       const result = await api.deleteLibraryOrphans(folders);
-      notify("success", `Deleted ${result.deleted} untracked file${result.deleted === 1 ? "" : "s"}.`);
+      notify("success", tn(result.deleted, "Deleted {count} untracked file.", "Deleted {count} untracked files."));
       await loadOrphans();
       await load();
     } catch (caught) {
@@ -144,23 +145,23 @@ export default function SystemPage() {
   return (
     <div className="page">
       <div className="toolbar">
-        <h1 className="page-title">System</h1>
+        <h1 className="page-title">{t("System")}</h1>
         <div className="toolbar-group">
           <button
             type="button"
             className="btn"
             disabled={busy}
-            onClick={() => void act(() => api.runMonitor(), "Monitor cycle completed.")}
+            onClick={() => void act(() => api.runMonitor(), t("Monitor cycle completed."))}
           >
-            <Icon name="refresh" /> Run Monitor
+            <Icon name="refresh" /> {t("Run Monitor")}
           </button>
           <button
             type="button"
             className="btn"
             disabled={busy}
-            onClick={() => void act(() => api.organizeLibrary(), "Library organization completed.")}
+            onClick={() => void act(() => api.organizeLibrary(), t("Library organization completed."))}
           >
-            <Icon name="library" /> Organize Library
+            <Icon name="library" /> {t("Organize Library")}
           </button>
           <button
             type="button"
@@ -169,11 +170,11 @@ export default function SystemPage() {
             onClick={() =>
               void act(
                 () => api.refreshAllMetadata(true),
-                "Metadata enrichment started in the background.",
+                t("Metadata enrichment started in the background."),
               )
             }
           >
-            <Icon name="refresh" /> Enrich Metadata
+            <Icon name="refresh" /> {t("Enrich Metadata")}
           </button>
         </div>
       </div>
@@ -181,12 +182,12 @@ export default function SystemPage() {
       <div className="system-grid">
         {status.alerts?.length || maintenanceNeedsAttention || maintenanceError ? (
           <section className="panel system-alerts">
-            <h2>Needs attention</h2>
+            <h2>{t("Needs attention")}</h2>
             <ul className="alert-list">
               {status.alerts?.map((alert) => (
                 <li key={alert.key} className={`alert-row alert-${alert.level}`}>
                   <StatusPill kind={alert.level === "danger" ? "danger" : alert.level === "warn" ? "warn" : "info"}>
-                    {alert.level === "danger" ? "Error" : alert.level === "warn" ? "Warning" : "Note"}
+                    {alert.level === "danger" ? t("Error") : alert.level === "warn" ? t("Warning") : t("Note")}
                   </StatusPill>
                   <div>
                     <strong>{alert.href ? <a href={alert.href}>{alert.title}</a> : alert.title}</strong>
@@ -195,7 +196,7 @@ export default function SystemPage() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-icon alert-dismiss"
-                    title="Acknowledge: it comes back if this changes"
+                    title={t("Acknowledge: it comes back if this changes")}
                     onClick={() => {
                       void api
                         .dismissAlert(alert.key, alert.signature ?? alert.title)
@@ -207,23 +208,20 @@ export default function SystemPage() {
                 </li>
               ))}
             </ul>
-            {maintenanceError ? <p className="banner banner-danger" role="alert">Scheduled maintenance status unavailable: {maintenanceError}</p> : null}
+            {maintenanceError ? <p className="banner banner-danger" role="alert">{t("Scheduled maintenance status unavailable: {error}", { error: maintenanceError })}</p> : null}
             {maintenance ? <MaintenanceNotice status={maintenance} /> : null}
           </section>
         ) : null}
         <section className="panel system-alerts">
-          <h2>Health</h2>
-          {!status.alerts?.length && !maintenanceNeedsAttention && !maintenanceError ? <p className="muted small"><StatusPill kind="success">All clear</StatusPill> Downloads, sources, storage and the Suwayomi runtime report no problems.</p> : <p className="muted small">Review the items in Needs attention.</p>}
-          <a href="#/setup" className="btn">Re-run setup checks</a>
+          <h2>{t("Health")}</h2>
+          {!status.alerts?.length && !maintenanceNeedsAttention && !maintenanceError ? <p className="muted small"><StatusPill kind="success">{t("All clear")}</StatusPill> {t("Downloads, sources, storage and the Suwayomi runtime report no problems.")}</p> : <p className="muted small">{t("Review the items in Needs attention.")}</p>}
+          <a href="#/setup" className="btn">{t("Re-run setup checks")}</a>
         </section>
         {orphans && orphans.count > 0 ? (
           <section className="panel">
-            <h2>Untracked library files</h2>
+            <h2>{t("Untracked library files")}</h2>
             <p className="muted small">
-              {orphans.count} file{orphans.count === 1 ? "" : "s"} on disk that no series in Tankarr
-              claims. The reader still serves them, so Tankarr and the reader disagree until they are
-              removed. They are usually left by a series deleted without its files. Nothing is deleted
-              automatically.
+              {tn(orphans.count, "{count} file on disk that no series in Tankarr claims. The reader still serves it, so Tankarr and the reader disagree until it is removed. It is usually left by a series deleted without its files. Nothing is deleted automatically.", "{count} files on disk that no series in Tankarr claims. The reader still serves them, so Tankarr and the reader disagree until they are removed. They are usually left by a series deleted without its files. Nothing is deleted automatically.")}
             </p>
             <ul className="alert-list">
               {orphans.folders.map((folder) => (
@@ -231,7 +229,7 @@ export default function SystemPage() {
                   <div>
                     <strong>{folder.folder}</strong>
                     <div className="muted small">
-                      {folder.files} file{folder.files === 1 ? "" : "s"} · {formatBytes(folder.bytes)} ·{" "}
+                      {tn(folder.files, "{count} file", "{count} files")} · {formatBytes(folder.bytes)} ·{" "}
                       {folder.sample.join(", ")}
                       {folder.files > folder.sample.length ? " …" : ""}
                     </div>
@@ -242,7 +240,7 @@ export default function SystemPage() {
                     disabled={orphanBusy !== null}
                     onClick={() => void removeOrphans([folder.folder])}
                   >
-                    <Icon name="trash" /> Delete {folder.files}
+                    <Icon name="trash" /> {t("Delete")} {folder.files}
                   </button>
                 </li>
               ))}
@@ -254,15 +252,15 @@ export default function SystemPage() {
                 disabled={orphanBusy !== null}
                 onClick={() => void removeOrphans()}
               >
-                <Icon name="trash" /> Delete all {orphans.count} untracked files
+                <Icon name="trash" /> {t("Delete all {count} untracked files", { count: orphans.count })}
               </button>
             ) : null}
           </section>
         ) : null}
         {reviews.length ? (
           <section className="panel">
-            <h2>To confirm</h2>
-            <p className="muted small">Matches that looked right but did not pass the automatic rules. Accept maps the source (or grabs the release); reject hides it for good.</p>
+            <h2>{t("To confirm")}</h2>
+            <p className="muted small">{t("Matches that looked right but did not pass the automatic rules. Accept maps the source (or grabs the release); reject hides it for good.")}</p>
             <ul className="alert-list">
               {reviews.map((review) => (
                 <li key={review.id} className="alert-row">
@@ -283,13 +281,13 @@ export default function SystemPage() {
                       // size, seeders and volumes are what tell them apart.
                       <div className="muted small">
                         {[
-                          review.payload.volume ? `Volumes ${review.payload.volume}` : null,
-                          review.payload.chapter ? `Chapter ${review.payload.chapter}` : null,
+                          review.payload.volume ? t("Volumes {volume}", { volume: review.payload.volume }) : null,
+                          review.payload.chapter ? t("Chapter {number}", { number: review.payload.chapter }) : null,
                           review.payload.size,
                           review.payload.protocol === "usenet"
                             ? "Usenet"
                             : typeof review.payload.seeders === "number"
-                              ? `${review.payload.seeders} seeder${review.payload.seeders === 1 ? "" : "s"}`
+                              ? tn(review.payload.seeders, "{count} seeder", "{count} seeders")
                               : null,
                         ]
                           .filter(Boolean)
@@ -306,14 +304,14 @@ export default function SystemPage() {
                         rel="noreferrer"
                         title={review.source_url}
                       >
-                        <Icon name="external" size={14} /> Review
+                        <Icon name="external" size={14} /> {t("Review")}
                       </a>
                     ) : null}
                     <button type="button" className="btn btn-small btn-primary" disabled={reviewBusy === review.id} onClick={() => void decide(review.id, true)}>
-                      Accept
+                      {t("Accept")}
                     </button>
                     <button type="button" className="btn btn-small btn-ghost" disabled={reviewBusy === review.id} onClick={() => void decide(review.id, false)}>
-                      Reject
+                      {t("Reject")}
                     </button>
                   </div>
                 </li>
@@ -322,9 +320,9 @@ export default function SystemPage() {
           </section>
         ) : null}
         <section className="panel">
-          <h2>About</h2>
+          <h2>{t("About")}</h2>
           <dl className="kv">
-            <dt>Version</dt>
+            <dt>{t("Version")}</dt>
             <dd>
               {status.version}
               {status.update?.update_available && status.update.latest ? (
@@ -332,23 +330,23 @@ export default function SystemPage() {
                   {" · "}
                   {status.update.url ? (
                     <a href={status.update.url} target="_blank" rel="noreferrer">
-                      {status.update.latest} available
+                      {t("{version} available", { version: status.update.latest })}
                     </a>
                   ) : (
-                    <span>{status.update.latest} available</span>
+                    <span>{t("{version} available", { version: status.update.latest })}</span>
                   )}
                 </>
               ) : status.update?.checked_at && !status.update.error ? (
-                <span className="muted small"> · up to date</span>
+                <span className="muted small"> · {t("up to date")}</span>
               ) : null}
             </dd>
-            <dt>Python</dt>
+            <dt>{t("Python")}</dt>
             <dd>{status.python}</dd>
-            <dt>Platform</dt>
+            <dt>{t("Platform")}</dt>
             <dd>{status.platform}</dd>
-            <dt>Started</dt>
+            <dt>{t("Started")}</dt>
             <dd>{formatDate(status.started_at)}</dd>
-            <dt>Database</dt>
+            <dt>{t("Database")}</dt>
             <dd>
               {status.database_path} ({formatBytes(status.database_size)})
             </dd>
@@ -356,42 +354,42 @@ export default function SystemPage() {
           <button type="button" className="btn" disabled={diagnosticsBusy} onClick={() => {
             setDiagnosticsBusy(true);
             void downloadReport("/api/system/diagnostics/export", "tankarr-diagnostics.json").catch((caught: unknown) => notify("error", String(caught))).finally(() => setDiagnosticsBusy(false));
-          }}>Download diagnostics</button>
+          }}>{t("Download diagnostics")}</button>
         </section>
 
         <section className="panel">
-          <h2>Scheduled tasks</h2>
-          <p className="muted small">What runs on its own, when it last ran and when it is due next. Run now starts one pass without waiting; a task that is already running is left alone.</p>
+          <h2>{t("Scheduled tasks")}</h2>
+          <p className="muted small">{t("What runs on its own, when it last ran and when it is due next. Run now starts one pass without waiting; a task that is already running is left alone.")}</p>
           <div className="data-table-frame">
             <table className="table responsive-list-table">
               <thead>
                 <tr>
-                  <th>Task</th>
-                  <th>Schedule</th>
-                  <th>Last run</th>
-                  <th>Next run</th>
-                  <th aria-label="Actions" />
+                  <th>{t("Task")}</th>
+                  <th>{t("Schedule")}</th>
+                  <th>{t("Last run")}</th>
+                  <th>{t("Next run")}</th>
+                  <th aria-label={t("Actions")} />
                 </tr>
               </thead>
               <tbody>
                 {(tasks ?? []).map((task) => (
                   <tr key={task.id}>
-                    <td data-label="Task">
+                    <td data-label={t("Task")}>
                       <strong>{task.name}</strong>
                       <div className="muted small">{task.description}</div>
                     </td>
-                    <td data-label="Schedule">{task.enabled ? task.schedule : "Disabled"}</td>
-                    <td data-label="Last run">
-                      {task.last_run_at ? formatDate(task.last_run_at) : "Never"}
+                    <td data-label={t("Schedule")}>{task.enabled ? task.schedule : t("Disabled")}</td>
+                    <td data-label={t("Last run")}>
+                      {task.last_run_at ? formatDate(task.last_run_at) : t("Never")}
                       {task.last_error ? <div className="warn-text small">{task.last_error}</div> : null}
                     </td>
-                    <td data-label="Next run">
-                      {task.running ? <StatusPill kind="muted">Running…</StatusPill> : task.next_run_at ? formatDate(task.next_run_at) : "—"}
+                    <td data-label={t("Next run")}>
+                      {task.running ? <StatusPill kind="muted">{t("Running…")}</StatusPill> : task.next_run_at ? formatDate(task.next_run_at) : "—"}
                     </td>
                     <td data-label="">
                       {task.can_run ? (
                         <button type="button" className="btn btn-small" disabled={task.running || taskBusy === task.id} onClick={() => void runTask(task.id)}>
-                          <Icon name="retry" size={14} /> Run now
+                          <Icon name="retry" size={14} /> {t("Run now")}
                         </button>
                       ) : null}
                     </td>
@@ -403,28 +401,28 @@ export default function SystemPage() {
         </section>
 
         <section className="panel">
-          <h2>Logs</h2>
+          <h2>{t("Logs")}</h2>
           <p className="muted small">
-            Level <strong>{logs?.level ?? "…"}</strong>, changed under Settings → General (advanced).
-            {logs?.directory ? <> The file lives in <code>{logs.directory}</code> and rotates at 5 MB; <code>docker logs</code> shows the same lines.</> : null}
+            {t("Level {level}, changed under Settings → General (advanced).", { level: logs?.level ?? "…" })}
+            {logs?.directory ? <> {t("The file lives in {directory} and rotates at 5 MB; docker logs shows the same lines.", { directory: logs.directory })}</> : null}
           </p>
           <div className="toolbar-group" style={{ marginBottom: 8, flexWrap: "wrap" }}>
             <select
               className="input"
-              aria-label="Minimum log level"
+              aria-label={t("Minimum log level")}
               value={logFilter}
               onChange={(event) => {
                 setLogFilter(event.target.value);
                 void loadLogTail(event.target.value);
               }}
             >
-              <option value="">Everything</option>
-              <option value="info">Info and above</option>
-              <option value="warning">Warnings and errors</option>
-              <option value="error">Errors only</option>
+              <option value="">{t("Everything")}</option>
+              <option value="info">{t("Info and above")}</option>
+              <option value="warning">{t("Warnings and errors")}</option>
+              <option value="error">{t("Errors only")}</option>
             </select>
             <button type="button" className="btn btn-small" disabled={logsBusy} onClick={() => void loadLogTail(logFilter)}>
-              <Icon name="refresh" size={14} /> Refresh
+              <Icon name="refresh" size={14} /> {t("Refresh")}
             </button>
             {logs?.files.map((file) => (
               <button
@@ -437,51 +435,51 @@ export default function SystemPage() {
               </button>
             ))}
           </div>
-          <pre className="log-tail" aria-label="Last log lines">{logTail.length ? logTail.join("\n") : "No log lines yet."}</pre>
+          <pre className="log-tail" aria-label={t("Last log lines")}>{logTail.length ? logTail.join("\n") : t("No log lines yet.")}</pre>
         </section>
 
         <section className="panel">
-          <h2>Library</h2>
+          <h2>{t("Library")}</h2>
           <dl className="kv">
-            <dt>Status</dt>
+            <dt>{t("Status")}</dt>
             <dd>
               {status.library.available ? (
-                <StatusPill kind="success">Available</StatusPill>
+                <StatusPill kind="success">{t("Available")}</StatusPill>
               ) : (
                 <StatusPill kind="danger">{status.library.reason}</StatusPill>
               )}
             </dd>
-            <dt>Series</dt>
+            <dt>{t("Series")}</dt>
             <dd>
-              {status.totals.series} ({status.totals.monitored} monitored)
+              {t("{total} ({monitored} monitored)", { total: status.totals.series, monitored: status.totals.monitored })}
             </dd>
-            <dt>Chapters</dt>
+            <dt>{t("Chapters")}</dt>
             <dd>
-              {status.totals.downloaded} downloaded of {status.totals.chapters} known
+              {t("{downloaded} downloaded of {known} known", { downloaded: status.totals.downloaded, known: status.totals.chapters })}
             </dd>
-            <dt>Naming</dt>
+            <dt>{t("Naming")}</dt>
             <dd className="mono small">{organization?.naming_format ?? "—"}</dd>
-            <dt>Organization</dt>
+            <dt>{t("Organization")}</dt>
             <dd>
               {organization ? (
                 organization.organization_blocked ? (
-                  <StatusPill kind="danger">Blocked</StatusPill>
+                  <StatusPill kind="danger">{t("Blocked")}</StatusPill>
                 ) : (
                   <StatusPill kind="success">
-                    Clean · {organization.moved} moved, {organization.unchanged} unchanged
+                    {t("Clean · {moved} moved, {unchanged} unchanged", { moved: organization.moved, unchanged: organization.unchanged })}
                   </StatusPill>
                 )
               ) : (
                 "—"
               )}
             </dd>
-            <dt>Deletion recovery</dt>
+            <dt>{t("Deletion recovery")}</dt>
             <dd>
               {recovery ? (
                 recovery.recovery_blocked ? (
-                  <StatusPill kind="danger">Blocked: {recovery.warnings[0]}</StatusPill>
+                  <StatusPill kind="danger">{t("Blocked: {reason}", { reason: recovery.warnings[0] })}</StatusPill>
                 ) : (
-                  <StatusPill kind="success">Clean</StatusPill>
+                  <StatusPill kind="success">{t("Clean")}</StatusPill>
                 )
               ) : (
                 "—"
@@ -491,25 +489,25 @@ export default function SystemPage() {
         </section>
 
         <section className="panel">
-          <h2>Storage</h2>
+          <h2>{t("Storage")}</h2>
           <table className="table">
             <thead>
               <tr>
-                <th>Location</th>
-                <th>Path</th>
-                <th>Free</th>
-                <th>Total</th>
+                <th>{t("Location")}</th>
+                <th>{t("Path")}</th>
+                <th>{t("Free")}</th>
+                <th>{t("Total")}</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Config</td>
+                <td>{t("Config")}</td>
                 <td className="mono small">{status.storage.data.path}</td>
                 <td>{formatBytes(status.storage.data.free)}</td>
                 <td>{formatBytes(status.storage.data.total)}</td>
               </tr>
               <tr>
-                <td>Library</td>
+                <td>{t("Library")}</td>
                 <td className="mono small">{status.storage.library.path}</td>
                 <td>{formatBytes(status.storage.library.free)}</td>
                 <td>{formatBytes(status.storage.library.total)}</td>
@@ -519,7 +517,7 @@ export default function SystemPage() {
         </section>
 
         <section className="panel">
-          <h2>Providers</h2>
+          <h2>{t("Providers")}</h2>
           <table className="table">
             <tbody>
               {status.providers.map((provider) => {
@@ -529,16 +527,16 @@ export default function SystemPage() {
                     <td>{provider.label}</td>
                     <td>
                       {probes === null ? (
-                        <StatusPill kind="muted">Checking…</StatusPill>
+                        <StatusPill kind="muted">{t("Checking…")}</StatusPill>
                       ) : probe?.ok ? (
                         <StatusPill kind="success">
-                          Online · {probe.latency_ms} ms
-                          {probe.supported_sites ? ` · ${probe.supported_sites} sites` : ""}
+                          {t("Online · {latency} ms", { latency: probe.latency_ms })}
+                          {probe.supported_sites ? ` · ${t("{count} sites", { count: probe.supported_sites })}` : ""}
                         </StatusPill>
                       ) : probe ? (
-                        <StatusPill kind="danger" >Unreachable</StatusPill>
+                        <StatusPill kind="danger" >{t("Unreachable")}</StatusPill>
                       ) : (
-                        <StatusPill kind="muted">Unknown</StatusPill>
+                        <StatusPill kind="muted">{t("Unknown")}</StatusPill>
                       )}
                     </td>
                   </tr>
@@ -548,88 +546,88 @@ export default function SystemPage() {
           </table>
           {status.suwayomi ? (
             <>
-              <h2>Suwayomi (managed)</h2>
+              <h2>{t("Suwayomi (managed)")}</h2>
               <dl className="kv">
-                <dt>Server</dt>
+                <dt>{t("Server")}</dt>
                 <dd>
                   {status.suwayomi.ready ? (
-                    <StatusPill kind="success">Running · {status.suwayomi.version}</StatusPill>
+                    <StatusPill kind="success">{t("Running · {version}", { version: status.suwayomi.version })}</StatusPill>
                   ) : status.suwayomi.installed ? (
-                    <StatusPill kind="warn">{status.suwayomi.running ? "Starting" : "Stopped"} · {status.suwayomi.version}</StatusPill>
+                    <StatusPill kind="warn">{status.suwayomi.running ? t("Starting") : t("Stopped")} · {status.suwayomi.version}</StatusPill>
                   ) : (
-                    <StatusPill kind="muted">Not installed</StatusPill>
+                    <StatusPill kind="muted">{t("Not installed")}</StatusPill>
                   )}
                   {status.suwayomi.update_available ? (
-                    <span className="muted small"> · {status.suwayomi.latest_version} available, applied automatically at the next quiet window</span>
+                    <span className="muted small"> · {t("{version} available, applied automatically at the next quiet window", { version: status.suwayomi.latest_version })}</span>
                   ) : status.suwayomi.latest_version ? (
-                    <span className="muted small"> · up to date</span>
+                    <span className="muted small"> · {t("up to date")}</span>
                   ) : null}
                 </dd>
-                <dt>Update check</dt>
+                <dt>{t("Update check")}</dt>
                 <dd className="muted small">
-                  {status.suwayomi.last_update_check_at ? formatDate(status.suwayomi.last_update_check_at) : "Pending (daily)"}
+                  {status.suwayomi.last_update_check_at ? formatDate(status.suwayomi.last_update_check_at) : t("Pending (daily)")}
                 </dd>
-                <dt>Extensions refresh</dt>
+                <dt>{t("Extensions refresh")}</dt>
                 <dd className="muted small">
                   {status.suwayomi.last_extension_refresh_at
-                    ? `${formatDate(status.suwayomi.last_extension_refresh_at)} · ${status.suwayomi.last_extension_updates?.length ?? 0} updated`
-                    : "Pending (daily)"}
+                    ? `${formatDate(status.suwayomi.last_extension_refresh_at)} · ${t("{count} updated", { count: status.suwayomi.last_extension_updates?.length ?? 0 })}`
+                    : t("Pending (daily)")}
                 </dd>
-                <dt>Memory</dt>
-                <dd className="muted small">heap {status.suwayomi.heap_mb} MiB · {status.suwayomi.restarts} restart{status.suwayomi.restarts === 1 ? "" : "s"}</dd>
+                <dt>{t("Memory")}</dt>
+                <dd className="muted small">{t("heap {heap} MiB", { heap: status.suwayomi.heap_mb })} · {tn(status.suwayomi.restarts, "{count} restart", "{count} restarts")}</dd>
                 {health?.download_tuning ? (
                   <>
-                    <dt>Page concurrency</dt>
+                    <dt>{t("Page concurrency")}</dt>
                     <dd className="muted small">
-                      {health.download_tuning.effective ?? "Calibrating"} / {health.download_tuning.maximum}
+                      {health.download_tuning.effective ?? t("Calibrating")} / {health.download_tuning.maximum}
                       {health.download_tuning.latency_ewma_ms !== null
-                        ? ` · ${health.download_tuning.latency_ewma_ms} ms source latency`
+                        ? ` · ${t("{latency} ms source latency", { latency: health.download_tuning.latency_ewma_ms })}`
                         : ""}
                     </dd>
-                    <dt>Page pressure</dt>
+                    <dt>{t("Page pressure")}</dt>
                     <dd className="muted small">
-                      {Math.round(health.download_tuning.failure_pressure * 100)}% failures
+                      {t("{percent}% failures", { percent: Math.round(health.download_tuning.failure_pressure * 100) })}
                       {health.download_tuning.page_kib_ewma !== null
-                        ? ` · ${health.download_tuning.page_kib_ewma} KiB average page`
+                        ? ` · ${t("{size} KiB average page", { size: health.download_tuning.page_kib_ewma })}`
                         : ""}
                     </dd>
-                    <dt>Chapter pipeline</dt>
+                    <dt>{t("Chapter pipeline")}</dt>
                     <dd className="muted small">
-                      {health.download_worker.current_job_ids.length} active across {health.download_worker.active_series} series · target {health.download_worker.pipeline_depth} / {health.download_worker.pipeline_maximum}
+                      {t("{active} active across {series} series · target {depth} / {maximum}", { active: health.download_worker.current_job_ids.length, series: health.download_worker.active_series, depth: health.download_worker.pipeline_depth, maximum: health.download_worker.pipeline_maximum })}
                     </dd>
-                    <dt>Pipeline decision</dt>
+                    <dt>{t("Pipeline decision")}</dt>
                     <dd className="muted small">
                       {health.download_worker.adaptive.reason}
                       {health.download_worker.adaptive.cpu_usage_percent !== null
-                        ? ` · CPU ${health.download_worker.adaptive.cpu_usage_percent}% of ${health.download_worker.adaptive.cpu_limit_cores} cores`
-                        : ` · ${health.download_worker.adaptive.cpu_limit_cores} CPU cores available`}
+                        ? ` · ${t("CPU {percent}% of {cores} cores", { percent: health.download_worker.adaptive.cpu_usage_percent, cores: health.download_worker.adaptive.cpu_limit_cores })}`
+                        : ` · ${t("{count} CPU cores available", { count: health.download_worker.adaptive.cpu_limit_cores })}`}
                       {health.download_worker.adaptive.memory_headroom_mib !== null
-                        ? ` · ${health.download_worker.adaptive.memory_headroom_mib} MiB memory headroom`
+                        ? ` · ${t("{size} MiB memory headroom", { size: health.download_worker.adaptive.memory_headroom_mib })}`
                         : ""}
                       {health.download_worker.adaptive.io_pressure_avg10 > 0
-                        ? ` · I/O pressure ${health.download_worker.adaptive.io_pressure_avg10}%`
+                        ? ` · ${t("I/O pressure {percent}%", { percent: health.download_worker.adaptive.io_pressure_avg10 })}`
                         : ""}
                     </dd>
                   </>
                 ) : null}
-                <dt>Challenged sources</dt>
+                <dt>{t("Challenged sources")}</dt>
                 <dd className="muted small">
                   {status.suwayomi.challenged_sources?.length ? (
                     <>
-                      <StatusPill kind="warn">{status.suwayomi.challenged_sources.length} unreadable</StatusPill>
+                      <StatusPill kind="warn">{t("{count} unreadable", { count: status.suwayomi.challenged_sources.length })}</StatusPill>
                       <span>
-                        {" "}· {status.suwayomi.challenged_sources.join(", ")} answer with an anti-bot challenge; they are ranked last.
+                        {" "}· {t("{sources} answer with an anti-bot challenge; they are ranked last.", { sources: status.suwayomi.challenged_sources.join(", ") })}
                       </span>
                     </>
                   ) : (
-                    "None · every source answers without a challenge"
+                    t("None · every source answers without a challenge")
                   )}
                 </dd>
               </dl>
             </>
           ) : null}
           <SystemIntegrationHealth alignment={alignment} ntfyConfigured={status.ntfy_configured} notifications={status.notifications} metadata={status.metadata} />
-          <h3 style={{ marginTop: 18 }}>Metadata catalogues</h3>
+          <h3 style={{ marginTop: 18 }}>{t("Metadata catalogues")}</h3>
           <table className="table" style={{ marginTop: 14 }}>
             <tbody>
               {status.metadata.sources.map((source) => (
@@ -638,17 +636,18 @@ export default function SystemPage() {
                   <td>
                     {source.configured ? (
                       <StatusPill kind="success">
-                        Ready
+                        {t("Ready")}
+                        {" · "}
                         {source.supports_series && source.supports_volumes
-                          ? " · series + volumes"
+                          ? t("series + volumes")
                           : source.supports_volumes
-                          ? " · volumes"
-                          : " · series"}
+                          ? t("volumes")
+                          : t("series")}
                       </StatusPill>
                     ) : source.allows_link_only ? (
-                      <StatusPill kind="muted">Link only · exact IDs</StatusPill>
+                      <StatusPill kind="muted">{t("Link only · exact IDs")}</StatusPill>
                     ) : (
-                      <StatusPill kind="muted">Optional · not configured</StatusPill>
+                      <StatusPill kind="muted">{t("Optional · not configured")}</StatusPill>
                     )}
                     {source.unavailable_reason ? (
                       <div className="muted small" style={{ marginTop: 4 }}>
@@ -663,33 +662,33 @@ export default function SystemPage() {
         </section>
 
         <section className="panel">
-          <h2>Monitor</h2>
+          <h2>{t("Monitor")}</h2>
           <dl className="kv">
-            <dt>Enabled</dt>
-            <dd>{status.monitor.enabled ? "Yes" : "No"}</dd>
-            <dt>Interval</dt>
-            <dd>{Math.round(status.monitor.interval_seconds / 60)} minutes</dd>
-            <dt>Running</dt>
-            <dd>{status.monitor.running ? "Yes" : "No"}</dd>
-            <dt>Last cycle</dt>
+            <dt>{t("Enabled")}</dt>
+            <dd>{status.monitor.enabled ? t("Yes") : t("No")}</dd>
+            <dt>{t("Interval")}</dt>
+            <dd>{tn(Math.round(status.monitor.interval_seconds / 60), "{count} minute", "{count} minutes")}</dd>
+            <dt>{t("Running")}</dt>
+            <dd>{status.monitor.running ? t("Yes") : t("No")}</dd>
+            <dt>{t("Last cycle")}</dt>
             <dd>{formatDate(status.monitor.last_cycle_at)}</dd>
             {status.monitor.last_cycle_error ? (
               <>
-                <dt>Last error</dt>
+                <dt>{t("Last error")}</dt>
                 <dd className="warn-text">{status.monitor.last_cycle_error}</dd>
               </>
             ) : null}
-            <dt>Wanted recovery</dt>
+            <dt>{t("Wanted recovery")}</dt>
             <dd>
               {status.monitor.wanted_search.enabled
-                ? `Every ${Math.round(status.monitor.wanted_search.interval_seconds / 3600)} hours`
-                : "Disabled"}
+                ? tn(Math.round(status.monitor.wanted_search.interval_seconds / 3600), "Every {count} hour", "Every {count} hours")
+                : t("Disabled")}
             </dd>
-            <dt>Last Wanted search</dt>
+            <dt>{t("Last Wanted search")}</dt>
             <dd>{formatDate(status.monitor.wanted_search.last_search_at)}</dd>
-            <dt>Next Wanted search</dt>
+            <dt>{t("Next Wanted search")}</dt>
             <dd>{formatDate(status.monitor.wanted_search.next_search_at)}</dd>
-            <dt>Failed jobs</dt>
+            <dt>{t("Failed jobs")}</dt>
             <dd>{status.totals.failed_jobs}</dd>
           </dl>
         </section>

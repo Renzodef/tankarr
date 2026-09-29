@@ -38,6 +38,8 @@ Mylar3, Kapowarr or Suwayomi, read [how Tankarr compares](comparison.md).
   atomic hash-checked imports, a recycle bin and automatic backups.
 - **Looks and feels like Sonarr**: Library, Calendar, Activity, Wanted, History,
   Settings and System, with interactive release search.
+- **Speaks your language**: the interface is available in English and Italian,
+  chosen per browser.
 
 ## Start here
 

@@ -18,6 +18,7 @@ import {
 import { additionalContentLabel, libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
 import type { Manga } from "../types";
 import { workYears } from "../workYears";
+import { t, tn } from "../i18n";
 
 type SortKey = "title" | "author" | "year" | "added";
 type SortDirection = "asc" | "desc";
@@ -225,7 +226,7 @@ export default function LibraryPage() {
     setBusy(true);
     try {
       const result = await api.runMonitor();
-      notify("success", `Checked ${result.checked} series, queued ${result.queued} chapters.`);
+      notify("success", t("Checked {checked} series, queued {queued} chapters.", { checked: result.checked, queued: result.queued }));
       await Promise.all([load(), refreshJobs()]);
     } catch (caught) {
       notify("error", String(caught));
@@ -238,27 +239,27 @@ export default function LibraryPage() {
     <div className="page">
       <div className="toolbar">
         <div className="toolbar-group">
-          <button type="button" className="btn" aria-label="Refresh library" onClick={() => void load()}>
-            <Icon name="refresh" /> Refresh view
+          <button type="button" className="btn" aria-label={t("Refresh library")} onClick={() => void load()}>
+            <Icon name="refresh" /> {t("Refresh view")}
           </button>
           <button type="button" className="btn" onClick={() => void refreshAll()} disabled={busy}>
-            <Icon name="refresh" /> Refresh All
+            <Icon name="refresh" /> {t("Refresh All")}
           </button>
           <a className="btn btn-primary" href="#/add">
-            <Icon name="add" /> Add New
+            <Icon name="add" /> {t("Add New")}
           </a>
         </div>
         <div className="toolbar-group">
           <input
             className="input"
-            placeholder="Filter library…"
+            placeholder={t("Filter library…")}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
           <select
             className="input"
             value={statusFilters.publication}
-            aria-label="Filter by publication status"
+            aria-label={t("Filter by publication status")}
             onChange={(event) =>
               setStatusFilters((current) => ({
                 ...current,
@@ -266,24 +267,24 @@ export default function LibraryPage() {
               }))
             }
           >
-            <option value="all">Publication: All</option>
+            <option value="all">{t("Publication: All")}</option>
             {availableStatusFilters.publication.has("continuing") ? (
-              <option value="continuing">Publication: Continuing</option>
+              <option value="continuing">{t("Publication: Continuing")}</option>
             ) : null}
             {availableStatusFilters.publication.has("hiatus") ? (
-              <option value="hiatus">Publication: Hiatus</option>
+              <option value="hiatus">{t("Publication: Hiatus")}</option>
             ) : null}
             {availableStatusFilters.publication.has("ended") ? (
-              <option value="ended">Publication: Ended</option>
+              <option value="ended">{t("Publication: Ended")}</option>
             ) : null}
             {availableStatusFilters.publication.has("unknown") ? (
-              <option value="unknown">Publication: Unknown</option>
+              <option value="unknown">{t("Publication: Unknown")}</option>
             ) : null}
           </select>
           <select
             className="input"
             value={statusFilters.availability}
-            aria-label="Filter by library status"
+            aria-label={t("Filter by library status")}
             onChange={(event) =>
               setStatusFilters((current) => ({
                 ...current,
@@ -291,12 +292,12 @@ export default function LibraryPage() {
               }))
             }
           >
-            <option value="all">Library: All</option>
+            <option value="all">{t("Library: All")}</option>
             {availableStatusFilters.availability.has("up_to_date") ? (
-              <option value="up_to_date">Library: Up to date</option>
+              <option value="up_to_date">{t("Library: Up to date")}</option>
             ) : null}
             {availableStatusFilters.availability.has("missing") ? (
-              <option value="missing">Library: Missing</option>
+              <option value="missing">{t("Library: Missing")}</option>
             ) : null}
           </select>
           <select
@@ -309,10 +310,10 @@ export default function LibraryPage() {
               }))
             }
           >
-            <option value="title">Sort: Title</option>
-            <option value="author">Sort: Author</option>
-            <option value="year">Sort: Year</option>
-            <option value="added">Sort: Date Added</option>
+            <option value="title">{t("Sort: Title")}</option>
+            <option value="author">{t("Sort: Author")}</option>
+            <option value="year">{t("Sort: Year")}</option>
+            <option value="added">{t("Sort: Date Added")}</option>
           </select>
           <button
             type="button"
@@ -323,19 +324,19 @@ export default function LibraryPage() {
                 direction: current.direction === "asc" ? "desc" : "asc",
               }))
             }
-            aria-label={`Sort ${sortDirection === "asc" ? "descending" : "ascending"}`}
-            title={`Currently ${sortDirection === "asc" ? "ascending" : "descending"}; click to reverse`}
+            aria-label={sortDirection === "asc" ? t("Sort descending") : t("Sort ascending")}
+            title={sortDirection === "asc" ? t("Currently ascending; click to reverse") : t("Currently descending; click to reverse")}
           >
             <Icon name={sortDirection === "asc" ? "sortAscending" : "sortDescending"} />
-            <span>{sortDirection === "asc" ? "Ascending" : "Descending"}</span>
+            <span>{sortDirection === "asc" ? t("Ascending") : t("Descending")}</span>
           </button>
         </div>
       </div>
 
       {error ? (
-        <LoadError message={error} retryLabel="Retry library" retry={() => void load()} loading={loading} hasData={library !== null} />
+        <LoadError message={error} retryLabel={t("Retry library")} retry={() => void load()} loading={loading} hasData={library !== null} />
       ) : null}
-      {library !== null && loading ? <p className="muted small" role="status">Updating library…</p> : null}
+      {library !== null && loading ? <p className="muted small" role="status">{t("Updating library…")}</p> : null}
       {library === null ? (
         error ? null : <Spinner />
       ) : items.length === 0 ? (
@@ -343,17 +344,17 @@ export default function LibraryPage() {
           icon="library"
           title={
             filter || hasStatusFilter
-              ? "No series match the filter"
-              : "Your library is empty"
+              ? t("No series match the filter")
+              : t("Your library is empty")
           }
-          hint={filter || hasStatusFilter ? undefined : "Use Add New to search configured providers."}
+          hint={filter || hasStatusFilter ? undefined : t("Use Add New to search configured providers.")}
         />
       ) : (
         <>
           <div className="poster-grid">
           {visibleItems.map((manga, index) => {
             const authors = mangaAuthors(manga).filter((item) => item.trim());
-            const authorLabel = authors.length ? authors.join(", ") : "Unknown author";
+            const authorLabel = authors.length ? authors.join(", ") : t("Unknown author");
             const publication = publicationStatus(manga);
             const availability = libraryStatus(manga);
             const counts = seriesCounts(manga);
@@ -366,24 +367,26 @@ export default function LibraryPage() {
             // unreadable - the eye cannot compare cards whose fields move -
             // and it put Moonlight Mile's two counts side by side as
             // "24 / ? chapters · 24 books", which reads as 24 of 24.
-            const plural = (count: number, noun: string) =>
-              `${noun}${count === 1 ? "" : "s"}`;
+            // "141 / 147 chapters": the noun follows the total, the count on
+            // the shelf comes first.
+            const books = (count: number) => tn(count, "book", "books");
+            const chapters = (count: number) => tn(count, "chapter", "chapters");
             const extent = counts.reference_unknown ? "?" : counts.total_count;
             const tracked = `${counts.downloaded_count} / ${extent}`;
             const other =
               counts.unit === "volume" ? counts.chapter_progress : counts.volume_progress;
             const booksPart =
               counts.unit === "volume"
-                ? `${tracked} ${plural(counts.total_count, "book")}`
+                ? `${tracked} ${books(counts.total_count)}`
                 : other
-                  ? `${other.expected} ${plural(other.expected, "book")}`
+                  ? `${other.expected} ${books(other.expected)}`
                   : "";
             const chaptersPart =
               counts.unit === "volume"
                 ? other
-                  ? `${other.expected} ${plural(other.expected, "chapter")}`
+                  ? `${other.expected} ${chapters(other.expected)}`
                   : ""
-                : `${tracked} ${plural(counts.total_count, "chapter")}`;
+                : `${tracked} ${chapters(counts.total_count)}`;
             const chapterLabel = [booksPart, chaptersPart].filter(Boolean).join(" · ");
             const years = workYears(manga);
             return (
@@ -396,7 +399,7 @@ export default function LibraryPage() {
                     priority={index === 0}
                   />
                   {manga.monitored ? (
-                    <span className="poster-ribbon" title={`Monitored: ${monitorLabel(manga.monitor_mode)}`}>
+                    <span className="poster-ribbon" title={t("Monitored: {mode}", { mode: monitorLabel(manga.monitor_mode) })}>
                       <Icon name="bookmark" size={14} />
                     </span>
                   ) : null}
@@ -437,8 +440,8 @@ export default function LibraryPage() {
             pageSize={LIBRARY_PAGE_SIZE}
             total={items.length}
             onPageChange={setPage}
-            itemLabel="series"
-            ariaLabel="Library pages"
+            itemLabel={t("series")}
+            ariaLabel={t("Library pages")}
           />
         </>
       )}
