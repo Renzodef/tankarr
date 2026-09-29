@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from typing import Any
 
 LOCK_MARKERS = ("\U0001f512", "\U0001f510", "\U0001f50f")
@@ -130,7 +131,13 @@ def _decimal(value: object) -> Decimal | None:
 def title_number(value: object) -> Decimal | None:
     """The chapter number written at the start of an episode title."""
 
-    text = str(value or "")
+    return _title_number(str(value or ""))
+
+
+@lru_cache(maxsize=16384)
+def _title_number(text: str) -> Decimal | None:
+    # Reconciliation and every render read each title several times, and
+    # the same titles come back on every pass; Decimals are immutable.
     match = (
         _TITLE_CHAPTER_SUFFIX.search(text)
         or _TITLE_DUAL_NUMBER.match(text)
@@ -271,11 +278,15 @@ def numbered_prologue(value: object) -> int | None:
 def is_special_title(value: object) -> bool:
     """An episode that is not a chapter of the work: a recap, a notice."""
 
-    text = str(value or "")
+    return _is_special_title(str(value or ""))
+
+
+@lru_cache(maxsize=16384)
+def _is_special_title(text: str) -> bool:
     # A word such as "Announcement" or "Contest" can be the legitimate title
     # of an explicitly numbered chapter.  In that case the number is stronger
     # evidence; cross-source reconciliation can still leave it for review.
-    return title_number(text) is None and bool(
+    return _title_number(text) is None and bool(
         _SPECIAL_TITLE.search(text) or numbered_prologue(text) is not None
     )
 

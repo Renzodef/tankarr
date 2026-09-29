@@ -142,3 +142,18 @@ def test_the_system_page_lists_tails_and_downloads_the_log(
             "content-type", ""
         )
         assert b"SQLite format" not in escaped.content
+
+
+def test_request_lines_are_logged_only_at_debug(tmp_path: Path, clean_root_logger):
+    settings = Settings(
+        data_dir=tmp_path / "data", library_dir=tmp_path / "library", log_level="info"
+    )
+    logs.configure_logging(settings)
+    access = logging.getLogger("uvicorn.access")
+    record = access.makeRecord(
+        "uvicorn.access", logging.INFO, __file__, 1, "GET /api/health 200", (), None
+    )
+    assert not access.filter(record)
+    settings.log_level = "debug"
+    logs.apply_log_level(settings)
+    assert access.filter(record)

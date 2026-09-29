@@ -190,7 +190,11 @@ SUSPECT_BOOK_PAGES = 600
 def canonical_number(value: object) -> str | None:
     """Return one stable numeric label without changing non-numeric labels."""
 
-    raw = str(value if value is not None else "").strip()
+    raw = (
+        value.strip()
+        if isinstance(value, str)
+        else str(value if value is not None else "").strip()
+    )
     if not raw:
         return None
     return _canonical_label(raw)
@@ -871,7 +875,7 @@ def build_chapter_index(
         ),
     )
     unit_info, releases = select_releases(
-        manga, metadata, all_releases, canonical_labels=canonical_decimals
+        manga, metadata, all_releases, canonical_labels=canonical_decimals, copy=False
     )
     if unit_info["unit"] == "chapters" and "0" in operator_labels:
         selected_ids = {release.get("id") for release in releases}

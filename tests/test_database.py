@@ -2486,3 +2486,94 @@ def test_verified_publication_requires_evidence_and_can_be_cleared(tmp_path):
     assert manga["verified_chapter_count"] is None
     assert manga["verified_chapter_source"] is None
     assert manga["verified_chapter_checked_at"] is None
+
+
+def test_connections_are_pooled_and_nested_reads_stay_separate(tmp_path: Path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    with database.connect() as first:
+        with database.connect() as nested:
+            # A nested block keeps its own connection and transaction.
+            assert nested is not first
+    with database.connect() as again:
+        assert again is first or again is nested  # an idle connection is reused
+    # A failed block rolls back and the connection stays usable afterwards.
+    with pytest.raises(RuntimeError, match="boom"):
+        with database.connect() as connection:
+            connection.execute(
+                "INSERT INTO read_model_revision (table_name, revision) "
+                "VALUES ('probe', '1')"
+            )
+            raise RuntimeError("boom")
+    with database.connect() as connection:
+        assert not connection.in_transaction
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM read_model_revision WHERE table_name='probe'"
+            ).fetchone()[0]
+            == 0
+        )
+    assert database._idle
+    database.close()
+    assert database._idle == []
+    with database.connect() as connection:
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+
+def _numbered_manga(identifier: str) -> dict:
+    return {
+        "id": identifier,
+        "provider": "local",
+        "title": f"Work {identifier}",
+        "description": "",
+        "authors": [],
+        "original_language": "ja",
+        "status": "ongoing",
+        "available_languages": ["en"],
+    }
+
+
+def _numbered_chapters(identifier: str, numbers: list[int]) -> list[dict]:
+    return [
+        {
+            "id": f"{identifier}-{number}",
+            "chapter": str(number),
+            "volume": None,
+            "title": f"Chapter {number}",
+            "language": "en",
+            "provider": "local",
+            "groups": [],
+            "pages": 20,
+            "publish_at": "2026-01-01T00:00:00Z",
+            "source_url": "",
+        }
+        for number in numbers
+    ]
+
+
+def test_start_up_numbering_pass_skips_series_it_has_already_seen(tmp_path: Path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(_numbered_manga("one"), "en", "all")
+    database.upsert_chapters("one", _numbered_chapters("one", [1, 2, 3]))
+    with database.connect() as connection:
+        first = database._reconcile_all_numbering_connection(connection)
+        assert sum(first.values()) == 3
+        before = connection.execute(
+            "SELECT id, canonical_chapter, updated_at FROM chapter_release ORDER BY id"
+        ).fetchall()
+        # Nothing changed: the next start looks at no release of this series.
+        assert database._reconcile_all_numbering_connection(connection) == {}
+        after = connection.execute(
+            "SELECT id, canonical_chapter, updated_at FROM chapter_release ORDER BY id"
+        ).fetchall()
+        assert [tuple(row) for row in after] == [tuple(row) for row in before]
+        # The operator's recompute trusts nothing.
+        forced = database._reconcile_all_numbering_connection(connection, force=True)
+        assert sum(forced.values()) == 3
+    # A new release changes the fingerprint: the series is reconciled again.
+    database.upsert_chapters("one", _numbered_chapters("one", [1, 2, 3, 4]))
+    with database.connect() as connection:
+        again = database._reconcile_all_numbering_connection(connection)
+        assert sum(again.values()) == 4
+        assert database._reconcile_all_numbering_connection(connection) == {}

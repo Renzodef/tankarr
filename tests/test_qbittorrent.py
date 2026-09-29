@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -83,3 +84,26 @@ async def test_add_magnet_rejects_json_success_for_a_different_hash():
             expected_hash=INFO_HASH,
             paused=True,
         )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_one_login_serves_many_calls_and_a_403_logs_in_again():
+    login = respx.post(f"{BASE_URL}/api/v2/auth/login").mock(
+        return_value=Response(200, text="Ok.")
+    )
+    info = respx.get(f"{BASE_URL}/api/v2/torrents/info").mock(
+        return_value=Response(200, json=[])
+    )
+    client = QBitTorrentClient(settings())
+    assert await client.list_category_torrents() == []
+    assert await client.list_category_torrents() == []
+    assert login.call_count == 1
+    # The SID expired: the failing call is reported, the next one logs in again.
+    info.mock(return_value=Response(403, text="Forbidden"))
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.list_category_torrents()
+    info.mock(return_value=Response(200, json=[]))
+    assert await client.list_category_torrents() == []
+    assert login.call_count == 2
+    await client.aclose()

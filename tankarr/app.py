@@ -372,6 +372,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             revision_executor, partial(function, *args)
         )
 
+    async def snapshot_response(
+        kind: str, payload: bytes, request: Request
+    ) -> Response:
+        """Serve a cached JSON snapshot: 304 when unchanged, else precompressed.
+
+        Library, Wanted and Calendar are rebuilt once per change and then
+        served to every tab and poll. Their gzip form is kept next to the
+        validator, so the middleware does not compress the same megabytes
+        again on each request; the first request after a change compresses
+        off the event loop.
+        """
+
+        etag = snapshot_validators.etag(kind, payload)
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        if len(payload) >= 1024 and "gzip" in request.headers.get(
+            "accept-encoding", ""
+        ):
+            body = snapshot_validators.compressed_if_ready(kind, payload)
+            if body is None:
+                body = await run_api_blocking(
+                    snapshot_validators.compressed, kind, payload
+                )
+            headers["Content-Encoding"] = "gzip"
+            headers["Vary"] = "Accept-Encoding"
+            return Response(
+                content=body, media_type="application/json", headers=headers
+            )
+        return Response(content=payload, media_type="application/json", headers=headers)
+
     load_metadata_secret_overrides(settings)
     database = Database(settings.database_path)
     database.initialize(before_migration=lambda: create_pre_migration_backup(settings))
@@ -1783,9 +1814,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 continue
             closed.add(id(registered))
             await registered.aclose()
+        await qbittorrent.aclose()
+        await sabnzbd.aclose()
         api_executor.shutdown(wait=True, cancel_futures=True)
         revision_executor.shutdown(wait=True, cancel_futures=True)
         blocking_executor.shutdown(wait=True, cancel_futures=True)
+        database.close()
 
     app = FastAPI(
         title="Tankarr",
@@ -2183,15 +2217,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if fresh
                 else await cached_library_payload()
             )
-        etag = snapshot_validators.etag("library", payload)
-        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
-        if request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers=headers)
-        return Response(
-            content=payload,
-            media_type="application/json",
-            headers=headers,
-        )
+        return await snapshot_response("library", payload, request)
 
     @app.get("/api/manga/{manga_id}/preview")
     async def preview_manga(
@@ -3662,14 +3688,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # object when nothing changed, instead of transferring and decoding it
         # twice. Hash the cached bytes so stale-while-revalidate responses keep
         # the validator of the exact snapshot they actually serve.
-        etag = snapshot_validators.etag("wanted", payload)
-        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
-        if request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers=headers)
-        return Response(
-            content=payload,
-            media_type="application/json",
-            headers=headers,
+        return await snapshot_response(
+            "wanted-compact" if compact else "wanted", payload, request
         )
 
     @app.post("/api/wanted/search")
@@ -3976,7 +3996,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "used": None,
                     }
 
-            manga_list = database.list_manga()
+            # Totals and alerts need the rows and the raw counts, not the
+            # canonical coverage that decodes every release.
+            manga_list = database.list_manga(with_logical_counts=False)
             jobs = database.list_jobs(500)
             return {
                 "version": __version__,
@@ -4802,6 +4824,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await probe_client.probe()
         except Exception as exc:  # noqa: BLE001 - the failure is the result
             return {"ok": False, "error": redact_secrets(str(exc))[:300]}
+        finally:
+            await probe_client.aclose()
 
     @app.post("/api/settings/test/sabnzbd")
     async def test_sabnzbd(changes: dict[str, object] | None = None):
@@ -4827,6 +4851,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return result
         except Exception as exc:  # noqa: BLE001 - the failure is the result
             return {"ok": False, "error": redact_secrets(str(exc))[:300]}
+        finally:
+            await probe_client.aclose()
 
     @app.post("/api/settings/test/ntfy")
     async def test_ntfy(changes: dict[str, object] | None = None):
@@ -5054,6 +5080,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         releases: list[dict[str, Any]] = []
         hosts_by_manga: dict[str, frozenset[str]] = {}
+        publication_by_manga: dict[str, dict[str, Any]] = {}
         for candidates in grouped.values():
             manga_key = str(candidates[0]["manga_id"])
             if manga_key not in hosts_by_manga:
@@ -5077,13 +5104,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 continue
             context = inputs_by_manga.get(manga_key)
             if not official and context is not None:
-                publication = publication_summary(
-                    {
-                        **context["manga"],
-                        "publication_signals": context["publication_signals"],
-                    },
-                    (context["metadata"] or {}).get("data") or {},
-                )
+                # One summary per series, not one per chapter of it.
+                publication = publication_by_manga.get(manga_key)
+                if publication is None:
+                    publication = publication_summary(
+                        {
+                            **context["manga"],
+                            "publication_signals": context["publication_signals"],
+                        },
+                        (context["metadata"] or {}).get("data") or {},
+                    )
+                    publication_by_manga[manga_key] = publication
                 # A recent scan upload is not evidence that a paused or ended
                 # publication released a new chapter. Keep dated official
                 # history, but do not present secondary reuploads as news.
@@ -5373,15 +5404,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             end_on=end,
             revision=revision,
         )
-        etag = snapshot_validators.etag("calendar", payload)
-        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
-        if request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers=headers)
-        return Response(
-            content=payload,
-            media_type="application/json",
-            headers=headers,
-        )
+        return await snapshot_response("calendar", payload, request)
 
     @app.patch("/api/manga/{manga_id}/chapters/{chapter_id}/monitored")
     async def set_chapter_monitored(

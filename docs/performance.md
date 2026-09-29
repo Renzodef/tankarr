@@ -49,6 +49,42 @@ other project.
   cut can lose the last transactions, which the nightly backup covers) and
   keeps temporary tables in memory. `FULL` fsyncs the WAL on every commit,
   which dominates import time on a hard disk or a NAS.
+- **A pool of connections.** Opening a SQLite connection (the file, four
+  pragmas, a custom function) costs about a millisecond; a warm one answers
+  in microseconds and keeps its page cache. Every read model, job update and
+  revision check used to open its own. Idle connections are now kept and
+  handed out one at a time; nested reads still get their own connection, so
+  transactions behave exactly as before. On the synthetic catalogue this
+  halved the small API calls (7 ms to 3 ms) and made seeding 30,000 releases
+  2.4 times faster.
+- **Snapshots compressed once.** Library, Wanted and Calendar responses are
+  cached bytes served to every tab and poll. Their gzip form is now kept next
+  to the ETag: the first request after a change compresses off the event
+  loop, every later one sends the stored bytes (the middleware skips a
+  response that already carries `Content-Encoding`). Compact Wanted on the
+  synthetic catalogue, 7 MB of JSON, answers in 9 ms; the full form went from
+  190 ms to 60 ms.
+- **System page without the coverage pass.** Its totals and alerts need the
+  series rows and the raw counts, not the canonical chapter coverage that
+  decodes every release; skipping it took the status call from 170 ms to
+  60 ms.
+- **One classification per release.** Unit selection tested each release
+  for "is this a book" up to seven times per render across normalisation,
+  coverage and the prologue rule, and parsed each label eleven times. The
+  passes now share the official hosts, classify once and test the cached
+  number before the classifier; the Calendar summarises each series'
+  publication once rather than once per chapter. Cold Library and Calendar
+  renders gained about 10% each; the remaining cost is the canonical slot
+  index itself.
+- **One session per download client.** The qBittorrent client logged in and
+  opened a new connection for every poll (two requests every ten seconds);
+  it now keeps one authenticated session per configuration and logs in again
+  only after a 403 or a transport error. SABnzbd reuses one client too.
+- **Requests are not logged at info.** uvicorn's access line is written only
+  at `debug`: at `info` the polling interface and Docker's health check would
+  cost a write per request and bury the events the log is for. Idle HTTP
+  connections are kept for 30 s, longer than the polling interval, so a poll
+  reuses the connection instead of opening one.
 - **Precise invalidation.** Time-dependent caches expire without requiring a
   database write. Changes to source ranking, health, recovery evidence and
   monitoring invalidate the relevant snapshots. Related SQLite reads share one
@@ -81,6 +117,20 @@ days old, and scoped to the database file identity, library root and preferred
 unit. Missing, incompatible or corrupt snapshots fall back to a fresh
 calculation. A new installation therefore still needs one complete calculation.
 Deleting this cache is safe and only makes the next first paint slower.
+
+Start-up itself no longer grows with the library. Every start reconciles the
+numbering of the releases (canonical chapter identities), which used to
+recompute, and rewrite, every release of every series: on the synthetic
+catalogue a second of CPU and 30,000 row updates that changed nothing, and
+minutes on a Raspberry Pi with a large library. Each pass now records, per
+series, a fingerprint of what it read (the rule version, the release and image
+it ran as, the series row, its releases, catalogue metadata, chapter map,
+source roles, overrides and official evidence) and the next start skips the
+series whose fingerprint is unchanged; rows are rewritten only when a value
+differs. The operator's explicit recompute still trusts nothing. On the
+synthetic catalogue a settled start takes 0.27 s, the same as an empty
+database, against 1.5 s before; the first start after an upgrade still
+reconciles everything once.
 
 ## Wanted search cadence
 
