@@ -15,6 +15,11 @@ that Komga, Kavita, Stump or its own built-in reader can open.
 It is free software under the GPL-3.0 licence, distributed as a Docker image
 for `amd64` and `arm64`.
 
+[![The Tankarr Library: series covers with chapter counts and status](assets/screenshots/library.webp)](screenshots.md)
+
+More in the [screenshots](screenshots.md); if you are weighing it against
+Mylar3, Kapowarr or Suwayomi, read [how Tankarr compares](comparison.md).
+
 ## What it does
 
 - **Monitors your series** with the familiar *arr profiles (all, future,

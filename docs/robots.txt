@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://renzodef.github.io/tankarr/sitemap.xml

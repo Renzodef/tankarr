@@ -44,3 +44,21 @@ def test_the_example_files_only_use_existing_variables():
             if not COMPOSE_ONLY.match(variable)
         }
         assert not unknown, f"{name} uses unknown variables: {sorted(unknown)}"
+
+
+def test_every_image_the_readme_and_the_docs_show_exists():
+    """A broken screenshot is the first thing a visitor would notice."""
+
+    pages = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    missing: list[str] = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        sources = re.findall(r'<img[^>]+src="([^"]+)"', text)
+        sources += re.findall(r"!\[[^\]]*\]\(([^)\s]+)", text)
+        for source in sources:
+            if source.startswith(("http://", "https://")):
+                continue
+            target = (page.parent / source).resolve()
+            if not target.is_file():
+                missing.append(f"{page.relative_to(ROOT)} -> {source}")
+    assert not missing, f"images that do not exist: {missing}"

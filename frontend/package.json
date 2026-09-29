@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "benchmark": "node e2e/benchmark.mjs",
+    "screenshots": "node e2e/screenshots.mjs",
     "test": "vitest run"
   },
   "dependencies": {
