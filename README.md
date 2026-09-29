@@ -25,6 +25,15 @@ its own built-in reader. If you know Sonarr or Radarr, you already know how it
 works: add a series once, pick a monitoring profile, and Tankarr keeps the
 series complete.
 
+<p align="center">
+  <a href="https://renzodef.github.io/tankarr/screenshots/"><img src="docs/assets/screenshots/library.webp" width="880" alt="The Tankarr Library: a grid of series covers with chapter counts, language and status badges"></a>
+</p>
+<p align="center">
+  <a href="https://renzodef.github.io/tankarr/screenshots/"><img src="docs/assets/screenshots/series.webp" width="49%" alt="A series page with the publisher's release rhythm and the chapter list"></a>
+  <a href="https://renzodef.github.io/tankarr/screenshots/"><img src="docs/assets/screenshots/calendar.webp" width="49%" alt="The Calendar week view with released, available and expected chapters"></a>
+</p>
+<p align="center"><sub>A fictional library, generated for the documentation. <a href="https://renzodef.github.io/tankarr/screenshots/">More screenshots</a>.</sub></p>
+
 - **Add a work, not a website.** Series are identified through the
   [MangaBaka](https://mangabaka.org) catalogue (with MangaUpdates, AniList,
   Kitsu and MyAnimeList IDs). Download sources are mapped afterwards, so a
@@ -43,10 +52,17 @@ series complete.
   covers, hash-checked atomic imports, a recycle bin, and page-quality checks
   that replace unreadable downloads.
 - **The *arr experience.** Library, Calendar, Activity queue, Wanted, History,
-  interactive release search, monitoring profiles, notifications and a System
-  page with health checks and one-click backups.
+  interactive release search, monitoring profiles, and a System page with
+  health checks, scheduled tasks, logs and one-click backups.
+- **Built to be operated.** Notifications to ntfy, Discord, Telegram, Apprise
+  or any webhook; an API key and Prometheus metrics; forms, basic or
+  reverse-proxy (`Remote-User`) authentication; `PUID`/`PGID`; verified
+  automatic backups and safe restores.
 - **Runs anywhere Docker runs.** Multi-architecture images for `linux/amd64`
-  and `linux/arm64` (Raspberry Pi 4 and 5 included).
+  and `linux/arm64` (Raspberry Pi 4 and 5 included), a Compose file, an
+  Unraid template and a Helm chart.
+
+If Tankarr is useful to you, a star on GitHub helps other readers find it.
 
 ## Quick start
 
@@ -59,6 +75,8 @@ services:
     image: ghcr.io/renzodef/tankarr:latest
     container_name: tankarr
     environment:
+      PUID: 1000                    # the user and group that own your folders
+      PGID: 1000
       TZ: Etc/UTC
     volumes:
       - ./config:/config            # database, settings, cache, backups
@@ -95,8 +113,10 @@ The full documentation lives at **<https://renzodef.github.io/tankarr/>**
 | [Installation](docs/installation.md) | Docker Compose, `docker run`, Unraid, Kubernetes (Helm), folders and permissions, reverse proxy, building from source |
 | [Getting started](docs/getting-started.md) | First login, setup checklist, adding series, monitoring profiles, your first download |
 | [Configuration](docs/configuration.md) | Every `TANKARR_*` environment variable and its default |
-| [Integrations](docs/integrations.md) | Suwayomi, Prowlarr, qBittorrent, SABnzbd, Internet Archive, Komga, Kavita, Stump, ntfy |
+| [Integrations](docs/integrations.md) | Suwayomi, Prowlarr, qBittorrent, SABnzbd, Internet Archive, Komga, Kavita, Stump, notifications (ntfy, Discord, Telegram, Apprise, webhooks), Prometheus |
 | [How Tankarr works](docs/how-it-works.md) | Identity, numbering, official editions, Wanted recovery, page quality |
+| [Compared with other tools](docs/comparison.md) | Where Tankarr sits next to Mylar3, Kapowarr, Suwayomi and readers like Komga |
+| [Screenshots](docs/screenshots.md) | Every page of the interface |
 | [Upgrading](docs/upgrading.md) | Release channels, image tags, backups and rollback |
 | [FAQ and troubleshooting](docs/faq.md) | Common questions and problems |
 
@@ -120,6 +140,13 @@ Yes. It brings the Sonarr and Radarr workflow (monitored series, a Wanted list,
 a download queue, release profiles and a calendar) to manga, manhwa, manhua,
 webtoons and comics, and it integrates with the same tools: Prowlarr,
 qBittorrent and SABnzbd.
+
+**How is it different from Mylar3, Kapowarr or Suwayomi?**
+Mylar3 and Kapowarr are built around ComicVine and Western comic books;
+Suwayomi and Mihon are readers with source extensions. Tankarr identifies works
+through manga catalogues, follows chapters across editions and languages, uses
+Suwayomi as one of several download channels, and writes a library for your
+reader. The [comparison](docs/comparison.md) goes through it tool by tool.
 
 **Does Tankarr host or distribute manga?**
 No. Tankarr contains no content and no sources of its own. It automates the

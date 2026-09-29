@@ -239,3 +239,23 @@ the repository. AI coding agents working in the repository follow
 [AGENTS.md](https://github.com/Renzodef/tankarr/blob/main/AGENTS.md).
 Releases are tags on `main`, published as described in
 [Upgrading](upgrading.md) and [Releasing](releases.md).
+
+## Screenshots
+
+The screenshots in the documentation and the README come from a fictional
+library, so that no real work, cover or reader appears in them, and they are
+regenerated rather than edited:
+
+```sh
+.venv/bin/python tests/demo_snapshot.py /tmp/tankarr-demo
+.venv/bin/python tests/browser_server.py --snapshot /tmp/tankarr-demo/tankarr.sqlite3 \
+    --artwork-root /tmp/tankarr-demo/artwork --port 18880
+npm run screenshots --prefix frontend      # writes docs/assets/screenshots/*.png
+.venv/bin/python tests/demo_snapshot.py --shrink docs/assets/screenshots   # PNG -> WebP
+```
+
+`tests/demo_snapshot.py` invents the titles, authors and covers and gives the
+data realistic shapes (running and finished works, chapters and books, a
+backlog, a queue, an official platform with a weekly schedule). The capture
+script waits for every cover and font before each page; `--shrink` converts
+the PNG captures to WebP, a fifth of the size with the gradients intact.

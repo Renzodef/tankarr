@@ -1,0 +1,17 @@
+# Entry for https://github.com/awesome-selfhosted/awesome-selfhosted-data,
+# to be submitted by a person (their rules exclude automated submissions)
+# once Tankarr has been public for more than four months: file it as
+# software/tankarr.yml, remove these comments, and check the tags still
+# exist under tags/. See README.md in this folder.
+name: Tankarr
+website_url: https://renzodef.github.io/tankarr/
+source_code_url: https://github.com/Renzodef/tankarr
+description: Manga, manhwa and comics manager in the style of Sonarr - monitors series, downloads chapters and volumes through Suwayomi, Prowlarr, qBittorrent and SABnzbd, and builds a CBZ library for Komga, Kavita or Stump.
+licenses:
+  - GPL-3.0
+platforms:
+  - Docker
+  - Python
+tags:
+  - Automation
+  - Media Management

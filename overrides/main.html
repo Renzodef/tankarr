@@ -1,0 +1,50 @@
+{#
+  Search and link previews. Material writes the description and the
+  canonical URL itself; this adds the Open Graph and Twitter cards every
+  page shares, and the structured data of the landing page.
+#}
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {% set page_title = page.meta.title if page.meta and page.meta.title else (page.title ~ " - " ~ config.site_name if page.title and not page.is_homepage else config.site_name) %}
+  {% set page_description = page.meta.description if page.meta and page.meta.description else config.site_description %}
+  {% set preview_image = config.site_url ~ "assets/social-preview.png" %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ page_title }}">
+  <meta property="og:description" content="{{ page_description }}">
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  <meta property="og:image" content="{{ preview_image }}">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:image:alt" content="Tankarr: self-hosted manga and comics manager for the *arr stack">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page_title }}">
+  <meta name="twitter:description" content="{{ page_description }}">
+  <meta name="twitter:image" content="{{ preview_image }}">
+  {% if page.is_homepage %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Tankarr",
+    "alternateName": "Sonarr for manga",
+    "applicationCategory": "MultimediaApplication",
+    "applicationSubCategory": "Manga and comics library manager",
+    "operatingSystem": "Linux (Docker), any host running Docker",
+    "url": "{{ config.site_url }}",
+    "downloadUrl": "https://github.com/Renzodef/tankarr/pkgs/container/tankarr",
+    "installUrl": "{{ config.site_url }}installation/",
+    "softwareHelp": {"@type": "CreativeWork", "url": "{{ config.site_url }}"},
+    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "isAccessibleForFree": true,
+    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "EUR"},
+    "screenshot": "{{ config.site_url }}assets/screenshots/library.webp",
+    "image": "{{ preview_image }}",
+    "description": "{{ config.site_description }}",
+    "sameAs": ["https://github.com/Renzodef/tankarr"],
+    "keywords": "manga, manhwa, webtoon, comics, self-hosted, arr, Sonarr, Komga, Kavita, Prowlarr, qBittorrent, SABnzbd, CBZ, Docker"
+  }
+  </script>
+  {% endif %}
+{% endblock %}
