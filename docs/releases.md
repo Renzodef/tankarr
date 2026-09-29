@@ -43,9 +43,10 @@ change needs a pull request with passing checks. Release tags are immutable.
 2. **Bring in what was merged here.** Every pull request merged into `main`
    since the last release must already be in the working repository.
 3. **Bump the version** in the working repository: `__version__` in
-   `tankarr/__init__.py` and `version` in `frontend/package.json` (with
+   `tankarr/__init__.py`, `version` in `frontend/package.json` (with
    `npm version --no-git-tag-version X.Y.Z --prefix frontend`, which also
-   updates the lockfile).
+   updates the lockfile) and `appVersion` in `contrib/helm/tankarr/Chart.yaml`
+   (a test checks that it matches).
 4. **Push the release branch.** A branch `release/vX.Y.Z` whose single commit
    "Release vX.Y.Z" holds the tree of that version, with the changes since the
    previous release in its message. Open a pull request against `main` with

@@ -1,0 +1,158 @@
+# Default values for the Tankarr chart. Every TANKARR_* setting is documented in
+# https://renzodef.github.io/tankarr/configuration/ and can be given under env
+# or secretEnv below; anything not set there can be changed on the Settings
+# page and is stored in the config volume.
+
+image:
+  repository: ghcr.io/renzodef/tankarr
+  # Empty uses the chart's appVersion; "latest" follows every release.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Plain environment variables. TZ drives log timestamps, the Calendar and the
+# nightly maintenance window.
+env:
+  TZ: Etc/UTC
+  TANKARR_LOG_LEVEL: info
+  # Serve Tankarr under a sub-path (match the Ingress path below):
+  # TANKARR_URL_BASE: /tankarr
+
+# Variables that hold secrets: API keys, passwords, tokens. The chart writes
+# them to a Secret of its own and loads it into the container.
+secretEnv: {}
+  # TANKARR_PROWLARR_API_KEY: ""
+  # TANKARR_QBITTORRENT_PASSWORD: ""
+# A Secret you manage instead, with the variable names as keys; secretEnv is
+# ignored when it is set.
+existingSecret: ""
+
+service:
+  type: ClusterIP
+  port: 8787
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  # Cover uploads need request bodies of a few megabytes, for example
+  # nginx.ingress.kubernetes.io/proxy-body-size: 16m
+  annotations: {}
+  hosts:
+    - host: tankarr.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: tankarr-tls
+    #   hosts:
+    #     - tankarr.example.com
+
+persistence:
+  # Tankarr's own data: database, settings, secrets, caches, backups and the
+  # recycle bin. The claims the chart creates carry helm.sh/resource-policy:
+  # keep, so helm uninstall leaves the data in place.
+  config:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+    existingClaim: ""
+    annotations: {}
+  # The CBZ library Tankarr writes, one folder per series. Share it with the
+  # reader (Komga, Kavita, Stump) through an existing claim.
+  library:
+    enabled: true
+    size: 200Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+    existingClaim: ""
+    annotations: {}
+  # Read-only mounts of claims other applications own: files to import, and
+  # the completed folders of qBittorrent (/downloads) and SABnzbd (/usenet).
+  import:
+    enabled: false
+    existingClaim: ""
+  downloads:
+    enabled: false
+    existingClaim: ""
+  usenet:
+    enabled: false
+    existingClaim: ""
+
+# Anything else, for example a second disk for backups mounted at /backups
+# together with env TANKARR_BACKUP_DIRECTORY=/backups.
+extraVolumes: []
+extraVolumeMounts: []
+
+# Tankarr never runs as root. The image's user is 1000:1000; fsGroup lets it
+# write volumes it does not own.
+podSecurityContext:
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# About 400 MB for Tankarr alone, 1.5 GB with the managed Suwayomi engine
+# (a Java server inside the container).
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+# /api/ready answers once the database and the frontend are served;
+# /api/health while the process is alive. Both answer outside TANKARR_URL_BASE.
+startupProbe:
+  httpGet:
+    path: /api/ready
+    port: http
+  periodSeconds: 5
+  failureThreshold: 36
+readinessProbe:
+  httpGet:
+    path: /api/ready
+    port: http
+  periodSeconds: 10
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  periodSeconds: 30
+  timeoutSeconds: 5
+
+# One replica: SQLite and a ReadWriteOnce volume. Recreate keeps two pods from
+# sharing them during an update; a running download finishes within the grace
+# period or is retried.
+strategy:
+  type: Recreate
+terminationGracePeriodSeconds: 60
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Prometheus Operator: scrape /metrics with the API key as bearer token. Put
+# the key (Settings → Security, or the api-key file in /config) in a Secret and
+# name it here.
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  # Prefix with TANKARR_URL_BASE when one is set.
+  path: /metrics
+  labels: {}
+  apiKeySecret:
+    name: ""
+    key: api-key

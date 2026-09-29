@@ -84,6 +84,14 @@ TANKARR_IMPORT_DIR=/import
 TANKARR_FRONTEND_DIR=/app/frontend/dist
 ```
 
+The image also reads four variables that Tankarr itself never sees:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PUID`, `PGID` | `1000`, `1000` | User and group the application runs as when the container starts as root: the owner of your folders. See [File permissions](installation.md#file-permissions). |
+| `UMASK` | `022` | Permissions mask of the files Tankarr writes; `002` makes them group-writable. |
+| `TZ` | `Etc/UTC` | Time zone of log timestamps, the Calendar and the nightly maintenance window. |
+
 ## Docker Compose variables
 
 The `docker-compose.yml` in the repository uses a few variables of its own.

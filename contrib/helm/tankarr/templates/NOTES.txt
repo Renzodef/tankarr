@@ -1,0 +1,27 @@
+Tankarr {{ .Chart.AppVersion }} is starting in namespace {{ .Release.Namespace }}.
+
+1. Read the login Tankarr creates on its first start:
+
+     kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "tankarr.fullname" . }} | grep "created one"
+
+2. Open the interface:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+{{- $host := .host }}
+{{- range .paths }}
+
+     http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- else }}
+
+     kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "tankarr.fullname" . }} 8787:{{ .Values.service.port }}
+
+   and browse to http://localhost:8787
+{{- end }}
+
+3. Change the password under Settings → Security, then follow
+   https://renzodef.github.io/tankarr/getting-started/
+
+The config and library claims carry helm.sh/resource-policy: keep, so
+`helm uninstall` leaves your data in place.

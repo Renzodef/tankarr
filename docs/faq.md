@@ -84,9 +84,10 @@ password.
 
 ### "Permission denied" when writing to the library
 
-The container runs as UID/GID 1000. Either give that user write access to
-the host folders, or run the container as the owner of your media with
-`user: "UID:GID"`. See [File permissions](installation.md#file-permissions).
+Tankarr runs as `PUID:PGID` inside the container, `1000:1000` unless you set
+them. Set them to the owner of your folders (`id -u` and `id -g` on the host,
+`99:100` on Unraid) or give that user write access to the host folders. See
+[File permissions](installation.md#file-permissions).
 
 ### Installing the managed Suwayomi server fails
 

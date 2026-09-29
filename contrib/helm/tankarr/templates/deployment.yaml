@@ -1,0 +1,127 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tankarr.fullname" . }}
+  labels:
+    {{- include "tankarr.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "tankarr.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- $secretChecksum := "" }}
+      {{- if and .Values.secretEnv (not .Values.existingSecret) }}
+      {{- $secretChecksum = include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      {{- end }}
+      {{- if or $secretChecksum .Values.podAnnotations }}
+      annotations:
+        {{- with $secretChecksum }}
+        checksum/secret: {{ . }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "tankarr.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: tankarr
+          image: {{ include "tankarr.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if or .Values.secretEnv .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ include "tankarr.secretName" . }}
+          {{- end }}
+          {{- with .Values.env }}
+          env:
+            {{- range $name, $value := . }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8787
+              protocol: TCP
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: library
+              mountPath: /library
+            {{- range $name := list "import" "downloads" "usenet" }}
+            {{- if (index $.Values.persistence $name).enabled }}
+            - name: {{ $name }}
+              mountPath: /{{ $name }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- range $name := list "config" "library" }}
+        {{- $volume := index $.Values.persistence $name }}
+        - name: {{ $name }}
+          {{- if $volume.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $volume.existingClaim | default (printf "%s-%s" (include "tankarr.fullname" $) $name) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- range $name := list "import" "downloads" "usenet" }}
+        {{- $volume := index $.Values.persistence $name }}
+        {{- if $volume.enabled }}
+        - name: {{ $name }}
+          persistentVolumeClaim:
+            claimName: {{ required (printf "persistence.%s.existingClaim names the claim to mount read-only" $name) $volume.existingClaim }}
+            readOnly: true
+        {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

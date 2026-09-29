@@ -1,0 +1,25 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "tankarr.fullname" . }}
+  labels:
+    {{- include "tankarr.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "tankarr.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+      {{- with .Values.serviceMonitor.apiKeySecret.name }}
+      authorization:
+        credentials:
+          name: {{ . }}
+          key: {{ $.Values.serviceMonitor.apiKeySecret.key }}
+      {{- end }}
+{{- end }}

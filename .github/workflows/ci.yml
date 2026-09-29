@@ -53,6 +53,34 @@ jobs:
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
 
+  deploy-files:
+    name: Deployment files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the container entrypoint
+        run: |
+          sh -n docker-entrypoint.sh
+          shellcheck docker-entrypoint.sh
+      - name: Check the Unraid template
+        run: python3 -c 'import sys, xml.etree.ElementTree as et; et.parse(sys.argv[1])' contrib/unraid/tankarr.xml
+      - name: Lint and render the Helm chart
+        run: |
+          helm lint --strict contrib/helm/tankarr
+          helm template tankarr contrib/helm/tankarr > /dev/null
+          helm template tankarr contrib/helm/tankarr \
+            --set ingress.enabled=true \
+            --set serviceMonitor.enabled=true \
+            --set serviceMonitor.apiKeySecret.name=tankarr-api-key \
+            --set secretEnv.TANKARR_PROWLARR_API_KEY=fixture-key \
+            --set persistence.import.enabled=true \
+            --set persistence.import.existingClaim=media \
+            --set persistence.library.existingClaim=comics \
+            > /dev/null
+
   browser:
     name: Browser
     runs-on: ubuntu-24.04
@@ -110,21 +138,48 @@ jobs:
           cache-to: type=gha,scope=ci-amd64,mode=max
       - name: Smoke-test the image
         run: |
+          wait_ready() {
+            for attempt in $(seq 1 60); do
+              if curl -fsS "http://127.0.0.1:$2/api/health"; then echo; return 0; fi
+              if [ "$attempt" = 60 ]; then docker logs "$1"; return 1; fi
+              sleep 2
+            done
+          }
+          # Real uid:gid of the application (PID 1), whoever runs docker exec.
+          process_ids() {
+            docker exec "$1" awk '/^Uid:/ {u=$2} /^Gid:/ {g=$2} END {print u ":" g}' /proc/1/status
+          }
+
           docker run -d --name tankarr-ci -p 127.0.0.1:8787:8787 tankarr:ci
-          for attempt in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8787/api/health; then break; fi
-            if [ "$attempt" = 60 ]; then docker logs tankarr-ci; exit 1; fi
-            sleep 2
-          done
-          echo
+          wait_ready tankarr-ci 8787
           # A fresh container must never be open: it creates a login instead.
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/manga)" = 401
           docker logs tankarr-ci 2>&1 | grep -q "created one"
+          # The entrypoint drops privileges: Tankarr itself never runs as root.
+          test "$(process_ids tankarr-ci)" = 1000:1000
           docker exec tankarr-ci sh -c '
-            test "$(id -u)" != 0
             for tool in bsdtar unar lsar tesseract pdfinfo pdftoppm java; do
               command -v "$tool" >/dev/null || { echo "missing $tool"; exit 1; }
             done
             tesseract --version | head -n 1
             java -version'
           docker rm -f tankarr-ci
+
+          # PUID/PGID remap the user and hand it /config.
+          docker run -d --name tankarr-puid -e PUID=1234 -e PGID=4321 \
+            -p 127.0.0.1:8788:8787 tankarr:ci
+          wait_ready tankarr-puid 8788
+          test "$(process_ids tankarr-puid)" = 1234:4321
+          test "$(docker exec tankarr-puid stat -c %u:%g /config)" = 1234:4321
+          docker rm -f tankarr-puid
+
+          # --user skips the remap: the container runs as that user directly.
+          mkdir -p "$RUNNER_TEMP/tankarr-user/config" "$RUNNER_TEMP/tankarr-user/library"
+          sudo chown -R 1001:100 "$RUNNER_TEMP/tankarr-user"
+          docker run -d --name tankarr-user --user 1001:100 \
+            -v "$RUNNER_TEMP/tankarr-user/config:/config" \
+            -v "$RUNNER_TEMP/tankarr-user/library:/library" \
+            -p 127.0.0.1:8789:8787 tankarr:ci
+          wait_ready tankarr-user 8789
+          test "$(process_ids tankarr-user)" = 1001:100
+          docker rm -f tankarr-user
