@@ -61,9 +61,10 @@ RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml
 COPY README.md ./
 COPY tankarr/ ./tankarr/
 RUN pip install --no-cache-dir --no-deps . \
-    && mkdir -p /config /library /import /downloads \
-    && chown tankarr:tankarr /config /library /import /downloads
+    && mkdir -p /config /library /import /downloads /usenet \
+    && chown tankarr:tankarr /config /library /import /downloads /usenet
 COPY --from=frontend /src/frontend/dist ./frontend/dist/
+COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # The commit the image was built from, shown on the System page.
 ARG TANKARR_COMMIT=""
@@ -75,9 +76,13 @@ LABEL org.opencontainers.image.title="Tankarr" \
       org.opencontainers.image.documentation="https://renzodef.github.io/tankarr/" \
       org.opencontainers.image.licenses="GPL-3.0-only"
 
-USER tankarr
+# The entrypoint drops to the "tankarr" user (uid/gid 1000, or PUID/PGID when
+# set) before starting the application, like the other *arr images; a
+# container started with --user runs as that user directly. Tankarr itself
+# never runs as root.
 EXPOSE 8787
 VOLUME ["/config", "/library"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8787/api/ready || exit 1
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["tankarr"]

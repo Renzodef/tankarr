@@ -56,7 +56,7 @@ export type LibraryCountSummary = {
 
 export type AuthStatus = {
   configured: boolean;
-  method: "forms" | "basic";
+  method: "forms" | "basic" | "external";
   authenticated: boolean;
   username: string | null;
 };
@@ -1180,6 +1180,28 @@ export type WantedEntry = {
   recovery?: WantedRecovery;
   expected_count: number | null;
   expected_source: string | null;
+};
+
+export type SystemTask = {
+  id: string;
+  name: string;
+  description: string;
+  schedule: string;
+  interval_seconds: number | null;
+  enabled: boolean;
+  running: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_error: string | null;
+  last_result: unknown;
+  can_run: boolean;
+  manual: { last_run_at?: string; last_error?: string | null; duration_ms?: number | null };
+};
+
+export type SystemLogs = {
+  level: string;
+  directory: string;
+  files: { name: string; size: number; modified: string }[];
 };
 
 export type DiskInfo = {

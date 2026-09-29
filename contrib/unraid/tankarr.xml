@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>tankarr</Name>
+  <Repository>ghcr.io/renzodef/tankarr:latest</Repository>
+  <Registry>https://github.com/Renzodef/tankarr/pkgs/container/tankarr</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Renzodef/tankarr/discussions</Support>
+  <Project>https://github.com/Renzodef/tankarr</Project>
+  <Overview>Self-hosted manga, manhwa and comics manager for the *arr stack: Sonarr for manga. Follows the series you read, downloads new chapters and volumes in the language you choose through Suwayomi sources, Prowlarr indexers with qBittorrent or SABnzbd, and the Internet Archive, and files them into a clean CBZ library for Komga, Kavita, Stump or its own reader. Library, Calendar, Activity, Wanted, History, notifications, backups and health checks like the other *arr applications.&#xD;
+&#xD;
+The first start creates a login and prints it to the container log (docker logs tankarr | grep "created one"); change it under Settings &gt; Security.</Overview>
+  <Category>MediaApp:Books Downloaders:</Category>
+  <WebUI>http://[IP]:[PORT:8787]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/Renzodef/tankarr/main/contrib/unraid/tankarr.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/Renzodef/tankarr/main/docs/assets/logo.svg</Icon>
+  <ExtraParams></ExtraParams>
+  <PostArgs></PostArgs>
+  <DonateText></DonateText>
+  <DonateLink></DonateLink>
+  <Requires></Requires>
+  <Config Name="Web interface" Target="8787" Default="8787" Mode="tcp" Description="Port of the web interface and the API." Type="Port" Display="always" Required="true" Mask="false">8787</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/tankarr" Mode="rw" Description="Tankarr's own data: the database, settings, covers, caches and backups. Keep it on a disk, not on a USB stick." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tankarr</Config>
+  <Config Name="Library" Target="/library" Default="/mnt/user/data/media/comics" Mode="rw" Description="The CBZ library Tankarr writes, one folder per series. Point your reader (Komga, Kavita, Stump) at the same folder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data/media/comics</Config>
+  <Config Name="Import folder (optional)" Target="/import" Default="" Mode="ro" Description="Files you already own, for Library Import. Read access is enough." Type="Path" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="Torrent downloads (optional)" Target="/downloads" Default="" Mode="ro" Description="qBittorrent's completed folder for the tankarr category, mounted read-only so finished torrents can be imported." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Usenet downloads (optional)" Target="/usenet" Default="" Mode="ro" Description="SABnzbd's completed folder, mounted read-only so finished NZB downloads can be imported." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User the application runs as; 99 is Unraid's nobody." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group the application runs as; 100 is Unraid's users." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="UMASK" Target="UMASK" Default="022" Mode="" Description="Permissions mask of the files Tankarr writes." Type="Variable" Display="advanced" Required="false" Mask="false">022</Config>
+  <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="" Description="Time zone: log timestamps, the Calendar and the nightly maintenance window follow it." Type="Variable" Display="always" Required="false" Mask="false">Etc/UTC</Config>
+  <Config Name="URL base (optional)" Target="TANKARR_URL_BASE" Default="" Mode="" Description="Sub-path Tankarr is served under behind a reverse proxy, for example /tankarr. Empty serves the root." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Log level" Target="TANKARR_LOG_LEVEL" Default="info" Mode="" Description="debug, info, warning or error." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+</Container>

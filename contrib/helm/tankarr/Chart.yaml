@@ -1,0 +1,24 @@
+apiVersion: v2
+name: tankarr
+description: Self-hosted manga, manhwa and comics manager for the *arr stack.
+type: application
+# Chart version; appVersion is the image tag the chart deploys by default and
+# follows Tankarr's releases.
+version: 0.1.0
+appVersion: "0.9.0"
+kubeVersion: ">=1.25.0-0"
+home: https://renzodef.github.io/tankarr/
+icon: https://raw.githubusercontent.com/Renzodef/tankarr/main/docs/assets/logo.svg
+sources:
+  - https://github.com/Renzodef/tankarr
+keywords:
+  - manga
+  - comics
+  - cbz
+  - arr
+  - komga
+maintainers:
+  - name: Renzodef
+    url: https://github.com/Renzodef
+annotations:
+  artifacthub.io/license: GPL-3.0-only

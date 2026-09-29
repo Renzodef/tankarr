@@ -180,9 +180,13 @@ class MaintenanceWorker:
                 logger.exception("Nightly maintenance could not persist its status")
             await asyncio.sleep(60)
 
-    async def run_once(self, now: datetime | None = None) -> None:
+    async def run_once(
+        self, now: datetime | None = None, *, force: bool = False
+    ) -> None:
+        """One pass: nightly on its own, or every job at once when forced by hand."""
+
         now = now or datetime.now().astimezone()
-        nightly = 3 <= now.hour < 6
+        nightly = force or 3 <= now.hour < 6
         if self._lock.locked() or (not nightly and not self._state["repair_pending"]):
             return
         async with self._lock:
@@ -190,7 +194,7 @@ class MaintenanceWorker:
                 if not nightly and name != "repair":
                     continue
                 job = self._state["jobs"][name]
-                if not self._due(job, now):
+                if not force and not self._due(job, now):
                     continue
                 blocked = await asyncio.to_thread(self._blocked)
                 job["last_attempt_at"] = now.isoformat()

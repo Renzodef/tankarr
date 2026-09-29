@@ -1,5 +1,6 @@
-# Only pyproject.toml, README.md, tankarr/ and frontend/ are copied into the
-# image; keep everything else, and anything secret, out of the build context.
+# Only pyproject.toml, README.md, docker-entrypoint.sh, tankarr/ and frontend/
+# are copied into the image; keep everything else, and anything secret, out of
+# the build context.
 .git
 .github
 .githooks

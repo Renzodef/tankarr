@@ -5357,3 +5357,16 @@ select.input option {
   border-radius: 6px;
   background: rgba(127, 127, 127, 0.14);
 }
+
+/* System → Logs: the tail of the application log. */
+.log-tail {
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.1);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

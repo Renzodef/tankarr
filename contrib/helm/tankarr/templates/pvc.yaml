@@ -1,0 +1,28 @@
+{{- range $name := list "config" "library" }}
+{{- $volume := index $.Values.persistence $name }}
+{{- if and $volume.enabled (not $volume.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tankarr.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "tankarr.labels" $ | nindent 4 }}
+  annotations:
+    # The database and the library outlive the release: delete the claim
+    # yourself when you really mean it.
+    helm.sh/resource-policy: keep
+    {{- with $volume.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    - {{ $volume.accessMode }}
+  resources:
+    requests:
+      storage: {{ $volume.size }}
+  {{- if $volume.storageClass }}
+  storageClassName: {{ if eq "-" $volume.storageClass }}""{{ else }}{{ $volume.storageClass }}{{ end }}
+  {{- end }}
+{{- end }}
+{{- end }}

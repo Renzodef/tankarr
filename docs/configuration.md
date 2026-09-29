@@ -84,6 +84,14 @@ TANKARR_IMPORT_DIR=/import
 TANKARR_FRONTEND_DIR=/app/frontend/dist
 ```
 
+The image also reads four variables that Tankarr itself never sees:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PUID`, `PGID` | `1000`, `1000` | User and group the application runs as when the container starts as root: the owner of your folders. See [File permissions](installation.md#file-permissions). |
+| `UMASK` | `022` | Permissions mask of the files Tankarr writes; `002` makes them group-writable. |
+| `TZ` | `Etc/UTC` | Time zone of log timestamps, the Calendar and the nightly maintenance window. |
+
 ## Docker Compose variables
 
 The `docker-compose.yml` in the repository uses a few variables of its own.
@@ -109,6 +117,7 @@ The same file publishes the web interface on the host port given by
 | --- | --- | --- |
 | `TANKARR_HOST` | `0.0.0.0` | Address the web server listens on. `0.0.0.0` accepts connections on every interface, `127.0.0.1` only from the same machine. While it is anything other than `127.0.0.1`, `::1` or `localhost`, the Settings page refuses to remove the login. Restart required. |
 | `TANKARR_PORT` | `8787` | Port of the web interface and the API. Restart required. |
+| `TANKARR_LOG_LEVEL` | `info` | Detail of the application log: `debug`, `info`, `warning` or `error`. The console (`docker logs`) and the log file share it; the file, `logs/tankarr.log` in the data directory, rotates at 5 MB and keeps five predecessors, and System → Logs tails and downloads it. Applies at once. Settings → General (advanced). |
 | `TANKARR_URL_BASE` | *empty* | Path Tankarr is served under behind a reverse proxy, for example `/tankarr`: the interface answers at `/tankarr/`, the API at `/tankarr/api/...`, and outside the base only the health checks (`/api/health`, `/api/ready`) answer, so a container runtime need not know it. The proxy must forward the path unchanged. Empty serves everything from the root. Restart required. |
 | `TANKARR_DATA_DIR` | `data`; image: `/config` | Directory for Tankarr's own data: the database, the secrets file, covers, caches, staging space for downloads, login sessions, the managed Suwayomi server and, unless `TANKARR_BACKUP_DIRECTORY` is set, the backups. A relative path starts from the working directory. Must be writable. Restart required. |
 | `TANKARR_LIBRARY_DIR` | `data/library`; image: `/library` | The library Tankarr writes, one folder per series. Point your reader at the same folder. Must be writable. Restart required. |
@@ -323,7 +332,9 @@ Failed sign-ins are logged with the client address and slowed down after five
 attempts from the same address, up to one attempt per minute.
 
 Other applications (dashboards, scripts, a mobile client) authenticate with the
-**API key** instead of the login: they send it in the `X-Api-Key` header. The
+**API key** instead of the login: they send it in the `X-Api-Key` header, or as
+a bearer token (`Authorization: Bearer <key>`, what a Prometheus scrape can
+send). The
 key is created on the first start in `api-key` in the data directory (mode
 0600) and shown under **Settings → Security**, where it can be regenerated; the
 old key stops working at once. It grants the same access as the login, and a
@@ -335,7 +346,9 @@ curl -H "X-Api-Key: $API_KEY" http://localhost:8787/api/system/health
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TANKARR_AUTH_METHOD` | `forms` | `forms`: a login page with a session cookie that lasts 12 hours, or 30 days with **Remember me**. `basic`: the browser's own credential prompt. API clients can always use HTTP Basic authentication. Settings → Security. |
+| `TANKARR_AUTH_REQUIRED_FOR_LOCAL` | `true` | `false` lets requests from private and loopback addresses in without a login, like "Disabled for local addresses" in the other *arr applications. Behind a reverse proxy set `TANKARR_AUTH_TRUSTED_PROXIES`, so the forwarded client address is used; forwarding headers from an address Tankarr does not trust never count as local. Settings → Security. |
+| `TANKARR_AUTH_TRUSTED_PROXIES` | *empty* | Comma-separated addresses or networks (`172.18.0.2`, `10.0.0.0/8`) of the reverse proxies whose forwarded client address is believed. Required by the `external` method, which accepts requests from these addresses only. Settings → Security. |
+| `TANKARR_AUTH_METHOD` | `forms` | `forms`: a login page with a session cookie that lasts 12 hours, or 30 days with **Remember me**. `basic`: the browser's own credential prompt. `external`: a reverse proxy (Authelia, Authentik, Caddy `forward_auth`) signs users in and Tankarr accepts requests from `TANKARR_AUTH_TRUSTED_PROXIES` only, showing the name from the `Remote-User` header. API clients can always use HTTP Basic authentication or the API key. Settings → Security. |
 | `TANKARR_AUTH_USERNAME` | *unset* | Login user name; it cannot contain `:`. Set it together with the password: setting only one of the two stops Tankarr at startup. Changing it signs out existing browser sessions. Settings → Security. |
 | `TANKARR_AUTH_REQUIRED` | `true` | `false` lets an installation without credentials run with no login at all. Only for a development machine that nothing else can reach. Restart required. |
 | `TANKARR_AUTH_PASSWORD` | *unset* | Login password, at least 8 characters when set on the Settings page. The managed Suwayomi server uses the same user name and password. Secret; stored in the secrets file. Settings → Security. |

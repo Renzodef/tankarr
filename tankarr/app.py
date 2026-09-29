@@ -77,9 +77,18 @@ from tankarr.komga import KomgaClient
 from tankarr.languages import normalize_language_code
 from tankarr.library_reader import ReaderIndependentLibrary
 from tankarr.library_snapshot import changed_inputs, manga_revisions
+from tankarr.logs import (
+    apply_log_level,
+    log_directory,
+    log_files,
+    normalize_log_level,
+    tail_log,
+)
 from tankarr.maintenance import MaintenanceWorker
 from tankarr.metadata import build_metadata_sources
 from tankarr.metadata.service import MAX_ARTWORK_BYTES, MetadataService
+from tankarr.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
+from tankarr.metrics import database_samples, render_metrics
 from tankarr.models import (
     AddMangaRequest,
     AddReleaseSourceRequest,
@@ -161,7 +170,8 @@ from tankarr.suwayomi_runtime import (
     SuwayomiRuntimeError,
     default_java_executable,
 )
-from tankarr.torrents import TorrentManager
+from tankarr.tasks import ScheduledTask, TaskBusy, TaskNotRunnable, TaskRegistry
+from tankarr.torrents import ORPHAN_SWEEP_INTERVAL_SECONDS, TorrentManager
 from tankarr.updates import UpdateChecker
 from tankarr.url_base import UrlBaseMiddleware
 from tankarr.worker import DownloadWorker
@@ -4037,6 +4047,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _list_backups() -> list[dict]:
         return backups.list(limit=settings.backup_retention_count)
 
+    @app.get("/api/system/logs")
+    async def list_system_logs():
+        return {
+            "level": settings.log_level,
+            "directory": str(log_directory(settings)),
+            "files": await run_api_blocking(log_files, settings),
+        }
+
+    @app.get("/api/system/logs/tail")
+    async def tail_system_log(
+        lines: int = Query(default=200, ge=1, le=2000),
+        level: str | None = Query(default=None, max_length=10),
+    ):
+        try:
+            minimum = normalize_log_level(level) if level else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"lines": await run_api_blocking(tail_log, settings, lines, minimum)}
+
+    @app.get("/api/system/logs/{name}/download")
+    async def download_system_log(name: str):
+        # Only the names the listing shows: no path can reach outside the folder.
+        known = {item["name"] for item in await run_api_blocking(log_files, settings)}
+        path = log_directory(settings) / name
+        if name not in known or not path.is_file():
+            raise HTTPException(status_code=404, detail="Unknown log file")
+        return FileResponse(
+            path,
+            media_type="text/plain; charset=utf-8",
+            filename=name,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.post("/api/system/backup")
     async def backup_database():
         """Verified private control-plane backup; library media stay separate."""
@@ -4123,6 +4166,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         refresh = None
+        if "log_level" in applied:
+            apply_log_level(settings)
         if settings.metadata_enabled and not metadata_was_enabled:
             refresh = metadata.start_bulk_refresh(force=True)
         if {
@@ -5548,6 +5593,230 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from tankarr.translation_routes import register_translation_routes
 
     register_translation_routes(app, translations, monitor)
+
+    # ------------------------------------------------------------ tasks
+    tasks = TaskRegistry()
+
+    def _release_monitor_status() -> dict[str, Any]:
+        status = monitor.status()
+        return {
+            "enabled": bool(status["enabled"]),
+            "last_run_at": status["last_cycle_at"],
+            "last_error": status["last_cycle_error"],
+        }
+
+    def _wanted_search_status() -> dict[str, Any]:
+        status = monitor.status()["wanted_search"]
+        return {
+            "enabled": bool(status["enabled"]),
+            "running": bool(status["running"]),
+            "last_run_at": status["last_search_at"],
+            "next_run_at": status["next_search_at"],
+            "last_error": status["last_error"],
+            "last_result": status["last_result"],
+        }
+
+    def _metadata_status() -> dict[str, Any]:
+        status = metadata.status()
+        return {
+            "enabled": bool(status["enabled"]),
+            "running": bool(status["running"]),
+            "last_run_at": status["last_cycle_at"],
+            "last_error": status["last_cycle_error"],
+        }
+
+    def _download_clients_status() -> dict[str, Any]:
+        status = torrents.status()
+        return {
+            "enabled": bool(status["configured"]),
+            "last_run_at": status["last_poll_at"],
+            "last_error": status["last_error"],
+        }
+
+    def _orphan_sweep_status() -> dict[str, Any]:
+        sweep = torrents.last_orphan_sweep or {}
+        return {
+            "enabled": bool(qbittorrent.configured),
+            "last_run_at": sweep.get("at"),
+            "last_result": sweep or None,
+        }
+
+    def _maintenance_status() -> dict[str, Any]:
+        jobs = maintenance.status()["jobs"]
+        attempts = [
+            job["last_attempt_at"]
+            for job in jobs.values()
+            if job.get("last_attempt_at")
+        ]
+        errors = [job["error"] for job in jobs.values() if job.get("error")]
+        return {
+            "enabled": not settings.restored_safe_mode,
+            "running": any(job.get("status") == "running" for job in jobs.values()),
+            "last_run_at": max(attempts) if attempts else None,
+            "last_error": errors[0] if errors else None,
+            "last_result": {name: job.get("status") for name, job in jobs.items()},
+        }
+
+    def _komga_status() -> dict[str, Any]:
+        status = service.komga_refresh_status()
+        last = status.get("last_result") or {}
+        due_in = status.get("next_due_in_seconds")
+        return {
+            "enabled": bool(status["enabled"]),
+            "last_run_at": last.get("attempted_at") or last.get("completed_at"),
+            "next_run_at": (
+                (datetime.now(UTC) + timedelta(seconds=float(due_in))).isoformat(
+                    timespec="seconds"
+                )
+                if status["enabled"] and due_in is not None
+                else None
+            ),
+            "last_error": last.get("error")
+            if last and not last.get("ready", True)
+            else None,
+        }
+
+    def _update_status() -> dict[str, Any]:
+        status = updates.status()
+        return {
+            "enabled": bool(status["enabled"]),
+            "last_run_at": status["checked_at"],
+            "last_error": status["error"],
+            "last_result": {
+                "latest": status["latest"],
+                "update_available": status["update_available"],
+            },
+        }
+
+    def _suwayomi_status() -> dict[str, Any]:
+        return {
+            "enabled": bool(settings.suwayomi_managed and suwayomi_runtime.installed()),
+            "last_run_at": suwayomi_runtime.last_update_check_at,
+        }
+
+    async def _metadata_refresh_now() -> dict[str, Any]:
+        return metadata.start_bulk_refresh(force=True)
+
+    async def _komga_refresh_now() -> dict[str, Any]:
+        if not service.komga_refresh_status()["enabled"]:
+            raise RuntimeError("Komga is not configured")
+        return await service.refresh_komga_library(reason="manual")
+
+    for task in (
+        ScheduledTask(
+            "release_monitor",
+            "Release monitor",
+            "Checks monitored series for new chapters and queues them.",
+            status=_release_monitor_status,
+            run=lambda: monitor.run_cycle(),
+            interval_seconds=lambda: settings.monitor_interval_seconds,
+        ),
+        ScheduledTask(
+            "wanted_search",
+            "Wanted recovery",
+            "Searches every channel for the releases still missing from the library.",
+            status=_wanted_search_status,
+            run=lambda: monitor.search_wanted(trigger="manual"),
+            interval_seconds=lambda: settings.wanted_search_interval_seconds,
+        ),
+        ScheduledTask(
+            "metadata_refresh",
+            "Metadata refresh",
+            "Asks the catalogues again about every series whose record has aged.",
+            status=_metadata_status,
+            run=_metadata_refresh_now,
+            interval_seconds=lambda: settings.metadata_refresh_interval_hours * 3600,
+        ),
+        ScheduledTask(
+            "download_clients",
+            "Download clients",
+            "Follows the downloads handed to qBittorrent, SABnzbd and archive.org and imports the finished ones.",
+            status=_download_clients_status,
+            run=lambda: torrents.poll_once(),
+            interval_seconds=lambda: settings.torrent_poll_interval_seconds,
+        ),
+        ScheduledTask(
+            "orphan_sweep",
+            "Torrent orphan sweep",
+            "Removes Tankarr's own torrents whose download was deleted; reports foreign ones.",
+            status=_orphan_sweep_status,
+            run=lambda: torrents.sweep_orphans(),
+            interval_seconds=lambda: ORPHAN_SWEEP_INTERVAL_SECONDS,
+        ),
+        ScheduledTask(
+            "nightly_maintenance",
+            "Nightly maintenance",
+            "Backup, recycle-bin purge and the library repair check, while nothing is downloading.",
+            status=_maintenance_status,
+            run=lambda: maintenance.run_once(force=True),
+            schedule="Every night between 03:00 and 06:00",
+        ),
+        ScheduledTask(
+            "komga_refresh",
+            "Komga refresh",
+            "Scans the linked Komga library and reapplies Tankarr's metadata and covers.",
+            status=_komga_status,
+            run=_komga_refresh_now,
+            interval_seconds=lambda: settings.komga_refresh_interval_minutes * 60,
+        ),
+        ScheduledTask(
+            "update_check",
+            "Update check",
+            "Asks GitHub whether a newer Tankarr release exists.",
+            status=_update_status,
+            run=lambda: updates.check(),
+            interval_seconds=lambda: 86400,
+        ),
+        ScheduledTask(
+            "suwayomi_maintenance",
+            "Managed Suwayomi maintenance",
+            "Updates the managed Suwayomi server and its extensions when a release is out.",
+            status=_suwayomi_status,
+            run=lambda: maintain_managed_suwayomi(force=True),
+            interval_seconds=lambda: 86400,
+        ),
+    ):
+        tasks.register(task)
+
+    @app.get("/api/system/tasks")
+    async def list_system_tasks():
+        return {"tasks": tasks.snapshot()}
+
+    @app.post("/api/system/tasks/{task_id}/run")
+    async def run_system_task(task_id: str):
+        try:
+            return await tasks.run(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown task") from exc
+        except TaskBusy as exc:
+            raise HTTPException(
+                status_code=409, detail=f"{exc} is already running"
+            ) from exc
+        except TaskNotRunnable as exc:
+            raise HTTPException(
+                status_code=409, detail=f"{exc} cannot be started by hand"
+            ) from exc
+
+    def collect_metrics() -> str:
+        with database.connect() as connection:
+            counts = database_samples(connection)
+        return render_metrics(
+            counts=counts,
+            tasks=tasks.snapshot(),
+            volumes={"data": settings.data_dir, "library": settings.library_dir},
+            started_at=started_at,
+            update=updates.status(),
+            now=datetime.now(UTC).timestamp(),
+        )
+
+    @app.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics():
+        body = await run_api_blocking(collect_metrics)
+        return Response(
+            content=body,
+            media_type=METRICS_CONTENT_TYPE,
+            headers={"Cache-Control": "no-store"},
+        )
 
     frontend_dist = settings.frontend_dir or (
         Path(__file__).resolve().parent.parent / "frontend" / "dist"

@@ -1,5 +1,5 @@
 ---
-description: Install Tankarr, the self-hosted manga and comics manager, with Docker Compose or docker run on Linux, a NAS or a Raspberry Pi, or run it from source.
+description: Install Tankarr, the self-hosted manga and comics manager, with Docker Compose, docker run, the Unraid template or the Helm chart on Linux, a NAS, a Raspberry Pi or Kubernetes, or run it from source.
 ---
 
 # Installation
@@ -49,6 +49,9 @@ services:
     image: ghcr.io/renzodef/tankarr:latest
     container_name: tankarr
     environment:
+      # The user and group that own your folders (id -u and id -g on the host).
+      PUID: 1000
+      PGID: 1000
       TZ: Etc/UTC
       # Optional: choose the login yourself (see Authentication below).
       # TANKARR_AUTH_USERNAME: ${TANKARR_AUTH_USERNAME}
@@ -85,6 +88,7 @@ Tankarr from other devices on your network.
 
 ```sh
 docker run -d --name tankarr \
+  -e PUID=1000 -e PGID=1000 \
   -e TZ=Etc/UTC \
   -v /srv/tankarr/config:/config \
   -v /path/to/comics:/library \
@@ -93,6 +97,46 @@ docker run -d --name tankarr \
   --restart unless-stopped \
   ghcr.io/renzodef/tankarr:latest
 ```
+
+## Unraid
+
+The repository ships a Community Applications template,
+[`contrib/unraid/tankarr.xml`](https://github.com/Renzodef/tankarr/blob/main/contrib/unraid/tankarr.xml).
+Add `https://github.com/Renzodef/tankarr` under **Docker → Template
+repositories**, or copy the file to
+`/boot/config/plugins/dockerMan/templates-user/` on the flash drive; Tankarr
+then appears in the **Template** list of **Add Container**. The template maps
+`/config` to `/mnt/user/appdata/tankarr`, asks for the library share, offers
+read-only mounts for the import folder and the download clients' completed
+folders, and runs Tankarr as `nobody:users` (`PUID=99`, `PGID=100`) like the
+other *arr templates. Point your reader at the same library share.
+
+## Kubernetes (Helm)
+
+The repository also contains a Helm chart,
+[`contrib/helm/tankarr`](https://github.com/Renzodef/tankarr/tree/main/contrib/helm/tankarr).
+It deploys one replica (the database is SQLite on a `ReadWriteOnce` volume)
+with a `Recreate` strategy, a non-root security context, health probes on
+`/api/ready` and `/api/health`, PersistentVolumeClaims for `/config` and
+`/library` that survive `helm uninstall`, and optionally an Ingress and a
+Prometheus Operator `ServiceMonitor` for [`/metrics`](integrations.md#monitoring-prometheus).
+
+```sh
+git clone https://github.com/Renzodef/tankarr.git
+helm install tankarr tankarr/contrib/helm/tankarr \
+  --namespace tankarr --create-namespace \
+  --set persistence.library.existingClaim=comics \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=tankarr.example.com
+```
+
+Settings go in `values.yaml`: plain values under `env`, API keys and passwords
+under `secretEnv` (written to a Secret the chart owns) or in a Secret you
+manage named by `existingSecret`, all keyed by their
+[environment variable](configuration.md) names. Read the login from the pod's
+log with `kubectl logs deploy/tankarr | grep "created one"`. The chart's
+[README](https://github.com/Renzodef/tankarr/blob/main/contrib/helm/tankarr/README.md)
+lists every value.
 
 ## Authentication
 
@@ -117,19 +161,50 @@ sees the real client address, for example
 The default method, `forms`, shows a login page with a signed, HTTP-only
 session cookie and "Remember me", like the other *arr applications.
 `TANKARR_AUTH_METHOD=basic` uses the browser's credential prompt instead. API
-clients can always use HTTP Basic authentication. The method, user name and
-password can be changed later from **Settings → Security**.
+clients can always use HTTP Basic authentication or the API key. The method,
+user name and password can be changed later from **Settings → Security**.
+
+Two options match the other *arr applications' authentication settings:
+
+- `TANKARR_AUTH_REQUIRED_FOR_LOCAL=false` lets requests from your own network
+  (private and loopback addresses) in without a login. Behind a reverse proxy,
+  set `TANKARR_AUTH_TRUSTED_PROXIES` to the proxy's address so Tankarr judges
+  the forwarded client, not the proxy; forwarding headers from an address it
+  does not trust never count as local, so a proxy on the LAN cannot turn the
+  internet into local addresses.
+- `TANKARR_AUTH_METHOD=external` hands the sign-in to a reverse proxy that
+  authenticates users itself (Authelia, Authentik, Caddy `forward_auth`,
+  Traefik middlewares). Tankarr then accepts requests only from
+  `TANKARR_AUTH_TRUSTED_PROXIES` and shows the user name the proxy sends in
+  `Remote-User`. Never expose port 8787 past that proxy.
+
+```caddyfile
+tankarr.example.com {
+    forward_auth authelia:9091 {
+        uri /api/authz/forward-auth
+        copy_headers Remote-User Remote-Groups
+    }
+    reverse_proxy tankarr:8787
+}
+```
 
 ## File permissions
 
-The container runs as user and group `1000:1000`, never as root. Tankarr must
-be able to write to `/config` and `/library`, and to read `/import`,
-`/downloads` and `/usenet`.
+Tankarr never runs as root. The container starts as root only to switch to
+the `tankarr` user, whose uid and gid follow `PUID` and `PGID` (default
+`1000:1000`), hand it `/config`, and start the application as that user, the
+convention of the LinuxServer and hotio images of the other *arr
+applications. Tankarr must be able to write to `/config` and `/library`, and
+to read `/import`, `/downloads` and `/usenet`.
 
-- If your folders belong to UID/GID 1000, nothing needs to be done.
-- Otherwise run the container as the owner of your media, for example
-  `user: "1001:100"` in Compose or `--user 1001:100` with `docker run`, and
-  make sure that user can write the host folders:
+- Set `PUID` and `PGID` to the owner of your media: `id -u` and `id -g` on
+  the host, `99` and `100` on Unraid. The library is never chowned: it can be
+  huge and is shared with your reader, so its permissions stay yours.
+- `UMASK` (default `022`) sets the permissions of the files Tankarr writes;
+  `002` lets the group, for example your reader, write them too.
+- `user: "1001:100"` in Compose or `--user 1001:100` with `docker run` still
+  works: the container then starts as that user, skips the switch and changes
+  no ownership at all. Give that user write access to the host folders:
 
 ```sh
 sudo chown -R 1001:100 /srv/tankarr/config /path/to/comics

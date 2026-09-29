@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -61,6 +62,8 @@ class Settings(BaseSettings):
     port: int = 8787
     # Sub-path behind a reverse proxy ("/tankarr"); empty serves the root.
     url_base: str = ""
+    # debug, info, warning or error; the console and the log file share it.
+    log_level: str = "info"
     data_dir: Path = Path("data")
     library_dir: Path = Path("data/library")
     import_dir: Path | None = None
@@ -217,6 +220,13 @@ class Settings(BaseSettings):
     # Without a login, the first start creates one and prints it to the log.
     # false leaves an instance without credentials open: development only.
     auth_required: bool = True
+    # false: requests from private and loopback addresses skip the login, the
+    # "disabled for local addresses" of the other *arr applications.
+    auth_required_for_local: bool = True
+    # Reverse proxies whose forwarded client address is believed, as a
+    # comma-separated list of addresses or networks; the "external"
+    # authentication method accepts requests from them only.
+    auth_trusted_proxies: str = ""
     # Ask GitHub once a day whether a newer release exists (System page).
     update_check_enabled: bool = True
     ntfy_url: str | None = None
@@ -281,6 +291,13 @@ class Settings(BaseSettings):
         from tankarr.url_base import normalize_url_base
 
         return normalize_url_base(value)
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: object) -> str:
+        from tankarr.logs import normalize_log_level
+
+        return normalize_log_level(value)
 
     @field_validator("setup_completed_at")
     @classmethod
@@ -648,13 +665,39 @@ class Settings(BaseSettings):
     @classmethod
     def validate_auth_method(cls, value: str) -> str:
         normalized = value.strip().casefold()
-        if normalized not in {"forms", "basic"}:
-            raise ValueError("TANKARR_AUTH_METHOD must be 'forms' or 'basic'")
+        if normalized not in {"forms", "basic", "external"}:
+            raise ValueError(
+                "TANKARR_AUTH_METHOD must be 'forms', 'basic' or 'external'"
+            )
         return normalized
+
+    @field_validator("auth_trusted_proxies")
+    @classmethod
+    def validate_auth_trusted_proxies(cls, value: object) -> str:
+        return normalize_trusted_proxies(value)
+
+    @model_validator(mode="after")
+    def validate_external_authentication(self) -> Settings:
+        if self.auth_method == "external" and not self.auth_trusted_proxies:
+            raise ValueError(
+                "TANKARR_AUTH_METHOD=external needs TANKARR_AUTH_TRUSTED_PROXIES, "
+                "the addresses of the proxies that authenticate for Tankarr"
+            )
+        return self
 
     @property
     def auth_configured(self) -> bool:
         return bool(self.auth_username and self.auth_password)
+
+    @property
+    def trusted_proxy_networks(
+        self,
+    ) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+        return tuple(
+            ipaddress.ip_network(item, strict=False)
+            for item in self.auth_trusted_proxies.split(",")
+            if item
+        )
 
     @property
     def komga_effective_auth_method(self) -> str:
@@ -764,6 +807,28 @@ class Settings(BaseSettings):
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         if not self.restored_safe_mode:
             self.library_dir.mkdir(parents=True, exist_ok=True)
+
+
+def normalize_trusted_proxies(value: object) -> str:
+    """A canonical comma-separated list of addresses and networks."""
+
+    networks: list[str] = []
+    for item in str(value or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise ValueError(f"{item!r} is not an IP address or network") from None
+        text = (
+            str(network.network_address)
+            if network.prefixlen == network.max_prefixlen
+            else str(network)
+        )
+        if text not in networks:
+            networks.append(text)
+    return ",".join(networks)
 
 
 @lru_cache(maxsize=1)

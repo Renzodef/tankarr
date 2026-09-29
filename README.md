@@ -92,7 +92,7 @@ The full documentation lives at **<https://renzodef.github.io/tankarr/>**
 
 | Guide | What it covers |
 | --- | --- |
-| [Installation](docs/installation.md) | Docker Compose, `docker run`, folders and permissions, reverse proxy, building from source |
+| [Installation](docs/installation.md) | Docker Compose, `docker run`, Unraid, Kubernetes (Helm), folders and permissions, reverse proxy, building from source |
 | [Getting started](docs/getting-started.md) | First login, setup checklist, adding series, monitoring profiles, your first download |
 | [Configuration](docs/configuration.md) | Every `TANKARR_*` environment variable and its default |
 | [Integrations](docs/integrations.md) | Suwayomi, Prowlarr, qBittorrent, SABnzbd, Internet Archive, Komga, Kavita, Stump, ntfy |

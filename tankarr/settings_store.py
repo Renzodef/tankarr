@@ -75,7 +75,9 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "setup_completed_at": SettingSpec("optional_str", max_length=40),
     "backup_retention_count": SettingSpec("int", minimum=1, maximum=365),
     "recycle_bin_retention_days": SettingSpec("int", minimum=1, maximum=365),
-    "auth_method": SettingSpec("str", min_length=5, max_length=5),
+    "auth_method": SettingSpec("str", min_length=5, max_length=8),
+    "auth_required_for_local": SettingSpec("bool"),
+    "auth_trusted_proxies": SettingSpec("str", max_length=1_000),
     "auth_username": SettingSpec("optional_str", min_length=1, max_length=200),
     "auth_password": SettingSpec(
         "optional_str", secret=True, min_length=8, max_length=300
@@ -165,6 +167,7 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "apprise_url": SettingSpec("optional_str", max_length=500),
     "apprise_key": SettingSpec("optional_str", max_length=200),
     "apprise_urls": SettingSpec("optional_str", secret=True, max_length=2_000),
+    "log_level": SettingSpec("str", min_length=4, max_length=8),
 }
 
 
@@ -182,8 +185,12 @@ def coerce_setting(name: str, raw: str) -> Any:
             raise ValueError(f"{name} must be at most {spec.max_length} characters")
         if name == "setup_completed_at":
             return normalize_setup_completed_at(value)
-        if name == "auth_method" and value not in {"forms", "basic"}:
-            raise ValueError("auth_method must be forms or basic")
+        if name == "auth_method" and value not in {"forms", "basic", "external"}:
+            raise ValueError("auth_method must be forms, basic or external")
+        if name == "auth_trusted_proxies":
+            from tankarr.config import normalize_trusted_proxies
+
+            return normalize_trusted_proxies(value)
         if name == "komga_auth_method" and value not in {"auto", "api_key", "basic"}:
             raise ValueError("komga_auth_method must be api_key or basic")
         if name in {"default_language", "suwayomi_language"}:
@@ -212,6 +219,10 @@ def coerce_setting(name: str, raw: str) -> Any:
             )
         if name == "release_acquisition_policy":
             return normalize_acquisition_policy(value)
+        if name == "log_level":
+            from tankarr.logs import normalize_log_level
+
+            return normalize_log_level(value)
         if (
             name == "auth_username"
             and value
@@ -461,6 +472,14 @@ def _update_settings_locked(
     proposed_password = coerced.get("auth_password", settings.auth_password)
     if bool(proposed_username) != bool(proposed_password):
         raise ValueError("Authentication username and password must be set together")
+    if coerced.get(
+        "auth_method", settings.auth_method
+    ) == "external" and not coerced.get(
+        "auth_trusted_proxies", settings.auth_trusted_proxies
+    ):
+        raise ValueError(
+            "External authentication needs the addresses of the trusted proxies"
+        )
     proposed_prowlarr_enabled = coerced.get(
         "prowlarr_enabled", settings.prowlarr_enabled
     )
