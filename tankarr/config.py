@@ -809,7 +809,6 @@ class Settings(BaseSettings):
             self.library_dir.mkdir(parents=True, exist_ok=True)
 
 
-@lru_cache(maxsize=1)
 def normalize_trusted_proxies(value: object) -> str:
     """A canonical comma-separated list of addresses and networks."""
 
@@ -832,6 +831,7 @@ def normalize_trusted_proxies(value: object) -> str:
     return ",".join(networks)
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     environment = Settings()
     restored = environment.data_dir / "restored-settings.json"
