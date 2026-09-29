@@ -9,6 +9,7 @@ import type {
   SettingsPayload,
   SuwayomiSource,
 } from "../types";
+import { LOCALES, browserLocale, msg, saveLocale, storedLocale, t, tn, type LocaleChoice } from "../i18n";
 
 type FieldDef = {
   key: string;
@@ -42,16 +43,53 @@ type SettingsTab = "general" | "sources" | "indexers" | "reader" | "metadata" | 
 
 const BackupPanel = lazy(() => import("../components/BackupPanel"));
 
+/** The interface language is a browser preference, not a server setting: each
+ * browser keeps its own choice and the page reloads so every module sees one
+ * catalogue for its whole life. */
+function InterfaceLanguageSection() {
+  const [choice, setChoice] = useState<LocaleChoice>(() => storedLocale());
+  const browserLanguage = LOCALES.find((item) => item.code === browserLocale())?.name ?? "English";
+  const change = (next: LocaleChoice) => {
+    setChoice(next);
+    saveLocale(next);
+    window.location.reload();
+  };
+  return (
+    <section className="panel settings-section">
+      <h2>{t("Interface language")}</h2>
+      <p className="muted small setting-section-description">
+        {t("Stored in this browser only: every browser and device keeps its own choice. Messages from the server, log lines and file names stay in English.")}
+      </p>
+      <div className="form-row">
+        <label htmlFor="setting-interface-language">{t("Language")}</label>
+        <select
+          id="setting-interface-language"
+          className="input"
+          value={choice}
+          onChange={(event) => change(event.target.value as LocaleChoice)}
+        >
+          <option value="auto">{t("Automatic (browser language: {language})", { language: browserLanguage })}</option>
+          {LOCALES.map((item) => (
+            <option key={item.code} value={item.code}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </section>
+  );
+}
+
 const TABS: { id: SettingsTab; label: string; icon: "settings" | "search" | "download" | "external" | "library" | "alert" | "gears" }[] = [
-  { id: "general", label: "General", icon: "settings" },
-  { id: "sources", label: "Sources", icon: "search" },
-  { id: "translation", label: "Translation", icon: "library" },
-  { id: "indexers", label: "Indexers & torrents", icon: "download" },
-  { id: "reader", label: "Reader", icon: "external" },
-  { id: "metadata", label: "Metadata", icon: "library" },
-  { id: "notifications", label: "Notifications", icon: "alert" },
-  { id: "security", label: "Security", icon: "gears" },
-  { id: "data", label: "Data", icon: "gears" },
+  { id: "general", label: msg("General"), icon: "settings" },
+  { id: "sources", label: msg("Sources"), icon: "search" },
+  { id: "translation", label: msg("Translation"), icon: "library" },
+  { id: "indexers", label: msg("Indexers & torrents"), icon: "download" },
+  { id: "reader", label: msg("Reader"), icon: "external" },
+  { id: "metadata", label: msg("Metadata"), icon: "library" },
+  { id: "notifications", label: msg("Notifications"), icon: "alert" },
+  { id: "security", label: msg("Security"), icon: "gears" },
+  { id: "data", label: msg("Data"), icon: "gears" },
 ];
 
 type SectionDef = {
@@ -114,7 +152,7 @@ function CatalogSelector({
   options,
   emptyMeansAll,
   emptyMessage,
-  selectLabel = "Select available",
+  selectLabel = t("Select available"),
   id,
   labelId,
   hintId,
@@ -157,12 +195,12 @@ function CatalogSelector({
     <div id={id} className="connection-catalog" role="group" aria-labelledby={labelId} aria-describedby={hintId}>
       <div className="connection-catalog-toolbar">
         <span className="muted small">
-          {automatic ? "Automatic selection" : `${selected.size} selected`}
+          {automatic ? t("Automatic selection") : t("{count} selected", { count: selected.size })}
         </span>
         <div className="toolbar-group">
           {emptyMeansAll ? (
             <button type="button" className="btn btn-small" onClick={() => onChange("")}>
-              Use all automatically
+              {t("Use all automatically")}
             </button>
           ) : null}
           <button
@@ -207,303 +245,303 @@ function CatalogSelector({
 
 const SECTIONS: SectionDef[] = [
   {
-    title: "Translation fallback",
+    title: msg("Translation fallback"),
     group: "translation",
-    description: "Translate missing books or chapters from another language. Tankarr tries the series language first. Enable fallback here and separately in each series, then enter your AI provider settings. By default, basic OCR and lettering run on this computer, one job at a time. Docker includes the required tools; other installations need Tesseract and DejaVu fonts. The AI provider may charge for translation. Existing files remain available when fallback is switched off.",
+    description: msg("Translate missing books or chapters from another language. Tankarr tries the series language first. Enable fallback here and separately in each series, then enter your AI provider settings. By default, basic OCR and lettering run on this computer, one job at a time. Docker includes the required tools; other installations need Tesseract and DejaVu fonts. The AI provider may charge for translation. Existing files remain available when fallback is switched off."),
     fields: [
-      { key: "translation_enabled", label: "Enable translation fallback", kind: "boolean" },
-      { key: "translation_source_languages", label: "Source languages, in order", kind: "text", hint: "Use language codes separated by commas, for example original,ja,en,fr. Original uses the work’s original language when known. The requested language is skipped." },
-      { key: "translation_ai_url", label: "AI provider API base URL", kind: "url", hint: "A provider with an OpenAI-compatible chat API, including its API path when required." },
-      { key: "translation_ai_model", label: "AI model", kind: "text", hint: "Model identifier supplied by your AI provider." },
-      { key: "translation_ai_api_key", label: "AI provider API key", kind: "password", hint: "Used to translate recognized dialogue with your provider. If an external processor is configured, it also receives this key. Stored with Tankarr’s other integration secrets." },
-      { key: "translation_processor_url", label: "External processor URL (optional)", kind: "url", advanced: true, hint: "Leave empty to process on this computer. For advanced OCR and lettering, enter the HTTP(S) address of a compatible external processor. This overrides local processing." },
-      { key: "translation_processor_token", label: "External processor access token (optional)", kind: "password", advanced: true, hint: "Only needed if your external processor requires authentication. This is not your AI provider key and is unused for local processing." },
+      { key: "translation_enabled", label: msg("Enable translation fallback"), kind: "boolean" },
+      { key: "translation_source_languages", label: msg("Source languages, in order"), kind: "text", hint: msg("Use language codes separated by commas, for example original,ja,en,fr. Original uses the work’s original language when known. The requested language is skipped.") },
+      { key: "translation_ai_url", label: msg("AI provider API base URL"), kind: "url", hint: msg("A provider with an OpenAI-compatible chat API, including its API path when required.") },
+      { key: "translation_ai_model", label: msg("AI model"), kind: "text", hint: msg("Model identifier supplied by your AI provider.") },
+      { key: "translation_ai_api_key", label: msg("AI provider API key"), kind: "password", hint: msg("Used to translate recognized dialogue with your provider. If an external processor is configured, it also receives this key. Stored with Tankarr’s other integration secrets.") },
+      { key: "translation_processor_url", label: msg("External processor URL (optional)"), kind: "url", advanced: true, hint: msg("Leave empty to process on this computer. For advanced OCR and lettering, enter the HTTP(S) address of a compatible external processor. This overrides local processing.") },
+      { key: "translation_processor_token", label: msg("External processor access token (optional)"), kind: "password", advanced: true, hint: msg("Only needed if your external processor requires authentication. This is not your AI provider key and is unused for local processing.") },
     ],
   },
   {
-    title: "Retention",
+    title: msg("Retention"),
     group: "data",
     fields: [
-      { key: "backup_retention_count", label: "Backups to keep", kind: "number", hint: "Number of automatic recovery bundles to retain (default 7)." },
-      { key: "recycle_bin_retention_days", label: "Recycle bin retention (days)", kind: "number", hint: "Retired files are retained for this many days before nightly cleanup (default 7)." },
+      { key: "backup_retention_count", label: msg("Backups to keep"), kind: "number", hint: msg("Number of automatic recovery bundles to retain (default 7).") },
+      { key: "recycle_bin_retention_days", label: msg("Recycle bin retention (days)"), kind: "number", hint: msg("Retired files are retained for this many days before nightly cleanup (default 7).") },
     ],
   },
   {
-    title: "Security",
+    title: msg("Security"),
     group: "security",
     fields: [
       {
         key: "auth_method",
-        label: "Authentication method",
-        hint: "Forms shows the Tankarr login page. Basic uses the browser's credential prompt and remains available to API clients. External trusts a reverse proxy (Authelia, Authentik, Caddy forward_auth) that signs users in: requests are accepted from the trusted proxies only.",
+        label: msg("Authentication method"),
+        hint: msg("Forms shows the Tankarr login page. Basic uses the browser's credential prompt and remains available to API clients. External trusts a reverse proxy (Authelia, Authentik, Caddy forward_auth) that signs users in: requests are accepted from the trusted proxies only."),
         kind: "select",
         options: [
-          ["forms", "Forms (Login Page)"],
-          ["basic", "Basic (Browser Prompt)"],
-          ["external", "External (Reverse Proxy)"],
+          ["forms", msg("Forms (Login Page)")],
+          ["basic", msg("Basic (Browser Prompt)")],
+          ["external", msg("External (Reverse Proxy)")],
         ],
       },
       {
         key: "auth_trusted_proxies",
-        label: "Trusted proxies",
-        hint: "Comma-separated addresses or networks of your reverse proxy, for example 172.18.0.2 or 10.0.0.0/8. Required by External; also tells Tankarr which forwarded client address to believe.",
+        label: msg("Trusted proxies"),
+        hint: msg("Comma-separated addresses or networks of your reverse proxy, for example 172.18.0.2 or 10.0.0.0/8. Required by External; also tells Tankarr which forwarded client address to believe."),
         kind: "text",
       },
       {
         key: "auth_required_for_local",
-        label: "Require a login on the local network",
-        hint: "Off: requests from private and loopback addresses skip the login, like \"Disabled for local addresses\" in the other *arr applications. Behind a reverse proxy, set Trusted proxies first; forwarding headers from an untrusted address never count as local.",
+        label: msg("Require a login on the local network"),
+        hint: msg("Off: requests from private and loopback addresses skip the login, like \"Disabled for local addresses\" in the other *arr applications. Behind a reverse proxy, set Trusted proxies first; forwarding headers from an untrusted address never count as local."),
         kind: "boolean",
       },
       {
         key: "auth_username",
-        label: "Username",
-        hint: "Changing the username signs out existing browser sessions.",
+        label: msg("Username"),
+        hint: msg("Changing the username signs out existing browser sessions."),
         kind: "text",
       },
       {
         key: "auth_password",
-        label: "Password",
-        hint: "At least 8 characters. Leave the masked value unchanged to keep the current password.",
+        label: msg("Password"),
+        hint: msg("At least 8 characters. Leave the masked value unchanged to keep the current password."),
         kind: "password",
       },
     ],
   },
   {
-    title: "General",
+    title: msg("General"),
     group: "general",
     fields: [
       {
         key: "search_languages",
-        label: "Search languages",
-        hint: "Choose which translation languages appear when adding a series. English is enabled by default.",
+        label: msg("Search languages"),
+        hint: msg("Choose which translation languages appear when adding a series. English is enabled by default."),
         kind: "languages",
       },
-      { key: "default_language", label: "Default language", kind: "language" },
+      { key: "default_language", label: msg("Default language"), kind: "language" },
       {
         key: "monitor_enabled",
-        label: "Release monitoring",
-        hint: "Poll monitored remote series for newly published chapters.",
+        label: msg("Release monitoring"),
+        hint: msg("Poll monitored remote series for newly published chapters."),
         kind: "boolean",
       },
       {
         key: "log_level",
         advanced: true,
-        label: "Log level",
-        hint: "Applies at once to the console and the log file (System → Logs). Debug is verbose: use it while investigating a problem, then go back to info.",
+        label: msg("Log level"),
+        hint: msg("Applies at once to the console and the log file (System → Logs). Debug is verbose: use it while investigating a problem, then go back to info."),
         kind: "select",
         options: [
-          ["debug", "Debug"],
-          ["info", "Info"],
-          ["warning", "Warning"],
-          ["error", "Error"],
+          ["debug", msg("Debug")],
+          ["info", msg("Info")],
+          ["warning", msg("Warning")],
+          ["error", msg("Error")],
         ],
       },
       {
         key: "monitor_interval_seconds",
         advanced: true,
-        label: "Monitor interval (seconds)",
-        hint: "How often monitored series are checked for new releases (min 60).",
+        label: msg("Monitor interval (seconds)"),
+        hint: msg("How often monitored series are checked for new releases (min 60)."),
         kind: "number",
       },
       {
         key: "wanted_search_enabled",
-        label: "Scheduled Wanted recovery",
-        hint: "Periodically retry monitored releases that are still missing from the library.",
+        label: msg("Scheduled Wanted recovery"),
+        hint: msg("Periodically retry monitored releases that are still missing from the library."),
         kind: "boolean",
       },
       {
         key: "wanted_search_interval_seconds",
         advanced: true,
-        label: "Wanted recovery interval (seconds)",
-        hint: "Separate from release monitoring. Default 21600 means every 6 hours (min 900).",
+        label: msg("Wanted recovery interval (seconds)"),
+        hint: msg("Separate from release monitoring. Default 21600 means every 6 hours (min 900)."),
         kind: "number",
       },
       {
         key: "download_concurrency",
         advanced: true,
-        label: "Maximum page concurrency",
-        hint: "Adaptive ceiling (1–12). Tankarr uses latency, source errors, memory pressure and temperature to choose the effective value.",
+        label: msg("Maximum page concurrency"),
+        hint: msg("Adaptive ceiling (1–12). Tankarr uses latency, source errors, memory pressure and temperature to choose the effective value."),
         kind: "number",
       },
       {
         key: "download_pipeline_max",
         advanced: true,
-        label: "Maximum simultaneous chapters",
-        hint: "0 is automatic. Tankarr increases or reduces parallel series from live CPU, working-set memory and source/network pressure; a positive value only sets a ceiling.",
+        label: msg("Maximum simultaneous chapters"),
+        hint: msg("0 is automatic. Tankarr increases or reduces parallel series from live CPU, working-set memory and source/network pressure; a positive value only sets a ceiling."),
         kind: "number",
       },
       {
         key: "import_max_expanded_bytes",
         advanced: true,
-        label: "Expanded archive size limit (MiB)",
-        hint: "Maximum uncompressed size accepted for an import. 1024 MiB = 1 GiB; the default 16384 MiB is 16 GiB. Existing books are not changed.",
+        label: msg("Expanded archive size limit (MiB)"),
+        hint: msg("Maximum uncompressed size accepted for an import. 1024 MiB = 1 GiB; the default 16384 MiB is 16 GiB. Existing books are not changed."),
         kind: "number",
         displayDivisor: 1024 * 1024,
       },
       {
         key: "import_max_pages",
         advanced: true,
-        label: "Maximum pages per import",
-        hint: "Reject oversized imports before accepting more than this number of pages. Default: 20000 pages.",
+        label: msg("Maximum pages per import"),
+        hint: msg("Reject oversized imports before accepting more than this number of pages. Default: 20000 pages."),
         kind: "number",
       },
       {
         key: "import_subprocess_memory_mb",
         advanced: true,
-        label: "Import subprocess memory limit (MiB)",
-        hint: "Memory ceiling for an import subprocess, not a new concurrency target. Default: 1024 MiB (1 GiB).",
+        label: msg("Import subprocess memory limit (MiB)"),
+        hint: msg("Memory ceiling for an import subprocess, not a new concurrency target. Default: 1024 MiB (1 GiB)."),
         kind: "number",
       },
       {
         key: "import_disk_reserve_bytes",
         advanced: true,
-        label: "Import free-space reserve (MiB)",
-        hint: "Keep this much disk space in reserve when estimating expansion and packaging. Default: 512 MiB. Imports may be refused when space is insufficient.",
+        label: msg("Import free-space reserve (MiB)"),
+        hint: msg("Keep this much disk space in reserve when estimating expansion and packaging. Default: 512 MiB. Imports may be refused when space is insufficient."),
         kind: "number",
         displayDivisor: 1024 * 1024,
       },
     ],
   },
   {
-    title: "Download sources",
+    title: msg("Download sources"),
     group: "sources",
-    description: "Works are added from the MangaBaka catalogue; chapters come from the Suwayomi sources and Prowlarr indexers. Choose a source preference profile; automatic selection follows it for every matching chapter. Optional source lists let you refine the order.",
+    description: msg("Works are added from the MangaBaka catalogue; chapters come from the Suwayomi sources and Prowlarr indexers. Choose a source preference profile; automatic selection follows it for every matching chapter. Optional source lists let you refine the order."),
     fields: [
       {
         key: "release_acquisition_policy",
-        label: "New release policy",
-        hint: "This chooses the file only after every candidate has been mapped to the same canonical chapter. It never changes numbering or calendar dates.",
+        label: msg("New release policy"),
+        hint: msg("This chooses the file only after every candidate has been mapped to the same canonical chapter. It never changes numbering or calendar dates."),
         kind: "select",
         options: [
-          ["prefer_official", "Prefer official when available"],
-          ["first_available", "First available"],
-          ["official_only", "Official only"],
+          ["prefer_official", msg("Prefer official when available")],
+          ["first_available", msg("First available")],
+          ["official_only", msg("Official only")],
         ],
       },
       {
         key: "duplicate_cleanup_enabled",
-        label: "Remove duplicate chapter files automatically",
-        hint: "When the volume↔chapter map proves a chapter file's content is inside a book already on disk, the chapter file is quarantined and removed on the monitor's cycle (up to 10 series per cycle). Off: duplicates are only reported on the series page.",
+        label: msg("Remove duplicate chapter files automatically"),
+        hint: msg("When the volume↔chapter map proves a chapter file's content is inside a book already on disk, the chapter file is quarantined and removed on the monitor's cycle (up to 10 series per cycle). Off: duplicates are only reported on the series page."),
         kind: "boolean",
       },
       {
         key: "release_preference_profile",
-        label: "Source preference profile",
-        hint: "Balanced keeps the normal new-release/backlog ordering. Official prioritizes publishers; curated prioritizes curated scans. Language and numbering rules always apply. Explicit source lists take precedence.",
+        label: msg("Source preference profile"),
+        hint: msg("Balanced keeps the normal new-release/backlog ordering. Official prioritizes publishers; curated prioritizes curated scans. Language and numbering rules always apply. Explicit source lists take precedence."),
         kind: "select",
-        options: [["balanced", "Balanced"], ["official", "Official sources"], ["curated", "Curated scans"]],
+        options: [["balanced", msg("Balanced")], ["official", msg("Official sources")], ["curated", msg("Curated scans")]],
       },
       {
-        key: "source_priority_fresh", label: "Preferred sources for new chapters",
-        hint: "Optional ordered source names, separated by commas, for example suwayomi:mangaplus,suwayomi:weebcentral. Empty uses the profile.", kind: "text",
+        key: "source_priority_fresh", label: msg("Preferred sources for new chapters"),
+        hint: msg("Optional ordered source names, separated by commas, for example suwayomi:mangaplus,suwayomi:weebcentral. Empty uses the profile."), kind: "text",
       },
       {
-        key: "source_priority_backfill", label: "Preferred sources for backlog and upgrades",
-        hint: "Optional ordered source names. Unlisted sources remain available as fallbacks.", kind: "text",
+        key: "source_priority_backfill", label: msg("Preferred sources for backlog and upgrades"),
+        hint: msg("Optional ordered source names. Unlisted sources remain available as fallbacks."), kind: "text",
       },
       {
-        key: "source_upgrade_enabled", label: "Upgrade to preferred sources automatically",
-        hint: "Replace an owned chapter only with a strictly preferred source in the same language and numbering. The old file stays until the replacement is verified. Equal preferences, age and size never trigger replacement. When enabled, this profile also governs official upgrades.", kind: "boolean",
+        key: "source_upgrade_enabled", label: msg("Upgrade to preferred sources automatically"),
+        hint: msg("Replace an owned chapter only with a strictly preferred source in the same language and numbering. The old file stays until the replacement is verified. Equal preferences, age and size never trigger replacement. When enabled, this profile also governs official upgrades."), kind: "boolean",
       },
       {
         key: "official_upgrade_enabled",
-        label: "Upgrade to official releases",
-        hint: "Independent from the acquisition policy: replace a non-official file when the same canonical chapter later appears on the publisher platform (up to 20 per series per cycle).",
+        label: msg("Upgrade to official releases"),
+        hint: msg("Independent from the acquisition policy: replace a non-official file when the same canonical chapter later appears on the publisher platform (up to 20 per series per cycle)."),
         kind: "boolean",
       },
       {
         key: "preferred_unit",
-        label: "Preferred unit",
-        hint: "Tankarr follows whatever the sources can deliver in full: chapters or whole books. When both can complete a finished work, this preference decides; a running work follows chapters unless only books exist.",
+        label: msg("Preferred unit"),
+        hint: msg("Tankarr follows whatever the sources can deliver in full: chapters or whole books. When both can complete a finished work, this preference decides; a running work follows chapters unless only books exist."),
         kind: "select",
         options: [
-          ["volumes", "Whole volumes (books)"],
-          ["chapters", "Chapters"],
+          ["volumes", msg("Whole volumes (books)")],
+          ["chapters", msg("Chapters")],
         ],
       },
       {
         key: "special_chapters_outside_books",
-        label: "Show specials no book contains",
-        hint: "A half chapter, an omake, or a second cut of a story a source published on its own: content that was never bound into a volume. Off by default, so a shelf of books carries no rows for it. Either way it is never counted as missing.",
+        label: msg("Show specials no book contains"),
+        hint: msg("A half chapter, an omake, or a second cut of a story a source published on its own: content that was never bound into a volume. Off by default, so a shelf of books carries no rows for it. Either way it is never counted as missing."),
         kind: "boolean",
       },
     ],
   },
   {
-    title: "Suwayomi",
+    title: msg("Suwayomi"),
     group: "sources",
-    description: "Suwayomi is Tankarr's source engine: it runs Mihon/Tachiyomi-compatible extensions from the repository you configure, so Tankarr never re-implements a manga site. In Managed mode Tankarr installs and supervises the official server inside its own container; Tankarr keeps owning monitoring, downloads, CBZ creation, and library import.",
+    description: msg("Suwayomi is Tankarr's source engine: it runs Mihon/Tachiyomi-compatible extensions from the repository you configure, so Tankarr never re-implements a manga site. In Managed mode Tankarr installs and supervises the official server inside its own container; Tankarr keeps owning monitoring, downloads, CBZ creation, and library import."),
     fields: [
       {
         key: "suwayomi_enabled",
-        label: "Enabled",
-        hint: "Disabling stops Suwayomi searches and downloads immediately. Existing Suwayomi series cannot refresh or download until it is enabled again.",
+        label: msg("Enabled"),
+        hint: msg("Disabling stops Suwayomi searches and downloads immediately. Existing Suwayomi series cannot refresh or download until it is enabled again."),
         kind: "boolean",
       },
       {
         key: "suwayomi_mode",
-        label: "Mode",
-        hint: "Managed: Tankarr downloads, verifies and runs the official Suwayomi-Server JAR inside its own container. External: connect to a Suwayomi server you run yourself.",
+        label: msg("Mode"),
+        hint: msg("Managed: Tankarr downloads, verifies and runs the official Suwayomi-Server JAR inside its own container. External: connect to a Suwayomi server you run yourself."),
         kind: "select",
         options: [
-          ["managed", "Managed by Tankarr (recommended)"],
-          ["external", "External server"],
+          ["managed", msg("Managed by Tankarr (recommended)")],
+          ["external", msg("External server")],
         ],
       },
       {
         key: "suwayomi_managed_heap_mb",
         advanced: true,
-        label: "Java heap (MiB)",
-        hint: "Maximum heap for the managed server (128–1024). With the full language catalogue installed, 512 MiB is a safer floor; raise it if the log shows OutOfMemoryError.",
+        label: msg("Java heap (MiB)"),
+        hint: msg("Maximum heap for the managed server (128–1024). With the full language catalogue installed, 512 MiB is a safer floor; raise it if the log shows OutOfMemoryError."),
         kind: "number",
         visibleWhen: { key: "suwayomi_mode", equals: "managed" },
       },
       {
         key: "suwayomi_extension_store",
-        label: "Extension repository",
-        hint: "Index URL of a Mihon/Tachiyomi-compatible extension repository, usually ending in index.min.json. Tankarr ships no repository and recommends none: enter the one you trust. Applied when the managed server restarts.",
+        label: msg("Extension repository"),
+        hint: msg("Index URL of a Mihon/Tachiyomi-compatible extension repository, usually ending in index.min.json. Tankarr ships no repository and recommends none: enter the one you trust. Applied when the managed server restarts."),
         kind: "url",
         visibleWhen: { key: "suwayomi_mode", equals: "managed" },
       },
       {
         key: "suwayomi_url",
-        label: "Server URL",
-        hint: "Internal service root, for example http://suwayomi:4567. Do not append /api/graphql.",
+        label: msg("Server URL"),
+        hint: msg("Internal service root, for example http://suwayomi:4567. Do not append /api/graphql."),
         kind: "text",
         visibleWhen: { key: "suwayomi_mode", equals: "external" },
       },
       {
         key: "suwayomi_username",
-        label: "Username",
-        hint: "The login already configured in Suwayomi. Changing this does not create or modify a Suwayomi account.",
+        label: msg("Username"),
+        hint: msg("The login already configured in Suwayomi. Changing this does not create or modify a Suwayomi account."),
         kind: "text",
         visibleWhen: { key: "suwayomi_mode", equals: "external" },
       },
       {
         key: "suwayomi_password",
-        label: "Password",
-        hint: "Stored in /config/metadata.env with mode 0600 and returned only as a masked value.",
+        label: msg("Password"),
+        hint: msg("Stored in /config/metadata.env with mode 0600 and returned only as a masked value."),
         kind: "password",
         visibleWhen: { key: "suwayomi_mode", equals: "external" },
       },
       {
         key: "suwayomi_auto_install_official",
-        label: "Auto-install official extensions",
-        hint: "When a work's catalogue record names a free official platform (MANGA Plus, WEBTOON, Tapas, Comikey, Manga UP!), Tankarr installs its extension in the managed runtime and maps it as a download source.",
+        label: msg("Auto-install official extensions"),
+        hint: msg("When a work's catalogue record names a free official platform (MANGA Plus, WEBTOON, Tapas, Comikey, Manga UP!), Tankarr installs its extension in the managed runtime and maps it as a download source."),
         kind: "boolean",
         visibleWhen: { key: "suwayomi_mode", equals: "managed" },
       },
       {
         key: "suwayomi_source_ids",
-        label: "Sources",
-        hint: "Run Test & load sources, then choose installed extensions here. Automatic selection means every safe extension matching Tankarr's enabled languages, including compatible sources installed later. A manual selection stores Suwayomi's stable numeric IDs; no source-name allowlist is needed.",
+        label: msg("Sources"),
+        hint: msg("Run Test & load sources, then choose installed extensions here. Automatic selection means every safe extension matching Tankarr's enabled languages, including compatible sources installed later. A manual selection stores Suwayomi's stable numeric IDs; no source-name allowlist is needed."),
         kind: "suwayomi_sources",
       },
     ],
     providerTest: {
       name: "suwayomi",
-      label: "Test & load sources",
+      label: msg("Test & load sources"),
       keys: [
         "suwayomi_enabled",
         "search_languages",
@@ -518,52 +556,52 @@ const SECTIONS: SectionDef[] = [
     },
   },
   {
-    title: "Internet Archive (direct download)",
+    title: msg("Internet Archive (direct download)"),
     group: "indexers",
-    description: "archive.org holds whole volumes as CBZ, CBR and PDF. Tankarr searches it by the work's title, once per pass and never chapter by chapter, downloads the file itself (no torrent client) and passes it through the same identity, language and page-quality gates as any release. Ranked below every indexer: the fallback that closes \"Not obtainable\" verdicts on out-of-print works.",
+    description: msg("archive.org holds whole volumes as CBZ, CBR and PDF. Tankarr searches it by the work's title, once per pass and never chapter by chapter, downloads the file itself (no torrent client) and passes it through the same identity, language and page-quality gates as any release. Ranked below every indexer: the fallback that closes \"Not obtainable\" verdicts on out-of-print works."),
     fields: [
       {
         key: "internet_archive_enabled",
-        label: "Enabled",
-        hint: "Include archive.org in Series release search and the Wanted book search.",
+        label: msg("Enabled"),
+        hint: msg("Include archive.org in Series release search and the Wanted book search."),
         kind: "boolean",
       },
     ],
     internetArchiveTest: { keys: ["internet_archive_enabled"] },
   },
   {
-    title: "Prowlarr indexers",
+    title: msg("Prowlarr indexers"),
     group: "indexers",
-    description: "Prowlarr is used by Interactive Search on series and Wanted, and by the automatic Wanted recovery, which grabs only unambiguous matches and asks on System > To confirm otherwise. The exact release is resolved through Prowlarr, verified by info hash, and sent to qBittorrent or SABnzbd.",
+    description: msg("Prowlarr is used by Interactive Search on series and Wanted, and by the automatic Wanted recovery, which grabs only unambiguous matches and asks on System > To confirm otherwise. The exact release is resolved through Prowlarr, verified by info hash, and sent to qBittorrent or SABnzbd."),
     fields: [
       {
         key: "prowlarr_enabled",
-        label: "Enabled",
-        hint: "Enables Prowlarr for interactive release searches and for the automatic Wanted recovery.",
+        label: msg("Enabled"),
+        hint: msg("Enables Prowlarr for interactive release searches and for the automatic Wanted recovery."),
         kind: "boolean",
       },
       {
         key: "prowlarr_url",
-        label: "Server URL",
-        hint: "Internal service root, for example http://prowlarr:9696.",
+        label: msg("Server URL"),
+        hint: msg("Internal service root, for example http://prowlarr:9696."),
         kind: "text",
       },
       {
         key: "prowlarr_api_key",
-        label: "API key",
-        hint: "Copy it from Prowlarr > Settings > General > Security. It is stored in /config/metadata.env with mode 0600 and is never returned unmasked.",
+        label: msg("API key"),
+        hint: msg("Copy it from Prowlarr > Settings > General > Security. It is stored in /config/metadata.env with mode 0600 and is never returned unmasked."),
         kind: "password",
       },
       {
         key: "prowlarr_indexer_ids",
-        label: "Indexers",
-        hint: "Automatic selection uses every enabled Prowlarr indexer that advertises book, literature, manga, or comic categories.",
+        label: msg("Indexers"),
+        hint: msg("Automatic selection uses every enabled Prowlarr indexer that advertises book, literature, manga, or comic categories."),
         kind: "prowlarr_indexers",
       },
       {
         key: "prowlarr_categories",
-        label: "Categories",
-        hint: "Only these Prowlarr categories will be eligible for Tankarr searches. At least one category must remain selected.",
+        label: msg("Categories"),
+        hint: msg("Only these Prowlarr categories will be eligible for Tankarr searches. At least one category must remain selected."),
         kind: "prowlarr_categories",
       },
     ],
@@ -578,14 +616,14 @@ const SECTIONS: SectionDef[] = [
     },
   },
   {
-    title: "Metadata catalogues",
+    title: msg("Metadata catalogues"),
     group: "metadata",
-    description: "MangaBaka is the only manga catalogue Tankarr queries: it identifies the work and already aggregates MangaUpdates, AniList, MAL and Kitsu. The calendar comes from the mapped official platform's own release dates.",
+    description: msg("MangaBaka is the only manga catalogue Tankarr queries: it identifies the work and already aggregates MangaUpdates, AniList, MAL and Kitsu. The calendar comes from the mapped official platform's own release dates."),
     fields: [
       {
         key: "metadata_enabled",
-        label: "MangaBaka · Always on",
-        hint: "The whole metadata spine: identity, counts, description, official links and the MangaUpdates/AniList ids and ratings it aggregates. Use the test to check it is reachable.",
+        label: msg("MangaBaka · Always on"),
+        hint: msg("The whole metadata spine: identity, counts, description, official links and the MangaUpdates/AniList ids and ratings it aggregates. Use the test to check it is reachable."),
         testSource: "mangabaka",
         kind: "boolean",
         readOnly: true,
@@ -593,325 +631,325 @@ const SECTIONS: SectionDef[] = [
       {
         key: "metadata_refresh_interval_hours",
         advanced: true,
-        label: "Refresh interval (hours)",
-        hint: "New series are discovered promptly; existing source records are queried again only after this interval. 168 hours means weekly.",
+        label: msg("Refresh interval (hours)"),
+        hint: msg("New series are discovered promptly; existing source records are queried again only after this interval. 168 hours means weekly."),
         kind: "number",
       },
     ],
   },
   {
-    title: "Reader",
+    title: msg("Reader"),
     group: "reader",
-    description: "The built-in reader opens Tankarr's CBZ files directly and stores progress locally, with no second library or metadata scan. External readers remain optional.",
+    description: msg("The built-in reader opens Tankarr's CBZ files directly and stores progress locally, with no second library or metadata scan. External readers remain optional."),
     fields: [
       {
         key: "reader_kind",
-        label: "Reader",
-        hint: "Tankarr is ready immediately and keeps reading progress here. External readers maintain their own library and may require synchronization.",
+        label: msg("Reader"),
+        hint: msg("Tankarr is ready immediately and keeps reading progress here. External readers maintain their own library and may require synchronization."),
         kind: "select",
         options: [
-          ["tankarr", "Tankarr (built-in)"],
-          ["auto", "Automatic"],
-          ["komga", "Komga"],
-          ["kavita", "Kavita"],
-          ["stump", "Stump"],
-          ["url", "URL template"],
-          ["none", "No shortcut"],
+          ["tankarr", msg("Tankarr (built-in)")],
+          ["auto", msg("Automatic")],
+          ["komga", msg("Komga")],
+          ["kavita", msg("Kavita")],
+          ["stump", msg("Stump")],
+          ["url", msg("URL template")],
+          ["none", msg("No shortcut")],
         ],
       },
       {
         key: "reader_display_mode",
-        label: "Default reading mode",
-        hint: "Automatic uses series metadata and page shape. Manga turns pages from right to left; webtoons scroll vertically.",
+        label: msg("Default reading mode"),
+        hint: msg("Automatic uses series metadata and page shape. Manga turns pages from right to left; webtoons scroll vertically."),
         kind: "select",
         options: [
-          ["auto", "Automatic"],
-          ["manga", "Manga (right to left)"],
-          ["webtoon", "Webtoon (vertical)"],
+          ["auto", msg("Automatic")],
+          ["manga", msg("Manga (right to left)")],
+          ["webtoon", msg("Webtoon (vertical)")],
         ],
       },
       {
         key: "reader_url",
-        label: "Reader URL",
-        hint: "Browser-facing root of the reader, for example http://nas.local:5000 (Kavita) or http://nas.local:10801 (Stump).",
+        label: msg("Reader URL"),
+        hint: msg("Browser-facing root of the reader, for example http://nas.local:5000 (Kavita) or http://nas.local:10801 (Stump)."),
         kind: "text",
         visibleWhen: { key: "reader_kind", equals: "kavita" },
       },
       {
         key: "reader_url",
-        label: "Komga URL",
-        hint: "Browser-facing root of Komga, for example http://nas.local:25600. With an API key Tankarr also keeps Komga aligned (targeted scans, titles, covers) — automatically, nothing else to configure.",
+        label: msg("Komga URL"),
+        hint: msg("Browser-facing root of Komga, for example http://nas.local:25600. With an API key Tankarr also keeps Komga aligned (targeted scans, titles, covers) — automatically, nothing else to configure."),
         kind: "text",
         visibleWhen: { key: "reader_kind", equals: "komga" },
       },
       {
         key: "reader_api_key",
-        label: "Komga API key",
-        hint: "From Komga → Account → API keys. Stored in /config/metadata.env with mode 0600.",
+        label: msg("Komga API key"),
+        hint: msg("From Komga → Account → API keys. Stored in /config/metadata.env with mode 0600."),
         kind: "password",
         visibleWhen: { key: "reader_kind", equals: "komga" },
       },
       {
         key: "reader_url",
-        label: "Stump URL",
-        hint: "Browser-facing root of Stump, for example http://nas.local:10801.",
+        label: msg("Stump URL"),
+        hint: msg("Browser-facing root of Stump, for example http://nas.local:10801."),
         kind: "text",
         visibleWhen: { key: "reader_kind", equals: "stump" },
       },
       {
         key: "reader_username",
-        label: "Stump username",
-        hint: "A Stump account; Tankarr reads series and book ids to build Open and Read links.",
+        label: msg("Stump username"),
+        hint: msg("A Stump account; Tankarr reads series and book ids to build Open and Read links."),
         kind: "text",
         visibleWhen: { key: "reader_kind", equals: "stump" },
       },
       {
         key: "reader_password",
-        label: "Stump password",
-        hint: "Stored in /config/metadata.env with mode 0600.",
+        label: msg("Stump password"),
+        hint: msg("Stored in /config/metadata.env with mode 0600."),
         kind: "password",
         visibleWhen: { key: "reader_kind", equals: "stump" },
       },
       {
         key: "reader_internal_url",
-        label: "Reader URL from inside Tankarr",
-        hint: "Only if Tankarr cannot reach the browser URL from its container (typical with Docker): the service name, e.g. http://stump:10801 or http://kavita:5000.",
+        label: msg("Reader URL from inside Tankarr"),
+        hint: msg("Only if Tankarr cannot reach the browser URL from its container (typical with Docker): the service name, e.g. http://stump:10801 or http://kavita:5000."),
         kind: "text",
         advanced: true,
       },
       {
         key: "reader_library_path",
-        label: "Library path inside Stump",
-        hint: "How Stump sees Tankarr's library folder (the container mount), e.g. /data/comics. Series and books are resolved by exact folder and file paths, never by title.",
+        label: msg("Library path inside Stump"),
+        hint: msg("How Stump sees Tankarr's library folder (the container mount), e.g. /data/comics. Series and books are resolved by exact folder and file paths, never by title."),
         kind: "text",
         advanced: true,
         visibleWhen: { key: "reader_kind", equals: "stump" },
       },
       {
         key: "reader_api_key",
-        label: "Kavita API key",
-        hint: "From Kavita → Settings → Account → API key. Stored in /config/metadata.env with mode 0600.",
+        label: msg("Kavita API key"),
+        hint: msg("From Kavita → Settings → Account → API key. Stored in /config/metadata.env with mode 0600."),
         kind: "password",
         visibleWhen: { key: "reader_kind", equals: "kavita" },
       },
       {
         key: "reader_series_url_template",
-        label: "Series URL template",
-        hint: "Series shortcut only. For example https://reader.local/search?q={title} · placeholders: {title}, {title_raw}, {folder}, {id}.",
+        label: msg("Series URL template"),
+        hint: msg("Series shortcut only. For example https://reader.local/search?q={title} · placeholders: {title}, {title_raw}, {folder}, {id}."),
         kind: "text",
         visibleWhen: { key: "reader_kind", equals: "url" },
       },
     ],
   },
   {
-    title: "Torrent client (qBittorrent)",
+    title: msg("Torrent client (qBittorrent)"),
     group: "indexers",
-    description: "Used only for torrent releases found through Prowlarr: qBittorrent downloads them, Tankarr imports the files into the library once validated and leaves the torrent seeding under qBittorrent's own rules (it is removed only when you discard it from Activity). Chapters from Suwayomi never go through qBittorrent.",
+    description: msg("Used only for torrent releases found through Prowlarr: qBittorrent downloads them, Tankarr imports the files into the library once validated and leaves the torrent seeding under qBittorrent's own rules (it is removed only when you discard it from Activity). Chapters from Suwayomi never go through qBittorrent."),
     fields: [
       {
         key: "torrent_auto_import",
-        label: "Automatic import",
-        hint: "Import completed comic archives only after numbering and OCR language checks pass.",
+        label: msg("Automatic import"),
+        hint: msg("Import completed comic archives only after numbering and OCR language checks pass."),
         kind: "boolean",
       },
       {
         key: "torrent_completed_action",
-        label: "After import",
-        hint: "Keep seeding leaves the torrent to qBittorrent's ratio/time rules. Remove after import deletes torrent and files as soon as the books are in the library. Remove when seeding is done waits until qBittorrent pauses the torrent at its limits, then removes it. Torrents in Tankarr's category that no job references are removed after the grace period below.",
+        label: msg("After import"),
+        hint: msg("Keep seeding leaves the torrent to qBittorrent's ratio/time rules. Remove after import deletes torrent and files as soon as the books are in the library. Remove when seeding is done waits until qBittorrent pauses the torrent at its limits, then removes it. Torrents in Tankarr's category that no job references are removed after the grace period below."),
         kind: "select",
         options: [
-          ["seed", "Keep seeding"],
-          ["remove_after_import", "Remove after import"],
-          ["remove_when_seeded", "Remove when seeding is done"],
+          ["seed", msg("Keep seeding")],
+          ["remove_after_import", msg("Remove after import")],
+          ["remove_when_seeded", msg("Remove when seeding is done")],
         ],
       },
       {
         key: "torrent_orphan_grace_hours",
         advanced: true,
-        label: "Orphan grace period (hours)",
-        hint: "A torrent Tankarr added whose download was deleted afterwards is removed with its files after this many hours. Torrents Tankarr did not add are never removed.",
+        label: msg("Orphan grace period (hours)"),
+        hint: msg("A torrent Tankarr added whose download was deleted afterwards is removed with its files after this many hours. Torrents Tankarr did not add are never removed."),
         kind: "number",
       },
       {
         key: "qbittorrent_url",
-        label: "qBittorrent URL",
-        hint: "Internal service URL, for example http://qbittorrent:8080.",
+        label: msg("qBittorrent URL"),
+        hint: msg("Internal service URL, for example http://qbittorrent:8080."),
         kind: "text",
       },
       {
         key: "qbittorrent_public_url",
         advanced: true,
-        label: "qBittorrent link (browser)",
-        hint: "The address a browser on your network can open, for example http://nas.local:8080. Powers the shortcut on each torrent in Activity; leave blank to hide it.",
+        label: msg("qBittorrent link (browser)"),
+        hint: msg("The address a browser on your network can open, for example http://nas.local:8080. Powers the shortcut on each torrent in Activity; leave blank to hide it."),
         kind: "text",
       },
-      { key: "qbittorrent_username", label: "Username", kind: "text" },
-      { key: "qbittorrent_password", label: "Password", kind: "password" },
+      { key: "qbittorrent_username", label: msg("Username"), kind: "text" },
+      { key: "qbittorrent_password", label: msg("Password"), kind: "password" },
       {
         key: "qbittorrent_category",
         advanced: true,
-        label: "Category",
-        hint: "Tankarr owns every torrent in this qBittorrent category.",
+        label: msg("Category"),
+        hint: msg("Tankarr owns every torrent in this qBittorrent category."),
         kind: "text",
       },
     ],
   },
   {
-    title: "Usenet client (SABnzbd)",
+    title: msg("Usenet client (SABnzbd)"),
     group: "indexers",
-    description: "NZB releases found through Prowlarr (official digital volumes are common on Usenet): SABnzbd downloads them under Tankarr's category, Tankarr imports the books and removes the entry unless \"Keep seeding\" is selected above. The default paths follow the common /data/downloads layout.",
+    description: msg("NZB releases found through Prowlarr (official digital volumes are common on Usenet): SABnzbd downloads them under Tankarr's category, Tankarr imports the books and removes the entry unless \"Keep seeding\" is selected above. The default paths follow the common /data/downloads layout."),
     fields: [
       {
         key: "sabnzbd_url",
-        label: "SABnzbd URL",
-        hint: "Internal service URL, for example http://sabnzbd:8080.",
+        label: msg("SABnzbd URL"),
+        hint: msg("Internal service URL, for example http://sabnzbd:8080."),
         kind: "text",
       },
       {
         key: "sabnzbd_public_url",
         advanced: true,
-        label: "SABnzbd link (browser)",
-        hint: "The address a browser on your network can open, for example http://nas.local:8080. Powers the shortcut on each Usenet download in Activity; leave blank to hide it.",
+        label: msg("SABnzbd link (browser)"),
+        hint: msg("The address a browser on your network can open, for example http://nas.local:8080. Powers the shortcut on each Usenet download in Activity; leave blank to hide it."),
         kind: "text",
       },
-      { key: "sabnzbd_api_key", label: "API key", hint: "SABnzbd → Config → General → API Key.", kind: "password" },
+      { key: "sabnzbd_api_key", label: msg("API key"), hint: msg("SABnzbd → Config → General → API Key."), kind: "password" },
       {
         key: "sabnzbd_category",
         advanced: true,
-        label: "Category",
-        hint: "Tankarr owns every download in this SABnzbd category.",
+        label: msg("Category"),
+        hint: msg("Tankarr owns every download in this SABnzbd category."),
         kind: "text",
       },
       {
         key: "sabnzbd_complete_path",
         advanced: true,
-        label: "Completed folder (as SABnzbd sees it)",
-        hint: "SABnzbd's complete_dir, as SABnzbd sees it. Mount the same folder read-only into Tankarr and set TANKARR_USENET_DOWNLOAD_DIR to that mount.",
+        label: msg("Completed folder (as SABnzbd sees it)"),
+        hint: msg("SABnzbd's complete_dir, as SABnzbd sees it. Mount the same folder read-only into Tankarr and set TANKARR_USENET_DOWNLOAD_DIR to that mount."),
         kind: "text",
       },
     ],
   },
   {
-    title: "Notifications (events)",
+    title: msg("Notifications (events)"),
     group: "notifications",
-    description: "Notify after a verified import, a failed download, or a new decision that needs your review. Imports and decisions use normal priority; failures use high priority. Routine queue activity and searches stay quiet. These switches apply to every channel below; each channel's test sends immediately using the values shown, even before you save them.",
+    description: msg("Notify after a verified import, a failed download, or a new decision that needs your review. Imports and decisions use normal priority; failures use high priority. Routine queue activity and searches stay quiet. These switches apply to every channel below; each channel's test sends immediately using the values shown, even before you save them."),
     fields: [
       {
         key: "ntfy_on_chapter_imported",
-        label: "On chapter imported",
-        hint: "Notify after the validated CBZ has been written to the library successfully.",
+        label: msg("On chapter imported"),
+        hint: msg("Notify after the validated CBZ has been written to the library successfully."),
         kind: "boolean",
       },
       {
         key: "ntfy_on_download_failed",
-        label: "On download failed",
-        hint: "Notify with high priority when a Tankarr download job reaches Failed.",
+        label: msg("On download failed"),
+        hint: msg("Notify with high priority when a Tankarr download job reaches Failed."),
         kind: "boolean",
       },
       {
         key: "ntfy_on_decision_needed",
-        label: "On decision needed",
-        hint: "Notify once for each new match review and each Wanted item every channel has given up on (\"Not obtainable\"). Tankarr never deletes or ignores anything on its own.",
+        label: msg("On decision needed"),
+        hint: msg("Notify once for each new match review and each Wanted item every channel has given up on (\"Not obtainable\"). Tankarr never deletes or ignores anything on its own."),
         kind: "boolean",
       },
     ],
   },
   {
-    title: "Notifications (ntfy)",
+    title: msg("Notifications (ntfy)"),
     group: "notifications",
     notificationChannel: "ntfy",
-    description: "Push notifications through a public or self-hosted ntfy server.",
+    description: msg("Push notifications through a public or self-hosted ntfy server."),
     fields: [
       {
         key: "ntfy_url",
-        label: "ntfy URL",
-        hint: "Server root, for example https://ntfy.sh or your own ntfy server. On iOS, this must exactly match the ntfy app's Default Server.",
+        label: msg("ntfy URL"),
+        hint: msg("Server root, for example https://ntfy.sh or your own ntfy server. On iOS, this must exactly match the ntfy app's Default Server."),
         kind: "text",
       },
       {
         key: "ntfy_topic",
-        label: "Topic",
-        hint: "Subscribe to this exact topic on the configured server. URL and topic together enable ntfy.",
+        label: msg("Topic"),
+        hint: msg("Subscribe to this exact topic on the configured server. URL and topic together enable ntfy."),
         kind: "text",
       },
     ],
   },
   {
-    title: "Notifications (webhook)",
+    title: msg("Notifications (webhook)"),
     group: "notifications",
     notificationChannel: "webhook",
-    description: "One JSON document per event (event, title, message, priority, tags, data), by POST, for Home Assistant, n8n or a script of your own.",
+    description: msg("One JSON document per event (event, title, message, priority, tags, data), by POST, for Home Assistant, n8n or a script of your own."),
     fields: [
       {
         key: "webhook_url",
-        label: "Webhook URL",
-        hint: "Address that receives the POST requests. Empty disables the webhook.",
+        label: msg("Webhook URL"),
+        hint: msg("Address that receives the POST requests. Empty disables the webhook."),
         kind: "text",
       },
       {
         key: "webhook_token",
-        label: "Bearer token",
-        hint: "Optional. Sent as Authorization: Bearer <token> with every request.",
+        label: msg("Bearer token"),
+        hint: msg("Optional. Sent as Authorization: Bearer <token> with every request."),
         kind: "password",
       },
     ],
   },
   {
-    title: "Notifications (Discord)",
+    title: msg("Notifications (Discord)"),
     group: "notifications",
     notificationChannel: "discord",
-    description: "Events arrive as embeds in a Discord channel, red for failures.",
+    description: msg("Events arrive as embeds in a Discord channel, red for failures."),
     fields: [
       {
         key: "discord_webhook_url",
-        label: "Discord webhook URL",
-        hint: "Channel settings → Integrations → Webhooks → New webhook. The URL holds the webhook's secret, so it is stored like a password.",
+        label: msg("Discord webhook URL"),
+        hint: msg("Channel settings → Integrations → Webhooks → New webhook. The URL holds the webhook's secret, so it is stored like a password."),
         kind: "password",
       },
     ],
   },
   {
-    title: "Notifications (Telegram)",
+    title: msg("Notifications (Telegram)"),
     group: "notifications",
     notificationChannel: "telegram",
-    description: "A Telegram bot posts the events to a chat, group or channel it is a member of.",
+    description: msg("A Telegram bot posts the events to a chat, group or channel it is a member of."),
     fields: [
       {
         key: "telegram_bot_token",
-        label: "Bot token",
-        hint: "From @BotFather. Token and chat ID together enable Telegram.",
+        label: msg("Bot token"),
+        hint: msg("From @BotFather. Token and chat ID together enable Telegram."),
         kind: "password",
       },
       {
         key: "telegram_chat_id",
-        label: "Chat ID",
-        hint: "The chat the bot posts to: a number, negative for groups.",
+        label: msg("Chat ID"),
+        hint: msg("The chat the bot posts to: a number, negative for groups."),
         kind: "text",
       },
     ],
   },
   {
-    title: "Notifications (Apprise)",
+    title: msg("Notifications (Apprise)"),
     group: "notifications",
     notificationChannel: "apprise",
-    description: "An Apprise API server forwards the events to most other services: e-mail, Matrix, Pushover, Gotify, Slack and many more.",
+    description: msg("An Apprise API server forwards the events to most other services: e-mail, Matrix, Pushover, Gotify, Slack and many more."),
     fields: [
       {
         key: "apprise_url",
-        label: "Apprise server URL",
-        hint: "Root address of the apprise-api server, for example http://apprise:8000.",
+        label: msg("Apprise server URL"),
+        hint: msg("Root address of the apprise-api server, for example http://apprise:8000."),
         kind: "text",
       },
       {
         key: "apprise_key",
-        label: "Configuration key",
-        hint: "Key of a configuration stored on the server; Tankarr posts to /notify/<key>. Leave empty to send the URLs below instead.",
+        label: msg("Configuration key"),
+        hint: msg("Key of a configuration stored on the server; Tankarr posts to /notify/<key>. Leave empty to send the URLs below instead."),
         kind: "text",
       },
       {
         key: "apprise_urls",
-        label: "Notification URLs",
-        hint: "Comma-separated Apprise URLs (mailto://…, pover://…) sent with each request when no configuration key is set. Stored like a password.",
+        label: msg("Notification URLs"),
+        hint: msg("Comma-separated Apprise URLs (mailto://…, pover://…) sent with each request when no configuration key is set. Stored like a password."),
         kind: "password",
       },
     ],
@@ -1025,10 +1063,10 @@ export default function SettingsPage() {
   if (!settings)
     return loadError ? (
       <div className="panel">
-        <h2>Settings unavailable</h2>
+        <h2>{t("Settings unavailable")}</h2>
         <p className="muted">{loadError}</p>
         <button type="button" className="btn" onClick={() => void load()}>
-          <Icon name="refresh" size={14} /> Retry
+          <Icon name="refresh" size={14} /> {t("Retry")}
         </button>
       </div>
     ) : (
@@ -1047,29 +1085,29 @@ export default function SettingsPage() {
   const suwayomiSourceOptions: CatalogOption[] = suwayomiSources.map((source) => ({
     id: source.id,
     label: source.name,
-    detail: `${languageLabels.get(source.language) ?? source.language.toUpperCase()} · ID ${source.id}`,
+    detail: t("{language} · ID {id}", { language: languageLabels.get(source.language) ?? source.language.toUpperCase(), id: source.id }),
     defaultSelected: source.enabled,
     disabled: !source.allowed,
     warning: source.allowed
       ? undefined
-      : `Blocked by the current ${source.content_warning} safety classification`,
+      : t("Blocked by the current {classification} safety classification", { classification: source.content_warning }),
   }));
   const prowlarrIndexerOptions: CatalogOption[] = prowlarrIndexers.map((indexer) => ({
     id: String(indexer.id),
     label: indexer.name,
-    detail: `${indexer.protocol.toUpperCase()} · priority ${indexer.priority} · ID ${indexer.id}`,
+    detail: t("{protocol} · priority {priority} · ID {id}", { protocol: indexer.protocol.toUpperCase(), priority: indexer.priority, id: indexer.id }),
     defaultSelected: indexer.enabled && indexer.compatible,
     disabled: !indexer.enabled || !indexer.compatible,
     warning: !indexer.enabled
-      ? "Disabled in Prowlarr"
+      ? t("Disabled in Prowlarr")
       : !indexer.compatible
-        ? "No book/comic categories advertised"
+        ? t("No book/comic categories advertised")
         : undefined,
   }));
   const prowlarrCategoryOptions: CatalogOption[] = prowlarrCategories.map((category) => ({
     id: String(category.id),
     label: category.name,
-    detail: `ID ${category.id} · ${category.indexer_ids.length} indexer${category.indexer_ids.length === 1 ? "" : "s"}`,
+    detail: t("ID {id} · {indexers}", { id: category.id, indexers: tn(category.indexer_ids.length, "{count} indexer", "{count} indexers") }),
     defaultSelected: [7000, 7020, 7030].includes(category.id),
   }));
 
@@ -1099,8 +1137,8 @@ export default function SettingsPage() {
       notify(
         "success",
         result.applied.length
-          ? `Saved: ${result.applied.join(", ")}. Changes apply immediately.`
-          : "Nothing changed.",
+          ? t("Saved: {fields}. Changes apply immediately.", { fields: result.applied.join(", ") })
+          : t("Nothing changed."),
       );
       const authenticationChanged = result.applied.some((key) =>
         ["auth_method", "auth_username", "auth_password"].includes(key),
@@ -1122,7 +1160,7 @@ export default function SettingsPage() {
     setSabTest("…");
     try {
       const result = await api.testSabnzbd(pickValues(["sabnzbd_url", "sabnzbd_api_key", "sabnzbd_category", "sabnzbd_complete_path"]));
-      setSabTest(result.ok ? `OK — SABnzbd ${result.version ?? "connected"}` : `Failed: ${result.error}`);
+      setSabTest(result.ok ? t("OK — SABnzbd {version}", { version: result.version ?? t("connected") }) : t("Failed: {error}", { error: result.error }));
     } catch (caught) {
       setSabTest(String(caught));
     }
@@ -1139,7 +1177,7 @@ export default function SettingsPage() {
           "qbittorrent_category",
         ]),
       );
-      setQbitTest(result.ok ? `OK — qBittorrent ${result.version ?? "connected"}` : `Failed: ${result.error}`);
+      setQbitTest(result.ok ? t("OK — qBittorrent {version}", { version: result.version ?? t("connected") }) : t("Failed: {error}", { error: result.error }));
     } catch (caught) {
       setQbitTest(String(caught));
     }
@@ -1152,8 +1190,8 @@ export default function SettingsPage() {
       setMetadataTests((current) => ({
         ...current,
         [source]: result.ok
-          ? `OK — ${result.source ?? source} reachable${typeof result.results === "number" ? ` (${result.results} result${result.results === 1 ? "" : "s"})` : ""}.`
-          : `Failed: ${result.error}`,
+          ? t("OK — {source} reachable{results}.", { source: result.source ?? source, results: typeof result.results === "number" ? ` (${tn(result.results, "{count} result", "{count} results")})` : "" })
+          : t("Failed: {error}", { error: result.error }),
       }));
     } catch (caught) {
       setMetadataTests((current) => ({ ...current, [source]: String(caught) }));
@@ -1170,7 +1208,7 @@ export default function SettingsPage() {
       const result = await api.testDownloadProvider(provider, pickValues(keys));
       let detail = result.label ?? provider;
       if (provider === "suwayomi" && result.sources !== undefined) {
-        detail = `${result.sources} allowed ${result.language ?? ""} source${result.sources === 1 ? "" : "s"}`.trim();
+        detail = tn(result.sources, "{count} allowed {language} source", "{count} allowed {language} sources", { language: result.language ?? "" }).replace(/\s+/g, " ").trim();
         setSuwayomiSources(result.source_details ?? []);
       }
       setProviderTests((current) => ({
@@ -1187,16 +1225,19 @@ export default function SettingsPage() {
     try {
       const result = await api.testInternetArchive(pickValues(keys));
       if (!result.ok) {
-        setInternetArchiveTest(`Failed: ${result.error ?? "unknown error"} (${result.latency_ms} ms)`);
+        setInternetArchiveTest(t("Failed: {error} ({latency} ms)", { error: result.error ?? t("unknown error"), latency: result.latency_ms }));
         return;
       }
       const sample = (result.sample ?? []).slice(0, 3).join(", ");
       setInternetArchiveTest(
-        `OK — archive.org answered in ${result.latency_ms} ms; "${result.probe_title}" → ${result.items ?? 0} item${
-          result.items === 1 ? "" : "s"
-        }, ${result.releases ?? 0} book file${result.releases === 1 ? "" : "s"}${sample ? ` (${sample})` : ""}${
-          result.enabled ? "" : " · currently disabled"
-        }`,
+        t("OK — archive.org answered in {latency} ms; “{probe}” → {items}, {files}{sample}{disabled}", {
+          latency: result.latency_ms,
+          probe: result.probe_title,
+          items: tn(result.items ?? 0, "{count} item", "{count} items"),
+          files: tn(result.releases ?? 0, "{count} book file", "{count} book files"),
+          sample: sample ? ` (${sample})` : "",
+          disabled: result.enabled ? "" : " · " + t("currently disabled"),
+        }),
       );
     } catch (caught) {
       setInternetArchiveTest(String(caught));
@@ -1210,13 +1251,13 @@ export default function SettingsPage() {
     try {
       const result = await api.testProwlarr(pickValues(keys));
       if (!result.ok) {
-        setProwlarrTest(`Failed: ${result.error ?? "unknown error"}`);
+        setProwlarrTest(t("Failed: {error}", { error: result.error ?? t("unknown error") }));
         return;
       }
       setProwlarrIndexers(result.indexers ?? []);
       setProwlarrCategories(result.categories ?? []);
       setProwlarrTest(
-        `OK — Prowlarr ${result.version ?? "connected"}; ${result.compatible_indexers ?? 0} compatible of ${result.enabled_indexers ?? 0} enabled indexers`,
+        t("OK — Prowlarr {version}; {compatible} compatible of {enabled} enabled indexers", { version: result.version ?? t("connected"), compatible: result.compatible_indexers ?? 0, enabled: result.enabled_indexers ?? 0 }),
       );
     } catch (caught) {
       setProwlarrTest(String(caught));
@@ -1228,27 +1269,27 @@ export default function SettingsPage() {
     try {
       const result = await api.testKomga(pickValues(keys));
       if (!result.ok) {
-        setKomgaTest(`Failed: ${result.error ?? "unknown error"}`);
+        setKomgaTest(t("Failed: {error}", { error: result.error ?? t("unknown error") }));
         return;
       }
       const library = result.library_name
         ? `${result.library_name}${result.library_id ? ` (${result.library_id})` : ""}`
-        : result.library_id ?? "library connected";
+        : result.library_id ?? t("library connected");
       const counts = [
         result.series_count === undefined
           ? null
-          : `${result.series_count} series`,
+          : tn(result.series_count, "{count} series", "{count} series"),
         result.book_count === undefined
           ? null
-          : `${result.book_count} books`,
+          : tn(result.book_count, "{count} book", "{count} books"),
       ].filter(Boolean);
       const authentication = result.auth_method === "api_key"
-        ? "API key"
+        ? t("API key")
         : result.auth_method === "basic"
-          ? "username/password"
+          ? t("username/password")
           : null;
       setKomgaTest(
-        `OK — ${library}${authentication ? ` · ${authentication}` : ""}${counts.length ? ` · ${counts.join(" · ")}` : ""}`,
+        t("OK — {summary}", { summary: [library, authentication, ...counts].filter(Boolean).join(" · ") }),
       );
     } catch (caught) {
       setKomgaTest(String(caught));
@@ -1259,16 +1300,16 @@ export default function SettingsPage() {
     if (!apiKey) return;
     try {
       await navigator.clipboard.writeText(apiKey);
-      notify("success", "API key copied to the clipboard.");
+      notify("success", t("API key copied to the clipboard."));
     } catch {
-      notify("error", "Copying failed: show the key and copy it by hand.");
+      notify("error", t("Copying failed: show the key and copy it by hand."));
     }
   };
 
   const regenerateApiKey = async () => {
     if (
       !window.confirm(
-        "Regenerate the API key? Every application using the current key stops working until it gets the new one.",
+        t("Regenerate the API key? Every application using the current key stops working until it gets the new one."),
       )
     ) {
       return;
@@ -1278,7 +1319,7 @@ export default function SettingsPage() {
       const result = await api.regenerateApiKey();
       setApiKey(result.api_key);
       setApiKeyVisible(true);
-      notify("success", "A new API key is in use; the old one no longer works.");
+      notify("success", t("A new API key is in use; the old one no longer works."));
     } catch (caught) {
       notify("error", String(caught));
     } finally {
@@ -1293,15 +1334,15 @@ export default function SettingsPage() {
     try {
       const result = await api.testNotificationChannel(channel, pickValues(NOTIFICATION_CHANNEL_KEYS[channel] ?? []));
       if (!result.ok) {
-        const message = `Failed: ${result.error ?? "unknown error"}`;
+        const message = t("Failed: {error}", { error: result.error ?? t("unknown error") });
         setResult(message);
         notify("error", message);
         return;
       }
       const message =
         channel === "ntfy"
-          ? `Sent — ntfy accepted the test for topic ${result.topic ?? values.ntfy_topic}.`
-          : `Sent — the test notification was accepted (HTTP ${result.status_code ?? 200}).`;
+          ? t("Sent — ntfy accepted the test for topic {topic}.", { topic: result.topic ?? values.ntfy_topic })
+          : t("Sent — the test notification was accepted (HTTP {status}).", { status: result.status_code ?? 200 });
       setResult(message);
       notify("success", message);
     } catch (caught) {
@@ -1317,7 +1358,7 @@ export default function SettingsPage() {
       const result = await api.testReader(
         pickValues(["reader_kind", "reader_url", "reader_internal_url", "reader_api_key", "reader_username", "reader_password", "reader_library_path", "reader_series_url_template"]),
       );
-      setReaderTest(result.ok ? `OK — ${result.detail}` : `Failed: ${result.error}`);
+      setReaderTest(result.ok ? t("OK — {detail}", { detail: result.detail }) : t("Failed: {error}", { error: result.error }));
     } catch (caught) {
       setReaderTest(String(caught));
     }
@@ -1355,10 +1396,10 @@ export default function SettingsPage() {
       }).length;
       setValues((current) => ({ ...current, ...discovered }));
       const action = needsSave
-        ? `${filled} field${filled === 1 ? "" : "s"} filled; review and save.`
+        ? tn(filled, "{count} field filled; review and save.", "{count} fields filled; review and save.")
         : filled
-          ? `${filled} field${filled === 1 ? "" : "s"} restored; they match the saved settings, so no save is needed.`
-          : "The form already matches; no save is needed.";
+          ? tn(filled, "{count} field restored; it matches the saved settings, so no save is needed.", "{count} fields restored; they match the saved settings, so no save is needed.")
+          : t("The form already matches; no save is needed.");
       const message = `${selected.detail}. ${action}`;
       setReaderDiscovery(message);
       notify("success", message);
@@ -1383,10 +1424,10 @@ export default function SettingsPage() {
   return (
     <div className="page">
       <div className="toolbar">
-        <h1 className="page-title">Settings</h1>
-        <label className="setting-toggle settings-advanced-switch" title="Show rarely needed settings (intervals, ports, internal URLs). Remembered on this browser.">
+        <h1 className="page-title">{t("Settings")}</h1>
+        <label className="setting-toggle settings-advanced-switch" title={t("Show rarely needed settings (intervals, ports, internal URLs). Remembered on this browser.")}>
           <input type="checkbox" checked={showAdvanced} onChange={toggleAdvanced} />
-          <span>Show advanced</span>
+          <span>{t("Show advanced")}</span>
         </label>
         <button
           type="button"
@@ -1394,25 +1435,24 @@ export default function SettingsPage() {
           disabled={saving || dirtyKeys.length === 0}
           onClick={() => void save()}
         >
-          <Icon name="check" /> {saving ? "Saving…" : "Save Changes"}
+          <Icon name="check" /> {saving ? t("Saving…") : t("Save Changes")}
         </button>
       </div>
       <p className="muted small">
-        Values set here are stored in the database and override the container environment.
-        Sensitive credentials are stored separately in <span className="mono">/config/metadata.env</span>
-        {" "}with restricted permissions and are never returned unmasked. Clear a field to remove its override.
+        {t("Values set here are stored in the database and override the container environment. Sensitive credentials are stored separately in")} <span className="mono">/config/metadata.env</span>
+        {" "}{t("with restricted permissions and are never returned unmasked. Clear a field to remove its override.")}
       </p>
       <div className="settings-layout">
-        <label className="mobile-settings-section">Settings section
-          <select className="input" aria-label="Settings section" value={activeTab} onChange={(event) => {
+        <label className="mobile-settings-section">{t("Settings section")}
+          <select className="input" aria-label={t("Settings section")} value={activeTab} onChange={(event) => {
             const tab = event.target.value as SettingsTab;
             window.location.hash = `/settings?tab=${tab}`;
             setActiveTab(tab);
           }}>
-            {TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
+            {TABS.map((tab) => <option key={tab.id} value={tab.id}>{t(tab.label)}</option>)}
           </select>
         </label>
-        <nav className="settings-nav" aria-label="Settings sections">
+        <nav className="settings-nav" aria-label={t("Settings sections")}>
           {TABS.map((tab) => {
             const dirtyInTab = SECTIONS.filter((section) => section.group === tab.id).some((section) =>
               section.fields.some((field) => dirtyKeys.includes(field.key)),
@@ -1425,22 +1465,23 @@ export default function SettingsPage() {
                 aria-current={activeTab === tab.id ? "page" : undefined}
                 onClick={() => { window.location.hash = `/settings?tab=${tab.id}`; setActiveTab(tab.id); }}
               >
-                <Icon name={tab.icon} size={16} /> <span>{tab.label}</span>
-                {dirtyInTab ? <span className="settings-nav-dot" aria-label="Unsaved changes" /> : null}
+                <Icon name={tab.icon} size={16} /> <span>{t(tab.label)}</span>
+                {dirtyInTab ? <span className="settings-nav-dot" aria-label={t("Unsaved changes")} /> : null}
               </button>
             );
           })}
         </nav>
         <div className="settings-content">
+        {activeTab === "general" ? <InterfaceLanguageSection /> : null}
         {activeTab === "data" ? <Suspense fallback={<Spinner />}><BackupPanel /></Suspense> : null}
         {SECTIONS.filter((section) => section.group === activeTab).map((section) => (
           <section key={section.title} className="panel settings-section">
-            <h2>{section.title}</h2>
-            {section.description ? <p className="muted small setting-section-description">{section.description}</p> : null}
+            <h2>{t(section.title)}</h2>
+            {section.description ? <p className="muted small setting-section-description">{t(section.description)}</p> : null}
             {section.group === "translation" ? <p className="muted small" role="status">
               {values.translation_processor_url?.trim()
-                ? "Processing: external service. Open Advanced settings to change it or clear its URL to use this computer."
-                : "Processing: this computer. No processor URL or access token is required. Basic lettering uses white text boxes; complex pages may need an external processor in Advanced settings."}
+                ? t("Processing: external service. Open Advanced settings to change it or clear its URL to use this computer.")
+                : t("Processing: this computer. No processor URL or access token is required. Basic lettering uses white text boxes; complex pages may need an external processor in Advanced settings.")}
             </p> : null}
             {section.fields.map((field) => {
               if (
@@ -1455,7 +1496,7 @@ export default function SettingsPage() {
               return (
                 <div key={field.key} className="form-row">
                   <label id={`${fieldId}-label`} htmlFor={fieldId}>
-                    {field.label}{" "}
+                    {t(field.label)}{" "}
 
                   </label>
                   {field.kind === "language" ? (
@@ -1470,7 +1511,7 @@ export default function SettingsPage() {
                     >
                       {LANGUAGES.filter(([code]) => selectedSearchLanguages.includes(code)).map(([code, label]) => (
                         <option key={code} value={code}>
-                          {label}
+                          {t(label)}
                         </option>
                       ))}
                     </select>
@@ -1485,7 +1526,7 @@ export default function SettingsPage() {
                               checked={checked}
                               onChange={(event) => toggleSearchLanguage(code, event.target.checked)}
                             />
-                            <span>{label}</span>
+                            <span>{t(label)}</span>
                             <code>{code}</code>
                           </label>
                         );
@@ -1499,7 +1540,7 @@ export default function SettingsPage() {
                       value={values[field.key] ?? ""}
                       options={suwayomiSourceOptions}
                       emptyMeansAll
-                      emptyMessage="Run Test & load sources below to discover installed Suwayomi extensions."
+                      emptyMessage={t("Run Test & load sources below to discover installed Suwayomi extensions.")}
                       onChange={(value) =>
                         setValues((current) => ({ ...current, [field.key]: value }))
                       }
@@ -1512,7 +1553,7 @@ export default function SettingsPage() {
                       value={values[field.key] ?? ""}
                       options={prowlarrIndexerOptions}
                       emptyMeansAll
-                      emptyMessage="Run Test & load indexers below to discover Prowlarr indexers."
+                      emptyMessage={t("Run Test & load indexers below to discover Prowlarr indexers.")}
                       onChange={(value) =>
                         setValues((current) => ({ ...current, [field.key]: value }))
                       }
@@ -1525,8 +1566,8 @@ export default function SettingsPage() {
                       value={values[field.key] ?? ""}
                       options={prowlarrCategoryOptions}
                       emptyMeansAll={false}
-                      emptyMessage="Run Test & load indexers below to discover compatible categories."
-                      selectLabel="Select recommended"
+                      emptyMessage={t("Run Test & load indexers below to discover compatible categories.")}
+                      selectLabel={t("Select recommended")}
                       onChange={(value) =>
                         setValues((current) => ({ ...current, [field.key]: value }))
                       }
@@ -1543,7 +1584,7 @@ export default function SettingsPage() {
                     >
                       {(field.options ?? []).map(([value, label]) => (
                         <option key={value} value={value}>
-                          {label}
+                          {t(label)}
                         </option>
                       ))}
                     </select>
@@ -1563,7 +1604,7 @@ export default function SettingsPage() {
                           }))
                         }
                       />
-                      <span>{(values[field.key] ?? "false") === "true" ? "Enabled" : "Disabled"}</span>
+                      <span>{(values[field.key] ?? "false") === "true" ? t("Enabled") : t("Disabled")}</span>
                     </label>
                   ) : (
                     <input
@@ -1580,7 +1621,7 @@ export default function SettingsPage() {
                       }
                     />
                   )}
-                  {field.hint ? <p id={hintId} className="muted small">{field.hint}</p> : null}
+                  {field.hint ? <p id={hintId} className="muted small">{t(field.hint)}</p> : null}
                   {field.helpUrl || field.testSource ? (
                     <div className="setting-field-actions">
                       {field.helpUrl ? (
@@ -1590,7 +1631,7 @@ export default function SettingsPage() {
                           target="_blank"
                           rel="noreferrer"
                         >
-                          <Icon name="external" size={14} /> {field.helpLabel ?? "Instructions"}
+                          <Icon name="external" size={14} /> {t(field.helpLabel ?? msg("Instructions"))}
                         </a>
                       ) : null}
                       {field.testSource ? (
@@ -1600,7 +1641,7 @@ export default function SettingsPage() {
                           disabled={metadataTests[field.testSource] === "…"}
                           onClick={() => void testMetadata(field.testSource!, field.key)}
                         >
-                          <Icon name="check" size={14} /> {field.kind === "boolean" ? "Test connection" : "Test current value"}
+                          <Icon name="check" size={14} /> {field.kind === "boolean" ? t("Test connection") : t("Test current value")}
                         </button>
                       ) : null}
                       {field.testSource && metadataTests[field.testSource] ? (
@@ -1624,7 +1665,7 @@ export default function SettingsPage() {
                     section.providerTest!.keys,
                   )}
                 >
-                  <Icon name="check" size={14} /> {section.providerTest.label}
+                  <Icon name="check" size={14} /> {t(section.providerTest.label)}
                 </button>
                 {providerTests[section.providerTest.name] ? (
                   <p className="muted small setting-test-result">
@@ -1641,7 +1682,7 @@ export default function SettingsPage() {
                   disabled={readerDiscovery === "…" || readerTest === "…"}
                   onClick={() => void discoverReader()}
                 >
-                  <Icon name="search" size={14} /> Discover reader
+                  <Icon name="search" size={14} /> {t("Discover reader")}
                 </button>
                 <button
                   type="button"
@@ -1649,12 +1690,12 @@ export default function SettingsPage() {
                   disabled={readerTest === "…" || readerDiscovery === "…"}
                   onClick={() => void testReader()}
                 >
-                  <Icon name="check" size={14} /> Test reader connection
+                  <Icon name="check" size={14} /> {t("Test reader connection")}
                 </button>
                 {readerDiscovery || readerTest ? (
                   <p className="muted small setting-test-result" aria-live="polite">
                     {readerDiscovery === "…"
-                      ? "Searching configured and local Docker routes…"
+                      ? t("Searching configured and local Docker routes…")
                       : readerDiscovery ?? readerTest}
                   </p>
                 ) : null}
@@ -1663,7 +1704,7 @@ export default function SettingsPage() {
             {section.title === "Usenet client (SABnzbd)" ? (
               <div className="form-row setting-test-row">
                 <button type="button" className="btn btn-small" disabled={sabTest === "…"} onClick={() => void testSab()}>
-                  <Icon name="check" size={14} /> Test connection
+                  <Icon name="check" size={14} /> {t("Test connection")}
                 </button>
                 {sabTest ? <p className="muted small setting-test-result">{sabTest}</p> : null}
               </div>
@@ -1676,7 +1717,7 @@ export default function SettingsPage() {
                   disabled={qbitTest === "…"}
                   onClick={() => void testQbit()}
                 >
-                  <Icon name="check" size={14} /> Test connection
+                  <Icon name="check" size={14} /> {t("Test connection")}
                 </button>
                 {qbitTest ? <p className="muted small setting-test-result">{qbitTest}</p> : null}
               </div>
@@ -1704,7 +1745,7 @@ export default function SettingsPage() {
                   disabled={internetArchiveTest === "…"}
                   onClick={() => void testInternetArchive(section.internetArchiveTest!.keys)}
                 >
-                  <Icon name="check" size={14} /> Test archive.org
+                  <Icon name="check" size={14} /> {t("Test archive.org")}
                 </button>
                 {internetArchiveTest ? (
                   <p className="muted small setting-test-result">{internetArchiveTest}</p>
@@ -1719,7 +1760,7 @@ export default function SettingsPage() {
                   disabled={prowlarrTest === "…"}
                   onClick={() => void testProwlarr(section.prowlarrTest!.keys)}
                 >
-                  <Icon name="check" size={14} /> Test & load indexers
+                  <Icon name="check" size={14} /> {t("Test & load indexers")}
                 </button>
                 {prowlarrTest ? (
                   <p className="muted small setting-test-result">{prowlarrTest}</p>
@@ -1734,11 +1775,11 @@ export default function SettingsPage() {
                   disabled={komgaTest === "…"}
                   onClick={() => void testKomga(section.komgaTest!.keys)}
                 >
-                  <Icon name="check" size={14} /> Test connection
+                  <Icon name="check" size={14} /> {t("Test connection")}
                 </button>
                 {values.komga_url?.trim() ? (
                   <a className="btn btn-small" href={values.komga_url.trim()} target="_blank" rel="noreferrer">
-                    <Icon name="external" size={14} /> Open Komga
+                    <Icon name="external" size={14} /> {t("Open Komga")}
                   </a>
                 ) : null}
                 {komgaTest ? (
@@ -1748,23 +1789,23 @@ export default function SettingsPage() {
             ) : null}
             {section.title === "Security" ? (
               <div className="api-key-block">
-                <strong>API key</strong>
+                <strong>{t("API key")}</strong>
                 <p className="muted small">
-                  Lets other applications (dashboards, scripts, mobile clients) use the API without your login: they send it in the{" "}
-                  <code>X-Api-Key</code> header. It grants the same access as the login, so treat it like the password and regenerate it if it leaks.
+                  {t("Lets other applications (dashboards, scripts, mobile clients) use the API without your login: they send it in the")}{" "}
+                  <code>X-Api-Key</code> {t("header. It grants the same access as the login, so treat it like the password and regenerate it if it leaks.")}
                 </p>
                 <div className="form-row setting-test-row">
-                  <code className="api-key-value" aria-label="API key">
+                  <code className="api-key-value" aria-label={t("API key")}>
                     {apiKey === null ? "…" : apiKeyVisible ? apiKey : "•".repeat(32)}
                   </code>
                   <button type="button" className="btn btn-small" disabled={!apiKey} onClick={() => setApiKeyVisible((visible) => !visible)}>
-                    {apiKeyVisible ? "Hide" : "Show"}
+                    {apiKeyVisible ? t("Hide") : t("Show")}
                   </button>
                   <button type="button" className="btn btn-small" disabled={!apiKey} onClick={() => void copyApiKey()}>
-                    Copy
+                    {t("Copy")}
                   </button>
                   <button type="button" className="btn btn-small" disabled={apiKeyBusy} onClick={() => void regenerateApiKey()}>
-                    <Icon name="refresh" size={14} /> Regenerate
+                    <Icon name="refresh" size={14} /> {t("Regenerate")}
                   </button>
                 </div>
               </div>
@@ -1777,7 +1818,7 @@ export default function SettingsPage() {
                   disabled={notificationTests[section.notificationChannel] === "…"}
                   onClick={() => void testNotification(section.notificationChannel!)}
                 >
-                  <Icon name="check" size={14} /> Send test notification
+                  <Icon name="check" size={14} /> {t("Send test notification")}
                 </button>
                 {notificationTests[section.notificationChannel] ? (
                   <p className="muted small setting-test-result">{notificationTests[section.notificationChannel]}</p>
@@ -1791,14 +1832,14 @@ export default function SettingsPage() {
       {dirtyKeys.length ? (
         <div className="settings-save-bar" role="status">
           <span>
-            <strong>{dirtyKeys.length}</strong> unsaved change{dirtyKeys.length === 1 ? "" : "s"}
+            <strong>{dirtyKeys.length}</strong> {dirtyKeys.length === 1 ? t("unsaved change") : t("unsaved changes")}
           </span>
           <div className="toolbar-group">
             <button type="button" className="btn" disabled={saving} onClick={discard}>
-              Discard
+              {t("Discard")}
             </button>
             <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void save()}>
-              <Icon name="check" /> {saving ? "Saving…" : "Apply Changes"}
+              <Icon name="check" /> {saving ? t("Saving…") : t("Apply Changes")}
             </button>
           </div>
         </div>

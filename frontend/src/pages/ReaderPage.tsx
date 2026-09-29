@@ -3,6 +3,7 @@ import { api } from "../api";
 import { Icon, Spinner, navigate } from "../components";
 import { serverUrl } from "../serverUrl";
 import type { ReaderBook } from "../types";
+import { t } from "../i18n";
 
 function pageUrl(id: string, index: number, version?: string): string {
   const path = serverUrl(`/api/reader/books/${encodeURIComponent(id)}/pages/${index}`);
@@ -222,9 +223,9 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
   if (error && !book) {
     return (
       <div className="reader-error">
-        <h1>Unable to open this book</h1>
+        <h1>{t("Unable to open this book")}</h1>
         <p>{error}</p>
-        <button className="btn" type="button" onClick={() => window.history.back()}>Go back</button>
+        <button className="btn" type="button" onClick={() => window.history.back()}>{t("Go back")}</button>
       </div>
     );
   }
@@ -235,36 +236,36 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
   const verticalSlider = displayMode === "webtoon" && !compactControls;
   const readingDirection = book.reading_direction ?? "rtl";
   const previousLabel = displayMode === "webtoon"
-    ? "↑ Previous"
-    : readingDirection === "ltr" ? "← Previous" : "Previous →";
+    ? t("↑ Previous")
+    : readingDirection === "ltr" ? t("← Previous") : t("Previous →");
   const nextLabel = displayMode === "webtoon"
-    ? "Next ↓"
-    : readingDirection === "ltr" ? "Next →" : "← Next";
+    ? t("Next ↓")
+    : readingDirection === "ltr" ? t("Next →") : t("← Next");
   return (
     <section className={`native-reader ${displayMode}`} aria-label={`${book.series_title}, ${book.book_title}`}>
       <BackgroundPagePreload key={`${id}-${book.page_version ?? ""}`} id={id} version={book.page_version} pageCount={book.page_count} page={page} ready={preloadReady} />
       <header className="reader-toolbar">
-        <a href={`#/series/${encodeURIComponent(book.manga_id)}`} className="reader-back" title="Back to series">
+        <a href={`#/series/${encodeURIComponent(book.manga_id)}`} className="reader-back" title={t("Back to series")}>
           <span aria-hidden="true">←</span>
           <span className="reader-title"><strong>{book.series_title}</strong><small>{book.book_title}</small></span>
         </a>
         <div className="reader-actions">
           <button className="reader-tool" type="button" onClick={() => setFitWidth((value) => !value)} aria-pressed={fitWidth}>
-            {fitWidth ? "Fit page" : "Fit width"}
+            {fitWidth ? t("Fit page") : t("Fit width")}
           </button>
           <button className="reader-tool" type="button" onClick={() => {
             setPreloadReady(false);
             setDisplayMode((value) => value === "manga" ? "webtoon" : "manga");
           }}>
-            {displayMode === "manga" ? `Pages · ${readingDirection.toUpperCase()}` : "Webtoon · Vertical"}
+            {displayMode === "manga" ? t("Pages · {direction}", { direction: readingDirection.toUpperCase() }) : t("Webtoon · Vertical")}
           </button>
           <button className={`reader-tool${currentBookmark ? " active" : ""}`} type="button" onClick={() => void toggleBookmark()} disabled={savingBookmark} aria-pressed={currentBookmark}>
-            <Icon name="bookmark" size={16} /> {savingBookmark ? "Saving…" : currentBookmark ? "Remove bookmark" : "Save bookmark"}
+            <Icon name="bookmark" size={16} /> {savingBookmark ? t("Saving…") : currentBookmark ? t("Remove bookmark") : t("Save bookmark")}
           </button>
           <span className="reader-bookmark-status" role="status">
             {book.bookmarked && book.bookmark_page_index !== null
-              ? `Bookmark saved · ${book.book_title} · page ${book.bookmark_page_index + 1}`
-              : "No bookmark in this book"}
+              ? t("Bookmark saved · {book} · page {page}", { book: book.book_title, page: book.bookmark_page_index + 1 })
+              : t("No bookmark in this book")}
           </span>
           <span className="reader-counter">{sliderPage + 1} / {book.page_count}</span>
         </div>
@@ -273,17 +274,17 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
       <div ref={canvasRef} className={`reader-canvas ${displayMode} ${readingDirection}${fitWidth ? " fit-width" : ""}`}>
         {displayMode === "manga" ? (
           <>
-            <button className="reader-hit reader-hit-next" type="button" aria-label="Next page" disabled={page + 1 === book.page_count} onClick={() => move(1)} />
+            <button className="reader-hit reader-hit-next" type="button" aria-label={t("Next page")} disabled={page + 1 === book.page_count} onClick={() => move(1)} />
             <img
               key={`${id}-${book.page_version ?? ""}-${page}`}
               src={pageUrl(id, page, book.page_version)}
-              alt={`Page ${page + 1} of ${book.page_count}`}
+              alt={t("Page {page} of {total}", { page: page + 1, total: book.page_count })}
               fetchPriority="high"
               decoding="async"
               onLoad={() => { preloadNearbyPages(page, book.page_count, book.page_version); setPreloadReady(true); }}
               draggable={false}
             />
-            <button className="reader-hit reader-hit-previous" type="button" aria-label="Previous page" disabled={page === 0} onClick={() => move(-1)} />
+            <button className="reader-hit reader-hit-previous" type="button" aria-label={t("Previous page")} disabled={page === 0} onClick={() => move(-1)} />
           </>
         ) : Array.from({ length: book.page_count }, (_, index) => (
           <img
@@ -296,7 +297,7 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
               }
             }}
             src={pageUrl(id, index, book.page_version)}
-            alt={`Page ${index + 1} of ${book.page_count}`}
+            alt={t("Page {page} of {total}", { page: index + 1, total: book.page_count })}
             loading={Math.abs(index - page) < 2 ? "eager" : "lazy"}
             fetchPriority={Math.abs(index - page) < 2 ? "high" : "low"}
             decoding="async"
@@ -308,7 +309,7 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
       <footer className="reader-footer">
         <button className="btn" type="button" disabled={page === 0} onClick={() => move(-1)}>{previousLabel}</button>
         <input
-          aria-label="Current page"
+          aria-label={t("Current page")}
           aria-orientation={verticalSlider ? "vertical" : "horizontal"}
           aria-valuetext={`Page ${sliderPage + 1} of ${book.page_count}`}
           dir={displayMode === "manga" ? readingDirection : "ltr"}
@@ -338,7 +339,7 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
           onPointerCancel={() => { seeking.current = false; setSeekPage(null); }}
         />
         {page + 1 === book.page_count && book.next_release_id ? (
-          <button className="btn btn-primary" type="button" onClick={() => navigate(`/reader/${encodeURIComponent(book.next_release_id!)}`)}>{displayMode === "webtoon" ? "Next book ↓" : readingDirection === "ltr" ? "Next book →" : "← Next book"}</button>
+          <button className="btn btn-primary" type="button" onClick={() => navigate(`/reader/${encodeURIComponent(book.next_release_id!)}`)}>{displayMode === "webtoon" ? t("Next book ↓") : readingDirection === "ltr" ? t("Next book →") : t("← Next book")}</button>
         ) : (
           <button className="btn" type="button" disabled={page + 1 === book.page_count} onClick={() => move(1)}>{nextLabel}</button>
         )}

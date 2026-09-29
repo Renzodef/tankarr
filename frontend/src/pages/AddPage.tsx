@@ -17,6 +17,7 @@ import {
 } from "../components";
 import type { MangaPreview, MangaSummary, MonitorMode } from "../types";
 import { workYears } from "../workYears";
+import { t, tn } from "../i18n";
 
 const CATALOGUE = "catalogue";
 const RESULT_PAGE_SIZE = 20;
@@ -70,14 +71,14 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
         <div className="toolbar-group toolbar-grow">
           <input
             className="input input-grow"
-            placeholder="Title or MangaBaka URL…"
-            aria-label="Search the catalogue"
+            placeholder={t("Title or MangaBaka URL…")}
+            aria-label={t("Search the catalogue")}
             type="search"
             enterKeyHint="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <select className="input" aria-label="Search language" value={selectedLanguage} onChange={(event) => setLanguage(event.target.value)}>
+          <select className="input" aria-label={t("Search language")} value={selectedLanguage} onChange={(event) => setLanguage(event.target.value)}>
             {languageOptions.map(([code, label]) => (
               <option key={code} value={code}>
                 {label}
@@ -85,7 +86,7 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
             ))}
           </select>
           <button type="submit" className="btn btn-primary" disabled={searching || query.trim().length < 2}>
-            <Icon name="search" /> {pastedId ? "Look up" : "Search"}
+            <Icon name="search" /> {pastedId ? t("Look up") : t("Search")}
           </button>
         </div>
       </form>
@@ -93,7 +94,7 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
       <div className="provider-scope-note">
         <Icon name="info" size={16} />
         <span>
-          Search by title, then choose the language you want to read. Download sources are matched automatically.
+          {t("Search by title, then choose the language you want to read. Download sources are matched automatically.")}
         </span>
       </div>
 
@@ -108,14 +109,14 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
       ) : results === null ? (
         <EmptyState
           icon="search"
-          title="Search the catalogue"
-          hint="Type a title in any language. The translation language is chosen per series when you add it."
+          title={t("Search the catalogue")}
+          hint={t("Type a title in any language. The translation language is chosen per series when you add it.")}
         />
       ) : results.length === 0 ? (
         <EmptyState
           icon="search"
-          title="No works found"
-          hint="Try the original title, a romanized title, or paste the MangaBaka page URL."
+          title={t("No works found")}
+          hint={t("Try the original title, a romanized title, or paste the MangaBaka page URL.")}
         />
       ) : (
         <>
@@ -134,33 +135,33 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
                   {work.work_type ? <StatusPill kind="muted">{work.work_type}</StatusPill> : null}
                   {work.status ? <StatusPill kind="muted">{humanize(work.status)}</StatusPill> : null}
                   {work.rating ? <StatusPill kind="info">{work.rating.toFixed(1)}</StatusPill> : null}
-                  {work.in_library ? <StatusPill kind="muted">In library</StatusPill> : null}
+                  {work.in_library ? <StatusPill kind="muted">{t("In library")}</StatusPill> : null}
                 </div>
                 {work.native_title ? <div className="muted small">{work.native_title}</div> : null}
                 {work.authors.length ? <div className="muted">{work.authors.join(", ")}</div> : null}
                 <div className="muted small">
                   {[
-                    work.volume_count ? `${work.volume_count} volumes` : null,
+                    work.volume_count ? tn(work.volume_count, "{count} volume", "{count} volumes") : null,
                     work.chapter_count
-                      ? `${work.chapter_count} chapters`
+                      ? tn(work.chapter_count, "{count} chapter", "{count} chapters")
                       : work.latest_release_chapter
-                        ? `${work.latest_release_chapter} chapters so far`
+                        ? t("{count} chapters so far", { count: work.latest_release_chapter })
                         : null,
                     work.genres?.length ? work.genres.slice(0, 4).join(" · ") : null,
                   ]
                     .filter(Boolean)
                     .join(" · ")}
                 </div>
-                <p className="result-description">{work.description || "No description available."}</p>
+                <p className="result-description">{work.description || t("No description available.")}</p>
               </div>
               <div className="result-actions">
                 {work.in_library ? (
                   <a className="btn" href={`#/series/${work.library_manga_id}`}>
-                    <Icon name="library" /> Open
+                    <Icon name="library" /> {t("Open")}
                   </a>
                 ) : (
                   <button type="button" className="btn btn-primary" onClick={() => setSelected(work)}>
-                    <Icon name="add" /> Add
+                    <Icon name="add" /> {t("Add")}
                   </button>
                 )}
               </div>
@@ -173,8 +174,8 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
           pageSize={RESULT_PAGE_SIZE}
           total={results.length}
           onPageChange={setResultPage}
-          itemLabel="works"
-          ariaLabel="Search result pages"
+          itemLabel={t("works")}
+          ariaLabel={t("Search result pages")}
         />
         </>
       )}
@@ -241,7 +242,7 @@ export function AddModal({
     setSaving(true);
     try {
       const added = await api.addManga(work.id, CATALOGUE, language, mode, { searchNow });
-      notify("success", `${work.title} added. Metadata and download sources are being fetched in the background.`);
+      notify("success", t("{title} added. Metadata and download sources are being fetched in the background.", { title: work.title }));
       await onAdded(added.id);
     } catch (caught) {
       notify("error", String(caught));
@@ -251,12 +252,12 @@ export function AddModal({
 
   return (
     <Modal
-      title={`Add ${work.title}`}
+      title={t("Add {title}", { title: work.title })}
       onClose={onClose}
       footer={
         <>
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {t("Cancel")}
           </button>
           <button
             type="button"
@@ -265,13 +266,13 @@ export function AddModal({
             disabled={saving || loading}
             aria-busy={saving}
           >
-            {saving ? <Spinner /> : <Icon name="add" />} {saving ? "Adding…" : "Add to library"}
+            {saving ? <Spinner /> : <Icon name="add" />} {saving ? t("Adding…") : t("Add to library")}
           </button>
         </>
       }
     >
       <div className="form-row">
-        <label htmlFor="add-series-language">Reading language</label>
+        <label htmlFor="add-series-language">{t("Reading language")}</label>
         <select id="add-series-language" className="input" value={language} onChange={(event) => setLanguage(event.target.value)}>
           {languageOptions.map(([code, label]) => (
             <option key={code} value={code}>
@@ -280,37 +281,36 @@ export function AddModal({
           ))}
         </select>
         <p className="muted small">
-          Chapters are searched in {languageName(language)} on every enabled source; the language belongs
-          to the release, not to the series.
+          {t("Chapters are searched in {language} on every enabled source; the language belongs to the release, not to the series.", { language: languageName(language) })}
         </p>
       </div>
       {loading ? (
         <div className="preview-loading">
           <Spinner />
-          <span>Reading the catalogue record…</span>
+          <span>{t("Reading the catalogue record…")}</span>
         </div>
       ) : preview ? (
         <div className="preview-summary">
           {preview.volume_count ? (
             <span>
-              <strong>{preview.volume_count}</strong> volumes
+              {tn(preview.volume_count, "{count} volume", "{count} volumes")}
             </span>
           ) : null}
           {preview.chapter_count ? (
             <span>
-              <strong>{preview.chapter_count}</strong> chapters{preview.status === "ended" ? "" : " so far"}
+              {preview.status === "ended" ? tn(preview.chapter_count, "{count} chapter", "{count} chapters") : t("{count} chapters so far", { count: preview.chapter_count })}
             </span>
           ) : null}
           {preview.status ? <span>{humanize(preview.status)}</span> : null}
           {ended ? (
             <span className="muted small">
-              Ended works are refreshed less often; late specials or extra volumes are still picked up while monitored.
+              {t("Ended works are refreshed less often; late specials or extra volumes are still picked up while monitored.")}
             </span>
           ) : null}
         </div>
       ) : null}
       <div className="form-row">
-        <label>Monitor</label>
+        <label>{t("Monitor")}</label>
         <div className="option-cards">
           {MONITOR_OPTIONS.map((option) => (
             <button
@@ -329,9 +329,10 @@ export function AddModal({
       </div>
       <div className="form-row">
         <p className="muted small">
-          Tankarr follows the work in whole books or in single chapters, never both, choosing from what
-          the sources actually offer{preview?.suggested_unit ? ` (right now: ${preview.suggested_unit})` : ""}.
-          Extras, omakes and side stories are left out of the index; find them through the manual release search.
+          {preview?.suggested_unit
+            ? t("Tankarr follows the work in whole books or in single chapters, never both, choosing from what the sources actually offer (right now: {unit}).", { unit: preview.suggested_unit === "volumes" ? t("volumes") : t("chapters") })
+            : t("Tankarr follows the work in whole books or in single chapters, never both, choosing from what the sources actually offer.")}{" "}
+          {t("Extras, omakes and side stories are left out of the index; find them through the manual release search.")}
         </p>
       </div>
       <div className="form-row add-options">
@@ -342,7 +343,7 @@ export function AddModal({
             disabled={mode === "future" || mode === "none"}
             onChange={(event) => setSearchNow(event.target.checked)}
           />
-          Search for missing chapters as soon as the work is added
+          {t("Search for missing chapters as soon as the work is added")}
         </label>
       </div>
     </Modal>

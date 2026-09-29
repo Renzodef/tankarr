@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon, LANGUAGES, ProgressBar, Spinner, formatBytes, useApp } from "../components";
 import type { ImportGroup, ImportScan, ImportState, Manga, SeriesUnit } from "../types";
+import { t, tn } from "../i18n";
 
 const NEW_LOCAL_SERIES = "__new_local_series__";
 const SUPPORTED_ARCHIVES = new Set(["cbz", "zip", "cbr", "rar", "pdf"]);
@@ -140,7 +141,7 @@ export default function ImportPage() {
       const allFiles = Array.from(fileList ?? []);
       const files = allFiles.filter(supportedFile);
       if (!files.length) {
-        if (allFiles.length) notify("error", "No supported archives or image files selected.");
+        if (allFiles.length) notify("error", t("No supported archives or image files selected."));
         return;
       }
       const previousUpload = activeUpload.current;
@@ -180,7 +181,7 @@ export default function ImportPage() {
         activeUpload.current = uploadId;
         if (previousUpload && previousUpload !== uploadId) void discardUpload(previousUpload);
         if (allFiles.length !== files.length) {
-          notify("info", `${allFiles.length - files.length} unsupported files skipped.`);
+          notify("info", tn(allFiles.length - files.length, "{count} unsupported file skipped.", "{count} unsupported files skipped."));
         }
       } catch (caught) {
         await discardUpload(uploadId);
@@ -219,8 +220,9 @@ export default function ImportPage() {
           window.clearInterval(timer);
           notify(
             status.errors?.length ? "info" : "success",
-            `Import finished: ${status.imported ?? 0} files across ${status.series ?? 0} series` +
-              (status.errors?.length ? `, ${status.errors.length} errors.` : "."),
+            status.errors?.length
+              ? t("Import finished: {files} files across {series} series, {errors} errors.", { files: status.imported ?? 0, series: status.series ?? 0, errors: status.errors.length })
+              : t("Import finished: {files} files across {series} series.", { files: status.imported ?? 0, series: status.series ?? 0 }),
           );
           await refreshJobs();
           const completedUpload = activeUpload.current;
@@ -333,16 +335,16 @@ export default function ImportPage() {
       />
 
       <div className="toolbar import-toolbar">
-        <h1 className="page-title">Library Import</h1>
+        <h1 className="page-title">{t("Library Import")}</h1>
         <div className="toolbar-group">
           <button type="button" className="btn" onClick={() => fileInput.current?.click()} disabled={busy}>
-            <Icon name="upload" /> Choose files
+            <Icon name="upload" /> {t("Choose files")}
           </button>
           <button type="button" className="btn" onClick={() => folderInput.current?.click()} disabled={busy}>
-            <Icon name="library" /> Choose folder
+            <Icon name="library" /> {t("Choose folder")}
           </button>
           <button type="button" className="btn" onClick={() => void runDropScan()} disabled={busy}>
-            <Icon name="search" /> Scan drop folder
+            <Icon name="search" /> {t("Scan drop folder")}
           </button>
           <button
             type="button"
@@ -350,7 +352,7 @@ export default function ImportPage() {
             onClick={() => void startImport()}
             disabled={!selectedGroups.length || hasInvalidSelection || busy}
           >
-            <Icon name="upload" /> Import {selectedGroups.length || ""} selected
+            <Icon name="upload" /> {selectedGroups.length ? t("Import {count} selected", { count: selectedGroups.length }) : t("Import selected")}
           </button>
         </div>
       </div>
@@ -358,9 +360,9 @@ export default function ImportPage() {
       {uploading ? (
         <div className="panel import-progress">
           <div className="import-progress-row">
-            <strong>Uploading {uploading.current}</strong>
+            <strong>{t("Uploading")} {uploading.current}</strong>
             <span className="muted">
-              {uploading.filesDone} / {uploading.filesTotal} files · {formatBytes(uploading.bytesDone)} / {formatBytes(uploading.bytesTotal)}
+              {t("{done} / {total} files", { done: uploading.filesDone, total: uploading.filesTotal })} · {formatBytes(uploading.bytesDone)} / {formatBytes(uploading.bytesTotal)}
             </span>
           </div>
           <ProgressBar value={uploading.bytesTotal ? uploading.bytesDone / uploading.bytesTotal : 0} kind="accent" />
@@ -370,13 +372,13 @@ export default function ImportPage() {
       {state && (state.running || state.finished) ? (
         <div className="panel import-progress">
           <div className="import-progress-row">
-            <strong>{state.running ? "Importing…" : "Import finished"}</strong>
+            <strong>{state.running ? t("Importing…") : t("Import finished")}</strong>
             <div className="import-progress-summary">
               <span className="muted">
-                {state.done ?? 0} / {state.total ?? 0} files · {state.series ?? 0} series
+                {t("{done} / {total} files", { done: state.done ?? 0, total: state.total ?? 0 })} · {tn(state.series ?? 0, "{count} series", "{count} series")}
               </span>
               {!state.running ? (
-                <button type="button" className="btn-icon" title="Dismiss" onClick={() => setState(null)}>
+                <button type="button" className="btn-icon" title={t("Dismiss")} onClick={() => setState(null)}>
                   <Icon name="close" />
                 </button>
               ) : null}
@@ -400,27 +402,27 @@ export default function ImportPage() {
       ) : scan === null ? (
         <div className="panel import-picker">
           <Icon name="upload" size={48} />
-          <h2>Choose files or a folder</h2>
+          <h2>{t("Choose files or a folder")}</h2>
           <div className="toolbar-group">
             <button type="button" className="btn btn-primary" onClick={() => fileInput.current?.click()}>
-              <Icon name="upload" /> Choose files
+              <Icon name="upload" /> {t("Choose files")}
             </button>
             <button type="button" className="btn" onClick={() => folderInput.current?.click()}>
-              <Icon name="library" /> Choose folder
+              <Icon name="library" /> {t("Choose folder")}
             </button>
           </div>
         </div>
       ) : scan.groups.length === 0 ? (
         <div className="panel import-picker">
           <Icon name="search" size={42} />
-          <h2>Nothing importable found</h2>
+          <h2>{t("Nothing importable found")}</h2>
         </div>
       ) : (
         <>
           <div className="muted small import-root">
-            {scan.root} · {scan.groups.length} candidate{scan.groups.length === 1 ? "" : "s"}
-            {scan.rar_supported ? "" : " · RAR unavailable"}
-            {scan.pdf_supported === false ? " · PDF unavailable" : ""}
+            {scan.root} · {tn(scan.groups.length, "{count} candidate", "{count} candidates")}
+            {scan.rar_supported ? "" : ` · ${t("RAR unavailable")}`}
+            {scan.pdf_supported === false ? ` · ${t("PDF unavailable")}` : ""}
           </div>
           {scan.groups.map((group) => {
             const target = targets[group.key] ?? "";
@@ -441,24 +443,24 @@ export default function ImportPage() {
                     <strong>{group.title}</strong>
                   </label>
                   <span className="muted small">
-                    {group.items.length} file{group.items.length === 1 ? "" : "s"} · {formatBytes(group.total_size)}
+                    {tn(group.items.length, "{count} file", "{count} files")} · {formatBytes(group.total_size)}
                   </span>
                 </header>
 
                 <div className="import-group-controls">
                   <label className="field import-target-field">
-                    <span className="field-label">Target series</span>
+                    <span className="field-label">{t("Target series")}</span>
                     <select className="input" value={target} onChange={(event) => setTarget(group, event.target.value)} disabled={!selected.has(group.key) || running}>
-                      <option value="">Select a series…</option>
-                      <option value={NEW_LOCAL_SERIES}>Create new local series</option>
+                      <option value="">{t("Select a series…")}</option>
+                      <option value={NEW_LOCAL_SERIES}>{t("Create new local series")}</option>
                       {sortedLibrary.map((item) => (
                         <option key={item.id} value={item.id}>{seriesLabel(item)}</option>
                       ))}
                     </select>
                   </label>
                   <div className="field import-unit-field">
-                    <span className="field-label">Import as</span>
-                    <div className="import-unit-switch" role="group" aria-label="Import unit">
+                    <span className="field-label">{t("Import as")}</span>
+                    <div className="import-unit-switch" role="group" aria-label={t("Import unit")}>
                       {(["chapters", "volumes"] as SeriesUnit[]).map((choice) => (
                         <button
                           key={choice}
@@ -467,14 +469,14 @@ export default function ImportPage() {
                           onClick={() => setUnits((current) => ({ ...current, [group.key]: choice }))}
                           disabled={!selected.has(group.key) || running}
                         >
-                          {choice === "chapters" ? "Chapters" : "Volumes"}
+                          {choice === "chapters" ? t("Chapters") : t("Volumes")}
                         </button>
                       ))}
                     </div>
                   </div>
                   {manga ? (
                     <div className="import-target-meta muted small">
-                      {manga.authors.join(", ") || "Unknown author"} · {manga.preferred_language.toUpperCase()}
+                      {manga.authors.join(", ") || t("Unknown author")} · {manga.preferred_language.toUpperCase()}
                     </div>
                   ) : null}
                 </div>
@@ -482,15 +484,15 @@ export default function ImportPage() {
                 {target === NEW_LOCAL_SERIES ? (
                   <div className="import-local-fields">
                     <label className="field">
-                      <span className="field-label">Series title</span>
+                      <span className="field-label">{t("Series title")}</span>
                       <input className="input" value={titles[group.key] ?? group.title} onChange={(event) => setTitles((current) => ({ ...current, [group.key]: event.target.value }))} disabled={running} />
                     </label>
                     <label className="field">
-                      <span className="field-label">Authors</span>
+                      <span className="field-label">{t("Authors")}</span>
                       <input className="input" value={authors[group.key] ?? ""} onChange={(event) => setAuthors((current) => ({ ...current, [group.key]: event.target.value }))} disabled={running} />
                     </label>
                     <label className="field import-language-field">
-                      <span className="field-label">Language</span>
+                      <span className="field-label">{t("Language")}</span>
                       <select className="input" value={language} onChange={(event) => setLanguage(event.target.value)} disabled={running}>
                         {LANGUAGES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
                       </select>
@@ -505,12 +507,12 @@ export default function ImportPage() {
                     return (
                       <div key={item.path} className="import-item">
                         <label className="import-number-field">
-                          <span className="field-label">{unit === "chapters" ? "Chapter" : "Volume"}</span>
+                          <span className="field-label">{unit === "chapters" ? t("Chapter") : t("Volume")}</span>
                           <input className={`input ${invalid ? "input-error" : ""}`} inputMode="decimal" value={value} onChange={(event) => updateNumber(group.key, item.path, event.target.value)} disabled={!selected.has(group.key) || running} />
                         </label>
                         <div className="import-file-detail">
                           <strong className="import-path" title={item.path}>{item.path}</strong>
-                          <span className="muted small">{item.images} pages · {formatBytes(item.size)}</span>
+                          <span className="muted small">{tn(item.images, "{count} page", "{count} pages")} · {formatBytes(item.size)}</span>
                         </div>
                       </div>
                     );
@@ -521,7 +523,7 @@ export default function ImportPage() {
           })}
           {scan.skipped.length ? (
             <section className="panel import-skipped">
-              <h2>Skipped</h2>
+              <h2>{t("Skipped")}</h2>
               {scan.skipped.map((item) => <div key={item.path} className="muted small">{item.path} · {item.reason}</div>)}
             </section>
           ) : null}

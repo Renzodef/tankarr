@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { t } from "./i18n";
 
 export function useUnsavedChangesGuard(dirty: boolean) {
   const dirtyRef = useRef(dirty);
@@ -13,7 +14,7 @@ export function useUnsavedChangesGuard(dirty: boolean) {
     };
     const navigate = (event: Event) => {
       const remainsInSettings = /^#\/settings(?:\?|$)/.test(window.location.hash);
-      if (dirtyRef.current && !remainsInSettings && !window.confirm("You have unsaved settings. Leave and discard these changes?")) {
+      if (dirtyRef.current && !remainsInSettings && !window.confirm(t("You have unsaved settings. Leave and discard these changes?"))) {
         // The router emits this cancelable event before committing navigation,
         // so cancelling never unmounts the editable form or loses its draft.
         window.history.replaceState(null, "", lastUrl);

@@ -2,13 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 import { Modal, Spinner } from "../components";
 import type { BooksAssemblyPreview, BooksAssemblyResult } from "../types";
+import { t, tn } from "../i18n";
 
 function errorMessage(caught: unknown) {
   let message = caught instanceof Error ? caught.message : String(caught);
   if (caught instanceof ApiError && caught.detail && typeof caught.detail === "object" && "missing_chapters" in caught.detail) {
     const missing = caught.detail.missing_chapters;
     if (Array.isArray(missing) && missing.length) {
-      message += ` Missing chapters: ${missing.slice(0, 40).join(", ")}${missing.length > 40 ? ` and ${missing.length - 40} more` : ""}.`;
+      message += " " + (missing.length > 40
+        ? t("Missing chapters: {list} and {count} more.", { list: missing.slice(0, 40).join(", "), count: missing.length - 40 })
+        : t("Missing chapters: {list}.", { list: missing.join(", ") }));
     }
   }
   return message;
@@ -92,30 +95,30 @@ export default function AssembleBooksDialog({ mangaId, title, volume, onClose, o
     }
   };
 
-  return <Modal title={volume === null ? `Assemble covered books · ${title}` : `Assemble book ${volume} · ${title}`} onClose={close} footer={<>
-    <button type="button" className="btn" disabled={busy === "assemble"} onClick={close}>{result ? "Close" : "Cancel"}</button>
-    {preview ? <button type="button" className="btn btn-primary" disabled={Boolean(busy) || !confirmed} onClick={() => void assemble()}>{busy === "assemble" ? "Assembling…" : "Confirm assembly"}</button> : null}
-    {!busy && !preview && (!result || result.remaining.length > 0) ? <button type="button" className="btn" onClick={() => void loadPreview()}>{result ? "Preview remaining books" : "Preview again"}</button> : null}
+  return <Modal title={volume === null ? t("Assemble covered books · {title}", { title }) : t("Assemble book {volume} · {title}", { volume, title })} onClose={close} footer={<>
+    <button type="button" className="btn" disabled={busy === "assemble"} onClick={close}>{result ? t("Close") : t("Cancel")}</button>
+    {preview ? <button type="button" className="btn btn-primary" disabled={Boolean(busy) || !confirmed} onClick={() => void assemble()}>{busy === "assemble" ? t("Assembling…") : t("Confirm assembly")}</button> : null}
+    {!busy && !preview && (!result || result.remaining.length > 0) ? <button type="button" className="btn" onClick={() => void loadPreview()}>{result ? t("Preview remaining books") : t("Preview again")}</button> : null}
   </>}>
-    {busy === "preview" ? <><Spinner /><p className="muted">Checking mapped chapters and book filenames…</p></> : null}
-    {error ? <p className="banner banner-danger" role="alert">{error} Review a new preview before confirming.</p> : null}
+    {busy === "preview" ? <><Spinner /><p className="muted">{t("Checking mapped chapters and book filenames…")}</p></> : null}
+    {error ? <p className="banner banner-danger" role="alert">{error} {t("Review a new preview before confirming.")}</p> : null}
     {preview ? <>
-      <p>Create {preview.books.length} book{preview.books.length === 1 ? "" : "s"} from the chapters below. The original chapter files will move to the recycle bin after each book is saved and verified.</p>
-      {preview.errors.map((item) => <p className="banner banner-warn" key={item.volume}>Book {item.volume} cannot be assembled: {item.message}</p>)}
+      <p>{tn(preview.books.length, "Create {count} book from the chapters below. The original chapter files will move to the recycle bin after each book is saved and verified.", "Create {count} books from the chapters below. The original chapter files will move to the recycle bin after each book is saved and verified.")}</p>
+      {preview.errors.map((item) => <p className="banner banner-warn" key={item.volume}>{t("Book {volume} cannot be assembled: {message}", { volume: item.volume, message: item.message })}</p>)}
       {preview.books.map((book) => <details key={book.volume} open={preview.books.length === 1} className="volume-section">
-        <summary>Book {book.volume} · {book.chapters.length} chapter file{book.chapters.length === 1 ? "" : "s"} · {book.pages} pages · {book.filename}</summary>
-        <table className="table"><thead><tr><th>Chapter</th><th>Source</th><th>Pages</th></tr></thead><tbody>
-          {book.chapters.map((chapter) => <tr key={chapter.id}><td>{chapter.chapter}{chapter.source_chapter != null && chapter.source_chapter !== chapter.chapter ? <span className="muted small"> (source chapter {chapter.source_chapter})</span> : null}</td><td>{chapter.source}</td><td>{chapter.pages}</td></tr>)}
+        <summary>{t("Book {volume}", { volume: book.volume })} · {tn(book.chapters.length, "{count} chapter file", "{count} chapter files")} · {tn(book.pages, "{count} page", "{count} pages")} · {book.filename}</summary>
+        <table className="table"><thead><tr><th>{t("Chapter")}</th><th>{t("Source")}</th><th>{t("Pages")}</th></tr></thead><tbody>
+          {book.chapters.map((chapter) => <tr key={chapter.id}><td>{chapter.chapter}{chapter.source_chapter != null && chapter.source_chapter !== chapter.chapter ? <span className="muted small"> {t("(source chapter {chapter})", { chapter: chapter.source_chapter })}</span> : null}</td><td>{chapter.source}</td><td>{chapter.pages}</td></tr>)}
         </tbody></table>
       </details>)}
-      <p className="muted small">Retired files are kept for the configured recycle bin retention period before automatic cleanup.</p>
-      <label className="checkbox-row"><input type="checkbox" checked={confirmed} disabled={Boolean(busy)} onChange={(event) => setConfirmed(event.target.checked)} />I reviewed the preview and confirm creating these books and moving their chapter files to the recycle bin</label>
+      <p className="muted small">{t("Retired files are kept for the configured recycle bin retention period before automatic cleanup.")}</p>
+      <label className="checkbox-row"><input type="checkbox" checked={confirmed} disabled={Boolean(busy)} onChange={(event) => setConfirmed(event.target.checked)} />{t("I reviewed the preview and confirm creating these books and moving their chapter files to the recycle bin")}</label>
     </> : null}
     {result ? <div role="status">
-      <p>{result.assembled.length} book{result.assembled.length === 1 ? "" : "s"} assembled.</p>
-      {result.assembled.map((book) => <div key={book.volume}><p>Book {book.volume}: {book.filename} · {book.pages} pages · {book.retirement.files_retired} chapter file{book.retirement.files_retired === 1 ? "" : "s"} moved to the recycle bin.</p>{book.retirement.cleanup_errors.map((message, index) => <p className="banner banner-warn" key={index}>{message}</p>)}</div>)}
-      {result.errors.map((item) => <p className="banner banner-warn" key={item.volume}>Book {item.volume}: {item.message}</p>)}
-      {result.remaining.length > 0 ? <p>Books remaining: {result.remaining.join(", ")}.</p> : null}
+      <p>{tn(result.assembled.length, "{count} book assembled.", "{count} books assembled.")}</p>
+      {result.assembled.map((book) => <div key={book.volume}><p>{t("Book {volume}: {file} · {pages} pages · {retired}", { volume: book.volume, file: book.filename, pages: book.pages, retired: tn(book.retirement.files_retired, "{count} chapter file moved to the recycle bin.", "{count} chapter files moved to the recycle bin.") })}</p>{book.retirement.cleanup_errors.map((message, index) => <p className="banner banner-warn" key={index}>{message}</p>)}</div>)}
+      {result.errors.map((item) => <p className="banner banner-warn" key={item.volume}>{t("Book")} {item.volume}: {item.message}</p>)}
+      {result.remaining.length > 0 ? <p>{t("Books remaining:")} {result.remaining.join(", ")}.</p> : null}
     </div> : null}
   </Modal>;
 }

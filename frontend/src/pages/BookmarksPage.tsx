@@ -3,6 +3,7 @@ import { api } from "../api";
 import { Cover, EmptyState, Icon, Spinner, formatDate, seriesPath } from "../components";
 import { LoadError } from "../components/LoadError";
 import type { ReaderBookmark } from "../types";
+import { t, tn } from "../i18n";
 
 type BookmarkSort = "updated" | "title";
 type SortDirection = "asc" | "desc";
@@ -54,63 +55,63 @@ export default function BookmarksPage() {
     <div className="page bookmarks-page">
       <div className="toolbar">
         <div className="page-heading">
-          <h1 className="page-title">Bookmarks</h1>
-          <span className="muted small">Saved reading positions across your library</span>
+          <h1 className="page-title">{t("Bookmarks")}</h1>
+          <span className="muted small">{t("Saved reading positions across your library")}</span>
         </div>
         <div className="toolbar-group">
-          {bookmarks ? <span className="muted small">{bookmarks.length} saved</span> : null}
+          {bookmarks ? <span className="muted small">{tn(bookmarks.length, "{count} saved", "{count} saved")}</span> : null}
           <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
-            <Icon name="refresh" size={15} /> Refresh
+            <Icon name="refresh" size={15} /> {t("Refresh")}
           </button>
         </div>
       </div>
-      {error ? <LoadError message={error} retryLabel="Retry bookmarks" retry={() => void load()} loading={loading} hasData={bookmarks !== null} /> : null}
+      {error ? <LoadError message={error} retryLabel={t("Retry bookmarks")} retry={() => void load()} loading={loading} hasData={bookmarks !== null} /> : null}
       {bookmarks?.length ? (
-        <div className="list-controls" aria-label="Sort bookmarks">
+        <div className="list-controls" aria-label={t("Sort bookmarks")}>
           <div className="list-control-fields">
             <select
               className="input"
               value={sort}
-              aria-label="Sort bookmarks by"
+              aria-label={t("Sort bookmarks by")}
               onChange={(event) => {
                 const nextSort = event.target.value as BookmarkSort;
                 setSort(nextSort);
                 setSortDirection(nextSort === "updated" ? "desc" : "asc");
               }}
             >
-              <option value="updated">Sort: Recently saved</option>
-              <option value="title">Sort: Series title</option>
+              <option value="updated">{t("Sort: Recently saved")}</option>
+              <option value="title">{t("Sort: Series title")}</option>
             </select>
             <button
               type="button"
               className="btn sort-direction"
               onClick={() => setSortDirection((current) => current === "asc" ? "desc" : "asc")}
-              aria-label={`Sort ${sortDirection === "asc" ? "descending" : "ascending"}`}
-              title={`Currently ${sortDirection === "asc" ? "ascending" : "descending"}; click to reverse`}
+              aria-label={sortDirection === "asc" ? t("Sort descending") : t("Sort ascending")}
+              title={sortDirection === "asc" ? t("Currently ascending; click to reverse") : t("Currently descending; click to reverse")}
             >
               <Icon name={sortDirection === "asc" ? "sortAscending" : "sortDescending"} />
-              <span>{sortDirection === "asc" ? "Ascending" : "Descending"}</span>
+              <span>{sortDirection === "asc" ? t("Ascending") : t("Descending")}</span>
             </button>
           </div>
         </div>
       ) : null}
       {bookmarks === null ? (loading ? <Spinner /> : null) : bookmarks.length === 0 ? (
-        <EmptyState icon="bookmark" title="No bookmarks saved" hint="Open a book and select Save bookmark to keep your place." />
+        <EmptyState icon="bookmark" title={t("No bookmarks saved")} hint={t("Open a book and select Save bookmark to keep your place.")} />
       ) : (
         <div className="bookmark-grid">
           {sortedBookmarks.map((item) => (
             <article className="bookmark-card panel" key={item.manga_id}>
-              <a href={seriesPath(item.manga_id)} className="bookmark-cover-link" aria-label={`View ${item.manga_title}`}>
+              <a href={seriesPath(item.manga_id)} className="bookmark-cover-link" aria-label={t("View {title}", { title: item.manga_title })}>
                 <Cover url={item.manga_cover_url} title={item.manga_title} className="bookmark-cover" />
               </a>
               <div className="bookmark-details">
                 <a className="bookmark-series-title" href={seriesPath(item.manga_id)}>{item.manga_title}</a>
-                <span className="bookmark-position"><Icon name="bookmark" size={15} /> {item.label} · page {item.page_index + 1}</span>
-                <span className="muted small">Saved {formatDate(item.updated_at)}</span>
+                <span className="bookmark-position"><Icon name="bookmark" size={15} /> {item.label} {t("· page")} {item.page_index + 1}</span>
+                <span className="muted small">{t("Saved")} {formatDate(item.updated_at)}</span>
                 <div className="bookmark-actions">
-                  <a className="btn btn-primary" href={item.url}><Icon name="library" size={15} /> Continue reading</a>
-                  <button type="button" className="btn btn-ghost" onClick={() => void remove(item.manga_id)} disabled={removing === item.manga_id} aria-label={`Remove bookmark for ${item.manga_title}`}>
-                    <Icon name="trash" size={15} /> Remove
+                  <a className="btn btn-primary" href={item.url}><Icon name="library" size={15} /> {t("Continue reading")}</a>
+                  <button type="button" className="btn btn-ghost" onClick={() => void remove(item.manga_id)} disabled={removing === item.manga_id} aria-label={t("Remove bookmark for {title}", { title: item.manga_title })}>
+                    <Icon name="trash" size={15} /> {t("Remove")}
                   </button>
                 </div>
               </div>

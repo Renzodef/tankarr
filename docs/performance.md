@@ -20,7 +20,9 @@ other project.
 - **Code splitting.** The application loads only the code of the current
   route. Background polling yields during startup, and a stable action context
   avoids re-rendering the lists on every health update. An automated check
-  keeps the initial JavaScript below 85,000 bytes after gzip compression.
+  keeps the initial JavaScript below 88,000 bytes after gzip compression.
+  Translation catalogues are separate chunks, loaded only for the language the
+  browser chose.
 - **Bounded rendering.** Wanted precomputes search text and sort keys, reuses
   collators and does not sort again on every keystroke. Tables are paginated
   at 20 rows, Library renders 30 cards per page, and suggestion menus show at

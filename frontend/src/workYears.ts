@@ -1,4 +1,5 @@
 import type { CanonicalMetadata } from "./types";
+import { t } from "./i18n";
 
 type WorkYearInput = {
   year?: number | null;
@@ -52,8 +53,8 @@ export function workYears(work: WorkYearInput): WorkYears {
       original,
       publication,
       sort,
-      label: `${original} · pub. ${publication}`,
-      title: `Original work: ${original} · Publication: ${publication}`,
+      label: t("{original} · pub. {publication}", { original, publication }),
+      title: t("Original work: {original} · Publication: {publication}", { original, publication }),
     };
   }
   const onlyYear = original ?? rawPublication;
@@ -64,8 +65,8 @@ export function workYears(work: WorkYearInput): WorkYears {
     label: onlyYear ? String(onlyYear) : null,
     title: onlyYear
       ? original
-        ? `Original work: ${onlyYear}`
-        : `Publication: ${onlyYear}`
+        ? t("Original work: {year}", { year: onlyYear })
+        : t("Publication: {year}", { year: onlyYear })
       : null,
   };
 }

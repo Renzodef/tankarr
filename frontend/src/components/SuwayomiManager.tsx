@@ -4,6 +4,7 @@ import { api } from "../api";
 import { Icon, StatusPill } from "../components";
 import { serverUrl } from "../serverUrl";
 import type { SuwayomiExtension, SuwayomiRuntimeStatus, SuwayomiSourceTest } from "../types";
+import { msg, t, tn } from "../i18n";
 
 function formatBytes(value: number) {
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KiB`;
@@ -12,35 +13,36 @@ function formatBytes(value: number) {
 
 function formatUptime(seconds: number | null) {
   if (seconds === null) return null;
-  if (seconds < 90) return `${seconds}s`;
-  if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
-  if (seconds < 172800) return `${(seconds / 3600).toFixed(1)} h`;
-  return `${Math.round(seconds / 86400)} d`;
+  if (seconds < 90) return t("{count}s", { count: seconds });
+  if (seconds < 5400) return t("{count} min", { count: Math.round(seconds / 60) });
+  if (seconds < 172800) return t("{count} h", { count: (seconds / 3600).toFixed(1) });
+  return t("{count} d", { count: Math.round(seconds / 86400) });
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
-  all: "Multi-language",
-  en: "English",
-  it: "Italian",
-  es: "Spanish",
-  fr: "French",
-  de: "German",
-  "pt-br": "Portuguese (BR)",
-  pt: "Portuguese",
-  ja: "Japanese",
-  ko: "Korean",
-  zh: "Chinese",
-  ru: "Russian",
-  id: "Indonesian",
-  tr: "Turkish",
-  pl: "Polish",
-  vi: "Vietnamese",
-  th: "Thai",
-  ar: "Arabic",
+  all: msg("Multi-language"),
+  en: msg("English"),
+  it: msg("Italian"),
+  es: msg("Spanish"),
+  fr: msg("French"),
+  de: msg("German"),
+  "pt-br": msg("Portuguese (BR)"),
+  pt: msg("Portuguese"),
+  ja: msg("Japanese"),
+  ko: msg("Korean"),
+  zh: msg("Chinese"),
+  ru: msg("Russian"),
+  id: msg("Indonesian"),
+  tr: msg("Turkish"),
+  pl: msg("Polish"),
+  vi: msg("Vietnamese"),
+  th: msg("Thai"),
+  ar: msg("Arabic"),
 };
 
 function languageLabel(code: string) {
-  return LANGUAGE_LABELS[code] ?? code.toUpperCase();
+  const label = LANGUAGE_LABELS[code];
+  return label ? t(label) : code.toUpperCase();
 }
 
 const VERDICT_ORDER: Record<SuwayomiSourceTest["verdict"], number> = {
@@ -160,23 +162,21 @@ export function SuwayomiManager({
   const install = () =>
     runAction("install", () => api.suwayomiInstall(), (next) =>
       next.ready
-        ? `Suwayomi ${next.version ?? ""} is running · ${next.default_extensions?.length ?? 0} default extension${
-            (next.default_extensions?.length ?? 0) === 1 ? "" : "s"
-          } ready`
-        : `Suwayomi ${next.version ?? ""} installed but not ready yet: ${next.last_error ?? "still starting"}`,
+        ? t("Suwayomi {version} is running · {extensions} ready", { version: next.version ?? "", extensions: tn(next.default_extensions?.length ?? 0, "{count} default extension", "{count} default extensions") })
+        : t("Suwayomi {version} installed but not ready yet: {error}", { version: next.version ?? "", error: next.last_error ?? t("still starting") }),
     );
   const restart = () =>
     runAction("restart", () => api.suwayomiRestart(), (next) =>
-      next.ready ? "Suwayomi restarted." : `Restarted, not ready yet: ${next.last_error ?? "still starting"}`,
+      next.ready ? t("Suwayomi restarted.") : t("Restarted, not ready yet: {error}", { error: next.last_error ?? t("still starting") }),
     );
-  const stop = () => runAction("stop", () => api.suwayomiStop(), () => "Suwayomi stopped.");
+  const stop = () => runAction("stop", () => api.suwayomiStop(), () => t("Suwayomi stopped."));
   const updateNow = () =>
     runAction("update", () => api.suwayomiUpdateNow(), (next) => {
       const result = (next.maintenance?.result ?? {}) as { server?: { updated_to?: string; latest?: string }; extensions_updated?: string[]; error?: string };
-      if (result.error) return `Update check failed: ${result.error}`;
+      if (result.error) return t("Update check failed: {error}", { error: result.error });
       const parts = [
-        result.server?.updated_to ? `server updated to ${result.server.updated_to}` : `server ${next.version ?? ""} is current`,
-        `${result.extensions_updated?.length ?? 0} extension${(result.extensions_updated?.length ?? 0) === 1 ? "" : "s"} updated`,
+        result.server?.updated_to ? t("server updated to {version}", { version: result.server.updated_to }) : t("server {version} is current", { version: next.version ?? "" }),
+        tn(result.extensions_updated?.length ?? 0, "{count} extension updated", "{count} extensions updated"),
       ];
       return parts.join(" · ");
     });
@@ -256,7 +256,7 @@ export function SuwayomiManager({
 
   const openLink = publicUrl ? (
     <a className="btn btn-small" href={publicUrl} target="_blank" rel="noreferrer">
-      <Icon name="external" size={14} /> Open Suwayomi
+      <Icon name="external" size={14} /> {t("Open Suwayomi")}
     </a>
   ) : null;
 
@@ -265,9 +265,7 @@ export function SuwayomiManager({
       <div className="form-row setting-test-row">
         <div className="setting-field-actions">{openLink}</div>
         <p className="muted small setting-test-result">
-          External mode: Tankarr connects to the Suwayomi server configured above and uses whatever
-          extensions are installed there. Switch to Managed to let Tankarr run and maintain Suwayomi
-          itself.
+          {t("External mode: Tankarr connects to the Suwayomi server configured above and uses whatever extensions are installed there. Switch to Managed to let Tankarr run and maintain Suwayomi itself.")}
         </p>
       </div>
     );
@@ -286,40 +284,34 @@ export function SuwayomiManager({
           >
             {status === null
               ? statusError
-                ? "Status unavailable"
-                : "Checking runtime…"
+                ? t("Status unavailable")
+                : t("Checking runtime…")
               : status.installing
-                ? status.install_progress ?? "Installing…"
+                ? status.install_progress ?? t("Installing…")
                 : status.ready
-                  ? `Running${status.version ? ` · ${status.version}` : ""}`
+                  ? t("Running") + (status.version ? ` · ${status.version}` : "")
                   : status.running
-                    ? "Starting…"
+                    ? t("Starting…")
                     : status.installed
-                      ? `Stopped${status.version ? ` · ${status.version}` : ""}`
-                      : "Not installed"}
+                      ? t("Stopped") + (status.version ? ` · ${status.version}` : "")
+                      : t("Not installed")}
           </StatusPill>
           {status?.installed ? (
             <span className="muted small">
-              {formatBytes(status.jar_size_bytes)} JAR · heap {status.heap_mb} MiB
-              {status.uptime_seconds !== null && status.running ? ` · up ${formatUptime(status.uptime_seconds)}` : ""}
-              {status.restarts ? ` · ${status.restarts} restart${status.restarts === 1 ? "" : "s"}` : ""}
-              {status.latest_version && status.latest_version !== status.version ? ` · ${status.latest_version} available` : status.latest_version ? " · up to date" : ""}
+              {formatBytes(status.jar_size_bytes)} {t("JAR · heap")} {status.heap_mb} {t("MiB")}
+              {status.uptime_seconds !== null && status.running ? ` · ${t("up {duration}", { duration: formatUptime(status.uptime_seconds) })}` : ""}
+              {status.restarts ? ` · ${tn(status.restarts, "{count} restart", "{count} restarts")}` : ""}
+              {status.latest_version && status.latest_version !== status.version ? ` · ${t("{version} available", { version: status.latest_version })}` : status.latest_version ? " · " + t("up to date") : ""}
             </span>
           ) : null}
         </div>
         {status?.installed && !status.extension_store ? (
           <p className="banner banner-warn">
-            No extension repository configured: Suwayomi has nothing to install sources from. Enter the
-            index URL of a repository you trust in <strong>Extension repository</strong> above and save.
+            {t("No extension repository configured: Suwayomi has nothing to install sources from. Enter the index URL of a repository you trust in {field} above and save.", { field: t("Extension repository") })}
           </p>
         ) : null}
         <p className="muted small setting-test-result">
-          Tankarr downloads the official Suwayomi-Server JAR from its GitHub release, verifies the
-          published SHA-256 checksum, and runs it inside this container. Its web interface answers on
-          the container's port 4567, behind your Tankarr login; publish that port to open it from your
-          network (set the public URL under Suwayomi if you map it elsewhere). Extensions come only from
-          the repository you configure: Install adds every safe extension it offers for your enabled
-          languages, and you stay free to add or remove any extension below.
+          {t("Tankarr downloads the official Suwayomi-Server JAR from its GitHub release, verifies the published SHA-256 checksum, and runs it inside this container. Its web interface answers on the container's port 4567, behind your Tankarr login; publish that port to open it from your network (set the public URL under Suwayomi if you map it elsewhere). Extensions come only from the repository you configure: Install adds every safe extension it offers for your enabled languages, and you stay free to add or remove any extension below.")}
         </p>
         <div className="setting-field-actions">
           <button
@@ -330,19 +322,19 @@ export function SuwayomiManager({
           >
             <Icon name="download" size={14} />
             {action === "install" || status?.installing
-              ? "Installing…"
+              ? t("Installing…")
               : status?.installed
-                ? "Update / reinstall"
-                : "Install Suwayomi"}
+                ? t("Update / reinstall")
+                : t("Install Suwayomi")}
           </button>
           <button
             type="button"
             className="btn btn-small"
             disabled={busy || !status?.installed || !status?.running}
-            title="Check GitHub for a new server release and update installed extensions now; Tankarr does this every day by itself"
+            title={t("Check GitHub for a new server release and update installed extensions now; Tankarr does this every day by itself")}
             onClick={() => void updateNow()}
           >
-            <Icon name="refresh" size={14} /> {action === "update" ? "Updating…" : status?.update_available ? `Update to ${status.latest_version}` : "Check updates"}
+            <Icon name="refresh" size={14} /> {action === "update" ? t("Updating…") : status?.update_available ? t("Update to {version}", { version: status.latest_version }) : t("Check updates")}
           </button>
           <button
             type="button"
@@ -350,7 +342,7 @@ export function SuwayomiManager({
             disabled={busy || !status?.installed}
             onClick={() => void restart()}
           >
-            <Icon name="refresh" size={14} /> {status?.running ? "Restart" : "Start"}
+            <Icon name="refresh" size={14} /> {status?.running ? t("Restart") : t("Start")}
           </button>
           <button
             type="button"
@@ -358,19 +350,19 @@ export function SuwayomiManager({
             disabled={busy || !status?.running}
             onClick={() => void stop()}
           >
-            <Icon name="close" size={14} /> Stop
+            <Icon name="close" size={14} /> {t("Stop")}
           </button>
           {status?.ready && status.exposed ? openLink : null}
           <a className="btn btn-small" href={status?.release_page ?? "https://github.com/Suwayomi/Suwayomi-Server/releases"} target="_blank" rel="noreferrer">
-            <Icon name="external" size={14} /> Releases
+            <Icon name="external" size={14} /> {t("Releases")}
           </a>
           <button type="button" className="btn btn-small" onClick={() => setShowLog((value) => !value)}>
-            <Icon name={showLog ? "chevronDown" : "chevronRight"} size={14} /> Log
+            <Icon name={showLog ? "chevronDown" : "chevronRight"} size={14} /> {t("Log")}
           </button>
         </div>
         {status?.writable === false ? (
           <p className="warn-text setting-test-result">
-            The Tankarr config directory is not writable; Suwayomi cannot be installed.
+            {t("The Tankarr config directory is not writable; Suwayomi cannot be installed.")}
           </p>
         ) : null}
         {status?.last_error && !status.ready ? (
@@ -380,14 +372,14 @@ export function SuwayomiManager({
         {statusError ? <p className="warn-text setting-test-result">{statusError}</p> : null}
         {showLog ? (
           <pre className="suwayomi-log">
-            {(status?.log_tail ?? []).length ? (status?.log_tail ?? []).join("\n") : "No log output yet."}
+            {(status?.log_tail ?? []).length ? (status?.log_tail ?? []).join("\n") : t("No log output yet.")}
           </pre>
         ) : null}
       </div>
 
       <div className="form-row setting-test-row">
         <div className="setting-field-actions suwayomi-language-tabs">
-          <span className="muted small">Extensions</span>
+          <span className="muted small">{t("Extensions")}</span>
           {languageTabs.map((code) => (
             <button
               key={code}
@@ -403,7 +395,7 @@ export function SuwayomiManager({
             className={`btn btn-small${language === "*" ? " btn-primary" : ""}`}
             onClick={() => setLanguage("*")}
           >
-            All languages
+            {t("All languages")}
           </button>
           {otherLanguages.length ? (
             <select
@@ -416,7 +408,7 @@ export function SuwayomiManager({
                 setLanguage(code);
               }}
             >
-              <option value="">Other language…</option>
+              <option value="">{t("Other language…")}</option>
               {otherLanguages.map((item) => (
                 <option key={item.code} value={item.code}>
                   {languageLabel(item.code)} ({item.extensions})
@@ -426,7 +418,7 @@ export function SuwayomiManager({
           ) : null}
           <input
             className="input input-small"
-            placeholder="Filter by name…"
+            placeholder={t("Filter by name…")}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
@@ -436,23 +428,21 @@ export function SuwayomiManager({
             disabled={extensionsLoading || !status?.ready}
             onClick={() => void loadExtensions(true)}
           >
-            <Icon name="refresh" size={14} /> Refresh store
+            <Icon name="refresh" size={14} /> {t("Refresh store")}
           </button>
         </div>
         {!status?.ready ? (
           <p className="muted small setting-test-result">
-            Extensions can be managed once Suwayomi is installed and running.
+            {t("Extensions can be managed once Suwayomi is installed and running.")}
           </p>
         ) : extensionsError ? (
           <p className="warn-text setting-test-result">{extensionsError}</p>
         ) : extensions === null || extensionsLoading ? (
-          <p className="muted small setting-test-result">Loading extensions…</p>
+          <p className="muted small setting-test-result">{t("Loading extensions…")}</p>
         ) : (
           <>
             <p className="muted small setting-test-result">
-              {installedCount} installed · {extensions.length} available for{" "}
-              {language === "*" ? "all languages" : languageLabel(language)}. Multi-language
-              extensions (MangaDex, MangaFire, Webtoons…) serve every language you enable.
+              {t("{installed} installed · {available} available for {language}. Multi-language extensions (MangaDex, MangaFire, Webtoons…) serve every language you enable.", { installed: installedCount, available: extensions.length, language: language === "*" ? t("all languages") : languageLabel(language) })}
             </p>
             <div className="suwayomi-extension-list">
               {visibleExtensions.map((item) => (
@@ -469,8 +459,8 @@ export function SuwayomiManager({
                     </div>
                     <div className="suwayomi-extension-badges">
                       {item.nsfw ? <StatusPill kind="warn">NSFW</StatusPill> : null}
-                      {item.has_update ? <StatusPill kind="info">Update available</StatusPill> : null}
-                      {item.obsolete ? <StatusPill kind="danger">Obsolete</StatusPill> : null}
+                      {item.has_update ? <StatusPill kind="info">{t("Update available")}</StatusPill> : null}
+                      {item.obsolete ? <StatusPill kind="danger">{t("Obsolete")}</StatusPill> : null}
                     </div>
                   </div>
                   <button
@@ -483,13 +473,13 @@ export function SuwayomiManager({
                       ? "…"
                       : item.installed
                         ? item.has_update
-                          ? "Update"
-                          : "Remove"
-                        : "Install"}
+                          ? t("Update")
+                          : t("Remove")
+                        : t("Install")}
                   </button>
                 </div>
               ))}
-              {visibleExtensions.length === 0 ? <p className="muted small">No extension matches.</p> : null}
+              {visibleExtensions.length === 0 ? <p className="muted small">{t("No extension matches.")}</p> : null}
             </div>
           </>
         )}
@@ -506,14 +496,12 @@ export function SuwayomiManager({
             <Icon name="check" size={14} />{" "}
             {testing
               ? testProgress
-                ? `Testing sources… ${testProgress.done}/${testProgress.total}`
-                : "Testing sources…"
-              : "Test sources"}
+                ? t("Testing sources… {done}/{total}", { done: testProgress.done, total: testProgress.total })
+                : t("Testing sources…")
+              : t("Test sources")}
           </button>
           <span className="muted small">
-            Searches three well-known titles on every enabled source for{" "}
-            {languageLabel(language === "*" ? languages[0] ?? "en" : language)} and reports coverage
-            and latency from this network.
+            {t("Searches three well-known titles on every enabled source for {language} and reports coverage and latency from this network.", { language: languageLabel(language === "*" ? languages[0] ?? "en" : language) })}
           </span>
         </div>
         {testError ? <p className="warn-text setting-test-result">{testError}</p> : null}
@@ -521,11 +509,11 @@ export function SuwayomiManager({
           <table className="table suwayomi-test-table">
             <thead>
               <tr>
-                <th>Source</th>
-                <th>Verdict</th>
-                <th>Hits</th>
-                <th>Avg</th>
-                <th>Detail</th>
+                <th>{t("Source")}</th>
+                <th>{t("Verdict")}</th>
+                <th>{t("Hits")}</th>
+                <th>{t("Avg")}</th>
+                <th>{t("Detail")}</th>
               </tr>
             </thead>
             <tbody>
@@ -545,7 +533,7 @@ export function SuwayomiManager({
               {testResults.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="muted">
-                    No enabled sources for this language.
+                    {t("No enabled sources for this language.")}
                   </td>
                 </tr>
               ) : null}

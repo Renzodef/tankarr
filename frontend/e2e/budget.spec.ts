@@ -8,5 +8,8 @@ test("initial JavaScript stays within its compressed startup budget", () => {
   const entry = html.match(/<script[^>]+src="([^"]+)"/);
   expect(entry, "Vite must emit a module entry point").not.toBeNull();
   const javascript = readFileSync(new URL(entry![1].replace(/^\//, ""), dist));
-  expect(gzipSync(javascript).byteLength).toBeLessThan(85_000);
+  // 88,000 since the interface became translatable: the translation runtime and
+  // the t() wrappers around every visible string cost about 800 bytes in the
+  // entry chunk. Catalogues load only when a language other than English is chosen.
+  expect(gzipSync(javascript).byteLength).toBeLessThan(88_000);
 });

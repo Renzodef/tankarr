@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 import { Modal, Spinner, StatusPill } from "../components";
 import type { ChapterMapBoundary, ChapterMapPreview, ChapterMapState } from "../types";
+import { t, tn } from "../i18n";
 
 const MAX_BOUNDARIES = 500;
 
@@ -133,7 +134,7 @@ export default function ChapterMapEditor({ mangaId, title, onClose, onSaved }: {
       if (current !== version.current) return;
       if (caught instanceof ApiError && caught.status === 409) {
         setPreview(null);
-        setError(`The saved map or chapter list changed. Preview again before confirming. ${caught.message}`);
+        setError(t("The saved map or chapter list changed. Preview again before confirming. {error}", { error: caught.message }));
       } else setError(caught instanceof Error ? caught.message : String(caught));
     } finally { if (current === version.current) setBusy(null); }
   };
@@ -142,46 +143,46 @@ export default function ChapterMapEditor({ mangaId, title, onClose, onSaved }: {
   const warnings = [...new Set(preview ? preview.result.warnings : saved?.warnings ?? [])];
   const finalInterval = preview?.result.intervals.at(-1);
 
-  return <Modal title="Set book boundaries" onClose={close} wide footer={<>
-    <button type="button" className="btn" disabled={busy === "save"} onClick={close}>Cancel</button>
+  return <Modal title={t("Set book boundaries")} onClose={close} wide footer={<>
+    <button type="button" className="btn" disabled={busy === "save"} onClick={close}>{t("Cancel")}</button>
     {preview ? <>
-      <button type="button" className="btn" disabled={busy === "save"} onClick={() => { invalidate(); setPreview(null); setError(null); }}>Edit boundaries</button>
-      <button type="button" className={`btn ${preview.kind === "remove" ? "btn-danger" : "btn-primary"}`} disabled={busy === "save" || !preview.result.confirmation_snapshot} onClick={() => void confirm()}>{busy === "save" ? "Saving…" : preview.kind === "remove" ? "Confirm removal" : "Confirm and save boundaries"}</button>
-    </> : saved ? <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => void previewChanges("save")}>{busy === "preview" ? "Previewing…" : "Preview changes"}</button> : null}
+      <button type="button" className="btn" disabled={busy === "save"} onClick={() => { invalidate(); setPreview(null); setError(null); }}>{t("Edit boundaries")}</button>
+      <button type="button" className={`btn ${preview.kind === "remove" ? "btn-danger" : "btn-primary"}`} disabled={busy === "save" || !preview.result.confirmation_snapshot} onClick={() => void confirm()}>{busy === "save" ? t("Saving…") : preview.kind === "remove" ? t("Confirm removal") : t("Confirm and save boundaries")}</button>
+    </> : saved ? <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => void previewChanges("save")}>{busy === "preview" ? t("Previewing…") : t("Preview changes")}</button> : null}
   </>}>
     <p><strong>{title}</strong></p>
-    <p>Enter the first chapter in each book. A book ends before the next book starts; the last book ends at the last known canonical chapter. Decimal chapters such as 55.5 are preserved.</p>
-    <p className="muted small">Without confirmed boundaries, chapters are divided evenly and estimates update with new releases. Saving boundaries updates chapter assignments and Missing. It never queues downloads or retires files. Saved boundaries remain fixed when the catalogue changes.</p>
+    <p>{t("Enter the first chapter in each book. A book ends before the next book starts; the last book ends at the last known canonical chapter. Decimal chapters such as 55.5 are preserved.")}</p>
+    <p className="muted small">{t("Without confirmed boundaries, chapters are divided evenly and estimates update with new releases. Saving boundaries updates chapter assignments and Missing. It never queues downloads or retires files. Saved boundaries remain fixed when the catalogue changes.")}</p>
     {error ? <p className="banner banner-danger" role="alert">{error}</p> : null}
     {!saved && busy === "load" ? <Spinner /> : null}
-    {!saved && error ? <button type="button" className="btn" onClick={() => void load()}>Retry loading boundaries</button> : null}
+    {!saved && error ? <button type="button" className="btn" onClick={() => void load()}>{t("Retry loading boundaries")}</button> : null}
     {saved ? <>
-      {!preview ? saved.last_known_chapter !== null ? <p>Last known canonical chapter: <strong>{saved.last_known_chapter}</strong>.</p> : <p className="banner banner-warn">The last canonical chapter is not known. A complete boundary map cannot be confirmed yet.</p> : null}
+      {!preview ? saved.last_known_chapter !== null ? <p>{t("Last known canonical chapter:")} <strong>{saved.last_known_chapter}</strong></p> : <p className="banner banner-warn">{t("The last canonical chapter is not known. A complete boundary map cannot be confirmed yet.")}</p> : null}
       {warnings.map((warning) => <p key={warning} className="banner banner-warn">{warning}</p>)}
       {!preview ? <>
-        <p><StatusPill kind={fromSuggestions ? "warn" : saved.boundaries.length ? "info" : "muted"}>{fromSuggestions ? "Catalogue suggestions — not verified" : saved.boundaries.length ? "Operator boundaries" : "No book boundaries yet"}</StatusPill></p>
-        <div className="data-table-frame"><table className="table responsive-list-table"><thead><tr><th>Book</th><th>First chapter</th><th>Actions</th></tr></thead><tbody>
+        <p><StatusPill kind={fromSuggestions ? "warn" : saved.boundaries.length ? "info" : "muted"}>{fromSuggestions ? t("Catalogue suggestions — not verified") : saved.boundaries.length ? t("Operator boundaries") : t("No book boundaries yet")}</StatusPill></p>
+        <div className="data-table-frame"><table className="table responsive-list-table"><thead><tr><th>{t("Book")}</th><th>{t("First chapter")}</th><th>{t("Actions")}</th></tr></thead><tbody>
           {rows.map((row, index) => <tr key={index}>
-            <td data-label="Book"><input className="input" aria-label={`Book number in row ${index + 1}`} inputMode="decimal" maxLength={64} value={row.volume} onChange={(event) => edit(rows.map((item, position) => position === index ? { ...item, volume: event.target.value } : item))} /></td>
-            <td data-label="First chapter"><input className="input" aria-label={`First chapter in row ${index + 1}`} inputMode="decimal" maxLength={64} value={row.first_chapter} onChange={(event) => edit(rows.map((item, position) => position === index ? { ...item, first_chapter: event.target.value } : item))} /></td>
-            <td data-label="Actions"><button type="button" className="btn btn-ghost" aria-label={`Remove boundary row ${index + 1}`} onClick={() => edit(rows.filter((_, position) => position !== index))}>Remove</button></td>
+            <td data-label={t("Book")}><input className="input" aria-label={t("Book number in row {row}", { row: index + 1 })} inputMode="decimal" maxLength={64} value={row.volume} onChange={(event) => edit(rows.map((item, position) => position === index ? { ...item, volume: event.target.value } : item))} /></td>
+            <td data-label={t("First chapter")}><input className="input" aria-label={t("First chapter in row {row}", { row: index + 1 })} inputMode="decimal" maxLength={64} value={row.first_chapter} onChange={(event) => edit(rows.map((item, position) => position === index ? { ...item, first_chapter: event.target.value } : item))} /></td>
+            <td data-label={t("Actions")}><button type="button" className="btn btn-ghost" aria-label={t("Remove boundary row {row}", { row: index + 1 })} onClick={() => edit(rows.filter((_, position) => position !== index))}>{t("Remove")}</button></td>
           </tr>)}
         </tbody></table></div>
-        {!rows.length ? <p className="muted">No boundaries in this draft. Add the books you can verify.</p> : null}
+        {!rows.length ? <p className="muted">{t("No boundaries in this draft. Add the books you can verify.")}</p> : null}
         <div className="toolbar-group">
-          <button type="button" className="btn" disabled={rows.length >= MAX_BOUNDARIES} onClick={() => edit([...rows, { volume: "", first_chapter: "" }])}>Add book boundary</button>
-          {saved.boundaries.length > 0 && saved.suggestions.length > 0 ? <button type="button" className="btn" onClick={() => { edit(saved.suggestions); setFromSuggestions(true); }}>Use catalogue suggestions</button> : null}
-          {saved.boundaries.length > 0 ? <button type="button" className="btn btn-danger" disabled={busy !== null} onClick={() => void previewChanges("remove")}>Preview removing operator map</button> : null}
+          <button type="button" className="btn" disabled={rows.length >= MAX_BOUNDARIES} onClick={() => edit([...rows, { volume: "", first_chapter: "" }])}>{t("Add book boundary")}</button>
+          {saved.boundaries.length > 0 && saved.suggestions.length > 0 ? <button type="button" className="btn" onClick={() => { edit(saved.suggestions); setFromSuggestions(true); }}>{t("Use catalogue suggestions")}</button> : null}
+          {saved.boundaries.length > 0 ? <button type="button" className="btn btn-danger" disabled={busy !== null} onClick={() => void previewChanges("remove")}>{t("Preview removing operator map")}</button> : null}
         </div>
-      </> : <section aria-label="Boundary change preview">
-        <h3>{preview.kind === "remove" ? "Remove operator boundaries" : "Review book assignments"}</h3>
-        {preview.kind === "remove" ? <p>The operator map will be removed. Books without explicit readings return to an even estimate; catalogue suggestions remain unconfirmed.</p> : <p>These assignments will replace the current operator map and take priority over catalogue suggestions.</p>}
+      </> : <section aria-label={t("Boundary change preview")}>
+        <h3>{preview.kind === "remove" ? t("Remove operator boundaries") : t("Review book assignments")}</h3>
+        {preview.kind === "remove" ? <p>{t("The operator map will be removed. Books without explicit readings return to an even estimate; catalogue suggestions remain unconfirmed.")}</p> : <p>{t("These assignments will replace the current operator map and take priority over catalogue suggestions.")}</p>}
         {preview.result.intervals.length ? <ul>{preview.result.intervals.map((interval) => <li key={interval.volume}>
-          <strong>Book {interval.volume}: chapters {interval.first_chapter}–{interval.last_chapter}</strong>
-          <details><summary>{interval.chapters.length} canonical chapter{interval.chapters.length === 1 ? "" : "s"}</summary><p>{interval.chapters.join(", ")}</p></details>
-        </li>)}</ul> : <p>No operator book assignments remain in this preview.</p>}
-        {preview.kind === "save" && finalInterval ? <p className="banner banner-info">Book {finalInterval.volume} ends at chapter {finalInterval.last_chapter}, the last canonical chapter known for this preview. Future chapters will not extend this map automatically.</p> : null}
-        <p>{preview.result.chapter_index.mapped_missing_count} missing {preview.result.chapter_index.unit === "volume" ? "books" : "chapters"} after this change.</p>
+          <strong>{t("Book {volume}: chapters {first}–{last}", { volume: interval.volume, first: interval.first_chapter, last: interval.last_chapter })}</strong>
+          <details><summary>{tn(interval.chapters.length, "{count} canonical chapter", "{count} canonical chapters")}</summary><p>{interval.chapters.join(", ")}</p></details>
+        </li>)}</ul> : <p>{t("No operator book assignments remain in this preview.")}</p>}
+        {preview.kind === "save" && finalInterval ? <p className="banner banner-info">{t("Book {volume} ends at chapter {chapter}, the last canonical chapter known for this preview. Future chapters will not extend this map automatically.", { volume: finalInterval.volume, chapter: finalInterval.last_chapter })}</p> : null}
+        <p>{preview.result.chapter_index.unit === "volume" ? tn(preview.result.chapter_index.mapped_missing_count, "{count} missing book after this change.", "{count} missing books after this change.") : tn(preview.result.chapter_index.mapped_missing_count, "{count} missing chapter after this change.", "{count} missing chapters after this change.")}</p>
       </section>}
     </> : null}
   </Modal>;

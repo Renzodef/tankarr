@@ -97,6 +97,7 @@ Run the same checks as CI before opening a pull request:
 ```sh
 ./run-tests.sh                   # ruff check, ruff format --check, pytest
 npm test --prefix frontend       # frontend unit tests (Vitest)
+npm run i18n:check --prefix frontend  # every interface string has its translations
 npm run build --prefix frontend  # type check (tsc -b) and production build
 ```
 
@@ -147,6 +148,36 @@ This site is built with MkDocs and the Material theme from `docs/` and
 CI builds the site with `mkdocs build --strict`, so a broken link fails the
 build. Every page starts with front matter holding a one-sentence
 `description`.
+
+### Translations
+
+The interface is written in English and translated at run time: the English
+text is the key, `frontend/src/i18n/locales/<code>.json` holds the
+translations for one language, and anything missing falls back to English.
+Wrap every string a user can see:
+
+```tsx
+t("Refresh view")                                 // plain text
+t("Monitored: {mode}", { mode })                  // interpolation
+tn(count, "{count} chapter", "{count} chapters")  // plurals (CLDR rules)
+msg("Comics")                                     // a string kept in a data table; render it with t()
+```
+
+Keep whole sentences in one call rather than concatenating fragments, because
+word order changes between languages. `npm run i18n:check --prefix frontend`
+fails when a catalogue misses a string, keeps one the interface no longer
+uses, or leaves one empty; `npm run i18n:check --prefix frontend -- --fix`
+adds the missing keys (empty) and removes the unused ones. CI runs the check.
+A plural string is an object with the CLDR forms the language needs (`one`,
+`other`, and `few` or `many` where the language has them).
+
+To add a language, create `frontend/src/i18n/locales/<code>.json` containing
+`{}`, add the code to `LOCALES` and `loaders` in `frontend/src/i18n/index.tsx`,
+run the check with `--fix` and translate every value. Catalogues are loaded
+only when their language is chosen, so the English interface pays nothing. The
+language is a browser preference (Settings → General → Interface language,
+kept in that browser only); the server, its logs and the file names stay in
+English.
 
 ## How the application works
 

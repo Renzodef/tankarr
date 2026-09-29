@@ -7,6 +7,7 @@ import type {
   CalendarResponse,
   ExpectedRelease,
 } from "../types";
+import { locale, msg, t, tn } from "../i18n";
 
 type CalendarStatus = CalendarAvailabilityStatus;
 
@@ -34,10 +35,10 @@ const calendarWindowCache = new Map<string, CalendarWindow>();
 const calendarWindowRequests = new Map<string, Promise<CalendarWindow>>();
 
 const STATUS_LABELS: Record<CalendarStatus, string> = {
-  downloaded: "Downloaded",
-  official_available: "Official available",
-  early_available: "Early release available",
-  expected: "Expected",
+  downloaded: msg("Downloaded"),
+  official_available: msg("Official available"),
+  early_available: msg("Early release available"),
+  expected: msg("Expected"),
 };
 
 function localDate(value: string): Date {
@@ -130,12 +131,12 @@ function releaseDay(value: string): string {
 }
 
 function rangeLabel(start: Date, end: Date): string {
-  const left = new Intl.DateTimeFormat(undefined, {
+  const left = new Intl.DateTimeFormat(locale(), {
     month: "short",
     day: "numeric",
     ...(start.getFullYear() !== end.getFullYear() ? { year: "numeric" } : {}),
   }).format(start);
-  const right = new Intl.DateTimeFormat(undefined, {
+  const right = new Intl.DateTimeFormat(locale(), {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -156,8 +157,8 @@ function releasedEvent(item: CalendarRelease): CalendarEvent | null {
   const moment = new Date(item.publish_at);
   const time = Number.isNaN(moment.getTime())
     ? ""
-    : new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(moment);
-  const detail = title && title !== chapter ? title : "Released";
+    : new Intl.DateTimeFormat(locale(), { hour: "2-digit", minute: "2-digit" }).format(moment);
+  const detail = title && title !== chapter ? title : t("Released");
   return {
     key: `release:${item.id}`,
     day: releaseDay(item.publish_at),
@@ -176,13 +177,13 @@ function expectedEvent(item: ExpectedRelease): CalendarEvent {
     day: item.expected_at,
     mangaId: item.manga_id,
     mangaTitle: item.manga_title,
-    chapter: `Chapter ${item.chapter}`,
+    chapter: t("Chapter {number}", { number: item.chapter }),
     // The date is projected from the work's release rhythm, never announced
     // by the publisher: say so, and say when the author skipped a slot.
     detail:
       overdue > 0
-        ? `${item.cadence_label} rhythm · ${overdue} day${overdue === 1 ? "" : "s"} overdue`
-        : `${item.cadence_label} rhythm`,
+        ? tn(overdue, "{cadence} rhythm · {count} day overdue", "{cadence} rhythm · {count} days overdue", { cadence: item.cadence_label })
+        : t("{cadence} rhythm", { cadence: item.cadence_label }),
     status: eventStatus(item),
   };
 }
@@ -287,20 +288,20 @@ export default function CalendarPage() {
     <div className="page calendar-page">
       <div className="calendar-titlebar">
         <div>
-          <h1 className="page-title">Calendar</h1>
+          <h1 className="page-title">{t("Calendar")}</h1>
           <p className="calendar-summary">
-            {events.length} {events.length === 1 ? "release" : "releases"} this week
+            {tn(events.length, "{count} release this week", "{count} releases this week")}
           </p>
         </div>
       </div>
 
       <div className="calendar-controls">
-        <div className="calendar-navigation" aria-label="Calendar navigation">
+        <div className="calendar-navigation" aria-label={t("Calendar navigation")}>
           <button
             type="button"
             className="btn btn-icon calendar-previous"
-            title="Previous week"
-            aria-label="Previous week"
+            title={t("Previous week")}
+            aria-label={t("Previous week")}
             onClick={() => shiftWeek(-7)}
           >
             <Icon name="chevronRight" />
@@ -308,19 +309,19 @@ export default function CalendarPage() {
           <button
             type="button"
             className="btn btn-icon"
-            title="Next week"
-            aria-label="Next week"
+            title={t("Next week")}
+            aria-label={t("Next week")}
             onClick={() => shiftWeek(7)}
           >
             <Icon name="chevronRight" />
           </button>
           <button type="button" className="btn" disabled={currentWeek} onClick={returnToToday}>
-            Today
+            {t("Today")}
           </button>
         </div>
         <h2 className="calendar-range">{rangeLabel(days[0], days[6])}</h2>
         <span className={`calendar-refresh-state${refreshing ? " is-loading" : ""}`} aria-live="polite">
-          {refreshing ? "Updating" : ""}
+          {refreshing ? t("Updating") : ""}
         </span>
       </div>
 
@@ -329,8 +330,8 @@ export default function CalendarPage() {
       ) : events.length === 0 && !loading ? (
         <EmptyState
           icon="calendar"
-          title="No releases this week"
-          hint="No monitored official releases are dated in this interval."
+          title={t("No releases this week")}
+          hint={t("No monitored official releases are dated in this interval.")}
         />
       ) : (
         <div className={`calendar-week${loading ? " is-loading" : ""}`} aria-busy={loading}>
@@ -345,12 +346,12 @@ export default function CalendarPage() {
               >
                 <header className="calendar-day-header">
                   <span className="calendar-weekday">
-                    {new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date)}
+                    {new Intl.DateTimeFormat(locale(), { weekday: "short" }).format(date)}
                   </span>
                   <time dateTime={key} className="calendar-date">
-                    {new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" }).format(date)}
+                    {new Intl.DateTimeFormat(locale(), { month: "numeric", day: "numeric" }).format(date)}
                   </time>
-                  {isToday ? <span className="calendar-today-label">Today</span> : null}
+                  {isToday ? <span className="calendar-today-label">{t("Today")}</span> : null}
                 </header>
                 <div className="calendar-events">
                   {dayEvents.map((event) => (
@@ -358,7 +359,7 @@ export default function CalendarPage() {
                       key={event.key}
                       className={`calendar-event calendar-event-${event.status}`}
                       href={seriesPath(event.mangaId)}
-                      title={`${event.mangaTitle} - ${event.chapter} - ${STATUS_LABELS[event.status]}`}
+                      title={`${event.mangaTitle} - ${event.chapter} - ${t(STATUS_LABELS[event.status])}`}
                     >
                       <span className="calendar-event-title">{event.mangaTitle}</span>
                       <span className="calendar-event-chapter">{event.chapter}</span>

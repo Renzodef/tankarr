@@ -19,6 +19,7 @@ import {
   useApp,
 } from "../components";
 import type { Job, TorrentDownload } from "../types";
+import { t, tn } from "../i18n";
 
 type HistoryRow = Pick<Job, "id" | "manga_id" | "manga_title" | "manga_cover_url" | "chapter_volume" | "chapter_number" | "chapter_title" | "chapter_provider" | "chapter_source_name" | "status" | "message" | "result_path" | "updated_at"> & {
   key: string;
@@ -113,7 +114,7 @@ export default function HistoryPage() {
       ...(jobs.status === "fulfilled" ? jobs.value.filter((job) => ["completed", "failed"].includes(job.status)).map((job) => ({ ...job, key: `job:${job.id}` })) : (previous ?? []).filter((row) => !row.torrent)),
       ...(torrents.status === "fulfilled" ? torrents.value.filter((torrent) => ["imported", "failed"].includes(torrent.status)).map(torrentHistoryRow) : (previous ?? []).filter((row) => row.torrent)),
     ]);
-    const errors = [jobs.status === "rejected" ? `Chapter history unavailable: ${String(jobs.reason)}` : "", torrents.status === "rejected" ? `Release history unavailable: ${String(torrents.reason)}` : ""].filter(Boolean);
+    const errors = [jobs.status === "rejected" ? t("Chapter history unavailable: {error}", { error: String(jobs.reason) }) : "", torrents.status === "rejected" ? t("Release history unavailable: {error}", { error: String(torrents.reason) }) : ""].filter(Boolean);
     setLoadError(errors.length ? errors.join(" · ") : null);
     setLoading(false);
   }, []);
@@ -206,7 +207,7 @@ export default function HistoryPage() {
     try {
       if (row.torrent) await api.retryTorrent(row.id);
       else await api.retryJob(row.id, { overrideQuality });
-      notify("success", row.torrent ? "Release requeued." : overrideQuality ? "Job requeued; the length gate is waived for it." : "Job requeued.");
+      notify("success", row.torrent ? t("Release requeued.") : overrideQuality ? t("Job requeued; the length gate is waived for it.") : t("Job requeued."));
       await Promise.all([load(), refreshJobs()]);
     } catch (caught) {
       notify("error", String(caught));
@@ -231,26 +232,26 @@ export default function HistoryPage() {
     <div className="page">
       <div className="toolbar activity-toolbar">
         <div>
-          <h1 className="page-title">Activity</h1>
-          <nav className="page-tabs" aria-label="Activity sections">
+          <h1 className="page-title">{t("Activity")}</h1>
+          <nav className="page-tabs" aria-label={t("Activity sections")}>
             <a className="page-tab" href="#/activity">
-              Queue
+              {t("Queue")}
             </a>
             <a className="page-tab active" href="#/history" aria-current="page">
-              History
+              {t("History")}
             </a>
           </nav>
         </div>
       </div>
-      {loadError ? <LoadError message={loadError} retryLabel="Retry history" retry={() => void load()} loading={loading} hasData={Boolean(history?.length)} /> : null}
+      {loadError ? <LoadError message={loadError} retryLabel={t("Retry history")} retry={() => void load()} loading={loading} hasData={Boolean(history?.length)} /> : null}
       {history === null ? (
         <Spinner />
       ) : history.length === 0 ? (
-        loadError ? null : <EmptyState icon="history" title="No history yet" />
+        loadError ? null : <EmptyState icon="history" title={t("No history yet")} />
       ) : filteredHistory.length === 0 ? (
         <>
           {historyControls}
-          <EmptyState icon="search" title="No history records match these filters" />
+          <EmptyState icon="search" title={t("No history records match these filters")} />
         </>
       ) : (
         <>
@@ -259,14 +260,14 @@ export default function HistoryPage() {
         <table className="table responsive-list-table history-table">
           <thead>
             <tr>
-              <th className="col-cover" aria-label="Cover" />
-              <th>Series</th>
-              <th>Item</th>
-              <th className="col-provider">Provider</th>
-              <th className="col-status">Status</th>
-              <th>Detail</th>
-              <th className="col-date">Updated</th>
-              <th className="col-actions" aria-label="Actions" />
+              <th className="col-cover" aria-label={t("Cover")} />
+              <th>{t("Series")}</th>
+              <th>{t("Item")}</th>
+              <th className="col-provider">{t("Provider")}</th>
+              <th className="col-status">{t("Status")}</th>
+              <th>{t("Detail")}</th>
+              <th className="col-date">{t("Updated")}</th>
+              <th className="col-actions" aria-label={t("Actions")} />
             </tr>
           </thead>
           <tbody>
@@ -274,43 +275,43 @@ export default function HistoryPage() {
               const pill = jobStatusPill(job.status);
               return (
                 <tr key={job.key}>
-                  <td className="col-cover" data-label="Cover">
+                  <td className="col-cover" data-label={t("Cover")}>
                     <Cover url={job.manga_cover_url} title={job.manga_title ?? "?"} className="table-cover" />
                   </td>
-                  <td data-label="Series">
+                  <td data-label={t("Series")}>
                     <a className="table-link" href={seriesPath(job.manga_id)}>
                       {job.manga_title ?? job.manga_id}
                     </a>
                   </td>
-                  <td data-label="Item">{chapterLabel(job.chapter_volume, job.chapter_number)}{job.torrent ? <div className="muted small">{job.torrent.title}</div> : null}</td>
-                  <td className="col-provider" data-label="Source">
+                  <td data-label={t("Item")}>{chapterLabel(job.chapter_volume, job.chapter_number)}{job.torrent ? <div className="muted small">{job.torrent.title}</div> : null}</td>
+                  <td className="col-provider" data-label={t("Source")}>
                     <StatusPill kind="provider">
                       {providerChainLabel(job.chapter_provider ?? "unknown", job.chapter_source_name)}
                     </StatusPill>
                   </td>
-                  <td className="col-status" data-label="Status">
+                  <td className="col-status" data-label={t("Status")}>
                     {!job.torrent && job.status === "failed" && (job.message ?? "").startsWith("DegradedPagesError") ? (
                       <StatusPill kind="muted">
-                        <span title="Tankarr refused this download because the pages were unreadable (strips or fragments); the failover moves on to another source.">
-                          Refused · unreadable
+                        <span title={t("Tankarr refused this download because the pages were unreadable (strips or fragments); the failover moves on to another source.")}>
+                          {t("Refused · unreadable")}
                         </span>
                       </StatusPill>
                     ) : (
                       <StatusPill kind={pill.kind}>{pill.label}</StatusPill>
                     )}
                   </td>
-                  <td className="muted history-message" data-label="Detail" title={job.message}>
+                  <td className="muted history-message" data-label={t("Detail")} title={job.message}>
                     <div>{job.status === "completed" && job.result_path ? job.result_path : job.message}</div>
                     {job.torrent ? <ImportDecisionsDetails evidence={job.torrent.language_evidence ?? {}} importedPaths={job.torrent.imported_paths} /> : null}
                   </td>
-                  <td className="col-date muted" data-label="Updated">{formatDate(job.updated_at)}</td>
-                  <td className="col-actions" data-label="Actions">
+                  <td className="col-date muted" data-label={t("Updated")}>{formatDate(job.updated_at)}</td>
+                  <td className="col-actions" data-label={t("Actions")}>
                     {job.status === "failed" ? (
                       <button
                         type="button"
                         className="btn btn-ghost btn-icon"
                         disabled={busy}
-                        title="Retry download"
+                        title={t("Retry download")}
                         onClick={() => void retry(job)}
                       >
                         <Icon name="retry" size={15} />
@@ -323,7 +324,7 @@ export default function HistoryPage() {
                         type="button"
                         className="btn btn-ghost btn-icon"
                         disabled={busy}
-                        title="Download anyway: accept this chapter although it is shorter than the series' usual (unreadable strips can never be accepted)"
+                        title={t("Download anyway: accept this chapter although it is shorter than the series' usual (unreadable strips can never be accepted)")}
                         onClick={() => void retry(job, true)}
                       >
                         <Icon name="download" size={15} />
@@ -333,7 +334,7 @@ export default function HistoryPage() {
                       type="button"
                       className="btn btn-ghost btn-icon"
                       disabled={busy}
-                      title="Remove from history"
+                      title={t("Remove from history")}
                       onClick={() => void removeJob(job.id)}
                     >
                       <Icon name="trash" size={15} />
@@ -350,8 +351,8 @@ export default function HistoryPage() {
           pageSize={PAGE_SIZE}
           total={filteredHistory.length}
           onPageChange={setPage}
-          itemLabel="history records"
-          ariaLabel="History pages"
+          itemLabel={t("history records")}
+          ariaLabel={t("History pages")}
         />
         </>
       )}
@@ -387,51 +388,51 @@ function HistoryControls({
   filteredTotal: number;
 }) {
   return (
-    <div className="list-controls" aria-label="Filter and sort history">
+    <div className="list-controls" aria-label={t("Filter and sort history")}>
       <div className="list-control-fields">
         <SeriesFilter
           value={filter}
           series={series}
           onChange={onFilterChange}
-          placeholder="Filter series or pattern…"
-          ariaLabel="Filter history by series or pattern"
+          placeholder={t("Filter series or pattern…")}
+          ariaLabel={t("Filter history by series or pattern")}
         />
         <select
           className="input"
           value={stateFilter}
-          aria-label="Filter history by state"
+          aria-label={t("Filter history by state")}
           onChange={(event) => onStateFilterChange(event.target.value as HistoryStateFilter)}
         >
-          <option value="all">State: All ({total})</option>
-          {stateCounts.completed ? <option value="completed">State: Imported ({stateCounts.completed})</option> : null}
-          {stateCounts.failed ? <option value="failed">State: Failed ({stateCounts.failed})</option> : null}
+          <option value="all">{t("State: All ({count})", { count: total })}</option>
+          {stateCounts.completed ? <option value="completed">{t("State: Imported ({count})", { count: stateCounts.completed })}</option> : null}
+          {stateCounts.failed ? <option value="failed">{t("State: Failed ({count})", { count: stateCounts.failed })}</option> : null}
         </select>
         <select
           className="input"
           value={sort}
-          aria-label="Sort history"
+          aria-label={t("Sort history")}
           onChange={(event) => onSortChange(event.target.value as HistorySort)}
         >
-          <option value="updated">Sort: Updated</option>
-          <option value="series">Sort: Series title</option>
-          <option value="item">Sort: Item number</option>
-          <option value="state">Sort: State</option>
+          <option value="updated">{t("Sort: Updated")}</option>
+          <option value="series">{t("Sort: Series title")}</option>
+          <option value="item">{t("Sort: Item number")}</option>
+          <option value="state">{t("Sort: State")}</option>
         </select>
         <button
           type="button"
           className="btn sort-direction"
           onClick={onSortDirectionChange}
-          aria-label={`Sort ${sortDirection === "asc" ? "descending" : "ascending"}`}
-          title={`Currently ${sortDirection === "asc" ? "ascending" : "descending"}; click to reverse`}
+          aria-label={sortDirection === "asc" ? t("Sort descending") : t("Sort ascending")}
+          title={sortDirection === "asc" ? t("Currently ascending; click to reverse") : t("Currently descending; click to reverse")}
         >
           <Icon name={sortDirection === "asc" ? "sortAscending" : "sortDescending"} />
-          <span>{sortDirection === "asc" ? "Ascending" : "Descending"}</span>
+          <span>{sortDirection === "asc" ? t("Ascending") : t("Descending")}</span>
         </button>
       </div>
       <span className="muted small list-result-count">
         {filteredTotal === total
-          ? `${total} history records`
-          : `${filteredTotal} of ${total} history records`}
+          ? tn(total, "{count} history record", "{count} history records")
+          : t("{shown} of {total} history records", { shown: filteredTotal, total })}
       </span>
     </div>
   );

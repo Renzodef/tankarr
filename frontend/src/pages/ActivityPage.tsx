@@ -20,6 +20,7 @@ import {
   Spinner,
 } from "../components";
 import type { TorrentDownload, Job, QueueSeriesSummary } from "../types";
+import { locale, t, tn } from "../i18n";
 
 const TERMINAL = new Set(["completed", "failed"]);
 const TORRENT_TERMINAL = new Set(["imported", "failed", "review"]);
@@ -354,10 +355,10 @@ export default function ActivityPage() {
       );
       torrentResults.forEach((result, index) => {
         if (result.status === "fulfilled") removed += 1;
-        else failures.push(`Torrent #${torrentIds[index]}: ${String(result.reason)}`);
+        else failures.push(t("Torrent #{id}: {error}", { id: torrentIds[index], error: String(result.reason) }));
       });
-      if (removed) notify("success", `Removed ${removed} selected download${removed === 1 ? "" : "s"}.`);
-      if (failures.length) notify("error", `${failures.length} could not be removed: ${failures[0]}`);
+      if (removed) notify("success", tn(removed, "Removed {count} selected download.", "Removed {count} selected downloads."));
+      if (failures.length) notify("error", t("{count} could not be removed: {reason}", { count: failures.length, reason: failures[0] }));
       setSelected(new Set());
       setConfirmBulkRemove(false);
       await Promise.all([refreshJobs(), refreshTorrents()]);
@@ -371,7 +372,7 @@ export default function ActivityPage() {
   const remove = async (jobId: number) => {
     try {
       await api.deleteJob(jobId);
-      notify("success", "Removed from queue.");
+      notify("success", t("Removed from queue."));
       await refreshJobs();
     } catch (caught) {
       notify("error", String(caught));
@@ -383,7 +384,7 @@ export default function ActivityPage() {
     try {
       const result = await action();
       if (result && typeof result === "object" && "status" in result && result.status === "failed") {
-        notify("error", "message" in result ? String(result.message) : "Release import failed.");
+        notify("error", "message" in result ? String(result.message) : t("Release import failed."));
       } else notify("success", message);
       await refreshTorrents();
     } catch (caught) {
@@ -396,28 +397,28 @@ export default function ActivityPage() {
   return (
     <div className="page">
       {Object.entries(loadErrors).map(([key, message]) => (
-        <LoadError key={key} message={`${key === "torrents" ? "Torrent activity" : key === "queue" ? "Download queue" : "Series queue"} unavailable: ${message}`} retryLabel="Retry activity" retry={() => void refreshTorrents()} loading={loading} hasData={queueTotal !== null || torrentsLoaded} />
+        <LoadError key={key} message={t("{scope} unavailable: {error}", { scope: key === "torrents" ? t("Torrent activity") : key === "queue" ? t("Download queue") : t("Series queue"), error: message })} retryLabel={t("Retry activity")} retry={() => void refreshTorrents()} loading={loading} hasData={queueTotal !== null || torrentsLoaded} />
       ))}
       <div className="toolbar activity-toolbar">
         <div>
-          <h1 className="page-title">Activity</h1>
-          <nav className="page-tabs" aria-label="Activity sections">
+          <h1 className="page-title">{t("Activity")}</h1>
+          <nav className="page-tabs" aria-label={t("Activity sections")}>
             <a className="page-tab active" href="#/activity" aria-current="page">
-              Queue
+              {t("Queue")}
             </a>
             <a className="page-tab" href="#/history">
-              History
+              {t("History")}
             </a>
           </nav>
         </div>
         <div className="toolbar-group activity-summary">
-          <span className="muted" title={queueTotal !== null && queueTotal > active.length ? `Showing the first ${active.length}` : undefined}>
-            {queueTotal === null && !torrentsLoaded ? "Queue status unavailable" : `${(queueTotal ?? active.length) + activeTorrents.length} in queue`}
+          <span className="muted" title={queueTotal !== null && queueTotal > active.length ? t("Showing the first {count}", { count: active.length }) : undefined}>
+            {queueTotal === null && !torrentsLoaded ? t("Queue status unavailable") : t("{count} in queue", { count: (queueTotal ?? active.length) + activeTorrents.length })}
           </span>
           {selectableKeys.length ? (
             <>
               <button type="button" className="btn btn-ghost" onClick={toggleAll}>
-                {allSelected ? "Clear selection" : "Select all"}
+                {allSelected ? t("Clear selection") : t("Select all")}
               </button>
               <button
                 type="button"
@@ -425,7 +426,7 @@ export default function ActivityPage() {
                 disabled={selectedKeys.length === 0}
                 onClick={() => setConfirmBulkRemove(true)}
               >
-                <Icon name="trash" /> Remove selected ({selectedKeys.length})
+                <Icon name="trash" /> {t("Remove selected ({count})", { count: selectedKeys.length })}
               </button>
             </>
           ) : null}
@@ -433,45 +434,45 @@ export default function ActivityPage() {
       </div>
       {health?.download_worker && !health.download_worker.running ? (
         <div className="banner banner-danger">
-          <Icon name="alert" /> Download worker stopped
+          <Icon name="alert" /> {t("Download worker stopped")}
           {health.download_worker.error ? `: ${health.download_worker.error}` : "."}
         </div>
       ) : null}
       {sections.length ? (
-        <div className="list-controls" aria-label="Filter and sort activity queue">
+        <div className="list-controls" aria-label={t("Filter and sort activity queue")}>
           <div className="list-control-fields">
             <SeriesFilter
               value={filter}
               series={seriesFilterOptions}
               onChange={setFilter}
-              placeholder="Filter series or pattern…"
-              ariaLabel="Filter activity by series or pattern"
+              placeholder={t("Filter series or pattern…")}
+              ariaLabel={t("Filter activity by series or pattern")}
             />
             <select
               className="input"
               value={stateFilter}
-              aria-label="Filter activity by state"
+              aria-label={t("Filter activity by state")}
               onChange={(event) => setStateFilter(event.target.value as ActivityStateFilter)}
             >
-              <option value="all">State: All ({sections.length})</option>
-              {stateCounts.working ? <option value="working">State: Working ({stateCounts.working})</option> : null}
-              {stateCounts.waiting ? <option value="waiting">State: Waiting ({stateCounts.waiting})</option> : null}
-              {stateCounts.ready ? <option value="ready">State: Ready to import ({stateCounts.ready})</option> : null}
+              <option value="all">{t("State: All ({count})", { count: sections.length })}</option>
+              {stateCounts.working ? <option value="working">{t("State: Working ({count})", { count: stateCounts.working })}</option> : null}
+              {stateCounts.waiting ? <option value="waiting">{t("State: Waiting ({count})", { count: stateCounts.waiting })}</option> : null}
+              {stateCounts.ready ? <option value="ready">{t("State: Ready to import ({count})", { count: stateCounts.ready })}</option> : null}
             </select>
             <select
               className="input"
               value={sort}
-              aria-label="Sort activity queue"
+              aria-label={t("Sort activity queue")}
               onChange={(event) => {
                 const nextSort = event.target.value as ActivitySort;
                 setSort(nextSort);
                 setSortDirection(nextSort === "remaining" ? "desc" : "asc");
               }}
             >
-              <option value="queue">Sort: Queue priority</option>
-              <option value="title">Sort: Series title</option>
-              <option value="remaining">Sort: Remaining items</option>
-              <option value="state">Sort: State</option>
+              <option value="queue">{t("Sort: Queue priority")}</option>
+              <option value="title">{t("Sort: Series title")}</option>
+              <option value="remaining">{t("Sort: Remaining items")}</option>
+              <option value="state">{t("Sort: State")}</option>
             </select>
             <button
               type="button"
@@ -480,32 +481,32 @@ export default function ActivityPage() {
               onClick={() => setSortDirection((current) => current === "asc" ? "desc" : "asc")}
               aria-label={
                 sort === "queue"
-                  ? "Queue priority order is controlled by the scheduler"
-                  : `Sort ${sortDirection === "asc" ? "descending" : "ascending"}`
+                  ? t("Queue priority order is controlled by the scheduler")
+                  : sortDirection === "asc" ? t("Sort descending") : t("Sort ascending")
               }
               title={
                 sort === "queue"
-                  ? "Matches the scheduler's live queue priority"
-                  : `Currently ${sortDirection === "asc" ? "ascending" : "descending"}; click to reverse`
+                  ? t("Matches the scheduler's live queue priority")
+                  : sortDirection === "asc" ? t("Currently ascending; click to reverse") : t("Currently descending; click to reverse")
               }
             >
               <Icon name={sortDirection === "asc" ? "sortAscending" : "sortDescending"} />
-              <span>{sort === "queue" ? "Priority order" : sortDirection === "asc" ? "Ascending" : "Descending"}</span>
+              <span>{sort === "queue" ? t("Priority order") : sortDirection === "asc" ? t("Ascending") : t("Descending")}</span>
             </button>
           </div>
           <span className="muted small list-result-count">
             {filteredSections.length === sections.length
-              ? `${sections.length} series`
-              : `${filteredSections.length} of ${sections.length} series`}
+              ? tn(sections.length, "{count} series", "{count} series")
+              : t("{shown} of {total} series", { shown: filteredSections.length, total: sections.length })}
           </span>
         </div>
       ) : null}
       {sections.length === 0 && (queueTotal === null || !torrentsLoaded) ? (
-        Object.keys(loadErrors).length ? <p role="status">Some queue data is unavailable. Retry above to check whether downloads are waiting.</p> : <Spinner />
+        Object.keys(loadErrors).length ? <p role="status">{t("Some queue data is unavailable. Retry above to check whether downloads are waiting.")}</p> : <Spinner />
       ) : sections.length === 0 ? (
-        <EmptyState icon="activity" title="The queue is empty" hint="Monitored releases are checked every cycle." />
+        <EmptyState icon="activity" title={t("The queue is empty")} hint={t("Monitored releases are checked every cycle.")} />
       ) : filteredSections.length === 0 ? (
-        <EmptyState icon="search" title="No queued series match these filters" />
+        <EmptyState icon="search" title={t("No queued series match these filters")} />
       ) : (
         <>
         {visibleSections.map((entry) => {
@@ -523,16 +524,16 @@ export default function ActivityPage() {
                 progress: entry.current.progress,
                 message:
                   entry.current.status === "queued" && entry.current.next_retry_at
-                    ? `Retry ${entry.current.retry_count ?? 0} · ${new Date(entry.current.next_retry_at * 1000).toLocaleTimeString()} · ${entry.current.failure_code ?? "Source unavailable"}`
+                    ? `${t("Retry {count}", { count: entry.current.retry_count ?? 0 })} · ${new Date(entry.current.next_retry_at * 1000).toLocaleTimeString(locale())} · ${entry.current.failure_code ?? t("Source unavailable")}`
                     : "",
               }
             : busyRelease
               ? {
                   label: busyRelease.volume_hint
-                    ? `Volume ${busyRelease.volume_hint}`
+                    ? t("Volume {number}", { number: busyRelease.volume_hint })
                     : busyRelease.chapter_hint
-                      ? `Chapter ${busyRelease.chapter_hint}`
-                      : "Release",
+                      ? t("Chapter {number}", { number: busyRelease.chapter_hint })
+                      : t("Release"),
                   pill: torrentPill(busyRelease.status),
                   progress: busyRelease.progress,
                   message: "",
@@ -545,7 +546,7 @@ export default function ActivityPage() {
                 <button
                   type="button"
                   className="volume-toggle queue-series-toggle"
-                  title={isOpen ? "Hide items" : "Show items"}
+                  title={isOpen ? t("Hide items") : t("Show items")}
                   onClick={() => toggleSeries(entry.manga_id)}
                 >
                   <Icon name={isOpen ? "chevronDown" : "chevronRight"} />
@@ -568,14 +569,14 @@ export default function ActivityPage() {
                 ) : null}
                 <span className="muted queue-series-count">
                   {[
-                    entry.working ? `${entry.working} active` : null,
-                    entry.queued ? `${entry.queued} queued` : null,
+                    entry.working ? t("{count} active", { count: entry.working }) : null,
+                    entry.queued ? t("{count} queued", { count: entry.queued }) : null,
                     entry.torrents.length
-                      ? `${entry.torrents.length} release${entry.torrents.length === 1 ? "" : "s"}`
+                      ? tn(entry.torrents.length, "{count} release", "{count} releases")
                       : null,
                   ]
                     .filter(Boolean)
-                    .join(" · ") || `${total} item${total === 1 ? "" : "s"}`}
+                    .join(" · ") || tn(total, "{count} item", "{count} items")}
                 </span>
               </header>
               {isOpen ? (
@@ -589,17 +590,17 @@ export default function ActivityPage() {
                         const importedBooks = books.filter((book) => book.imported).length;
                         return (
                           <tr key={`torrent-${job.id}`} className="queue-item-row">
-                            <td className="col-select" data-label="Select">
+                            <td className="col-select" data-label={t("Select")}>
                               <input
                                 type="checkbox"
-                                aria-label={`Select release ${job.id}`}
+                                aria-label={t("Select release {id}", { id: job.id })}
                                 disabled={job.status === "importing"}
                                 checked={selected.has(`torrent:${job.id}`)}
                                 onChange={(event) => toggleSelected(`torrent:${job.id}`, event.target.checked)}
-                                title={job.status === "importing" ? "Atomic library import in progress" : undefined}
+                                title={job.status === "importing" ? t("Atomic library import in progress") : undefined}
                               />
                             </td>
-                            <td className="queue-item-identity" data-label="Item">
+                            <td className="queue-item-identity" data-label={t("Item")}>
                               {job.source_url ? (
                                 <a
                                   className="table-link queue-item-heading"
@@ -608,14 +609,14 @@ export default function ActivityPage() {
                                   rel="noreferrer"
                                 >
                                   {job.volume_hint
-                                    ? `Volume ${job.volume_hint}`
+                                    ? t("Volume {number}", { number: job.volume_hint })
                                     : job.chapter_hint
-                                      ? `Chapter ${job.chapter_hint}`
-                                      : "Release"}
+                                      ? t("Chapter {number}", { number: job.chapter_hint })
+                                      : t("Release")}
                                 </a>
                               ) : (
                                 <span className="queue-item-heading">
-                                  {job.volume_hint ? `Volume ${job.volume_hint}` : "Release"}
+                                  {job.volume_hint ? t("Volume {number}", { number: job.volume_hint }) : t("Release")}
                                 </span>
                               )}
                               <div className="muted small queue-item-detail" title={job.title}>
@@ -624,7 +625,7 @@ export default function ActivityPage() {
                               {books.length ? (
                                 <details className="queue-coverage">
                                   <summary>
-                                    {importedBooks} / {books.length} volumes imported
+                                    {t("{imported} / {total} volumes imported", { imported: importedBooks, total: books.length })}
                                   </summary>
                                   <div className="queue-coverage-items">
                                     {books.map((book) => (
@@ -639,35 +640,35 @@ export default function ActivityPage() {
                                 </details>
                               ) : null}
                             </td>
-                            <td className="col-provider queue-source-cell" data-label="Source">
+                            <td className="col-provider queue-source-cell" data-label={t("Source")}>
                               <span className="queue-source-label">
                                 <strong>
                                   {job.indexer ||
-                                    (job.protocol === "usenet" ? "Usenet" : job.protocol === "http" ? "Direct" : "Torrent")}
+                                    (job.protocol === "usenet" ? "Usenet" : job.protocol === "http" ? t("Direct") : "Torrent")}
                                 </strong>
                                 <span>
                                   {job.source === "prowlarr"
-                                    ? "via Prowlarr"
+                                    ? t("via Prowlarr")
                                     : job.protocol === "http"
-                                      ? "direct download"
-                                      : "download source"}
+                                      ? t("direct download")
+                                      : t("download source")}
                                 </span>
                               </span>
                             </td>
                             <td
                               className="col-progress queue-status-cell"
-                              data-label="Status"
+                              data-label={t("Status")}
                               title={job.message || undefined}
                             >
                               <StatusPill kind={rowPill.kind}>{rowPill.label}</StatusPill>
                               <ProgressBar value={job.progress} />
                             </td>
-                            <td className="col-actions" data-label="Actions">
+                            <td className="col-actions" data-label={t("Actions")}>
                               <div className="queue-row-actions">
                                 {job.client_url ? (
                                   <a
                                     className="btn btn-ghost btn-icon"
-                                    title={`Open in ${job.protocol === "usenet" ? "SABnzbd" : "qBittorrent"}`}
+                                    title={t("Open in {client}", { client: job.protocol === "usenet" ? "SABnzbd" : "qBittorrent" })}
                                     href={job.client_url}
                                     target="_blank"
                                     rel="noreferrer"
@@ -677,7 +678,7 @@ export default function ActivityPage() {
                                 ) : job.protocol === "http" && job.source_url ? (
                                   <a
                                     className="btn btn-ghost btn-icon"
-                                    title="Open on archive.org"
+                                    title={t("Open on archive.org")}
                                     href={job.source_url}
                                     target="_blank"
                                     rel="noreferrer"
@@ -689,9 +690,9 @@ export default function ActivityPage() {
                                   <button
                                     type="button"
                                     className="btn btn-primary btn-icon"
-                                    title="Import now"
+                                    title={t("Import now")}
                                     disabled={torrentBusy}
-                                    onClick={() => void torrentAction(() => api.importTorrent(job.id), "Release imported.")}
+                                    onClick={() => void torrentAction(() => api.importTorrent(job.id), t("Release imported."))}
                                   >
                                     <Icon name="library" size={15} />
                                   </button>
@@ -699,11 +700,11 @@ export default function ActivityPage() {
                                 <button
                                   type="button"
                                   className="btn btn-ghost btn-icon"
-                                  title="Remove release and staging files"
+                                  title={t("Remove release and staging files")}
                                   disabled={torrentBusy || job.status === "importing"}
                                   onClick={() => {
-                                    if (window.confirm("Remove this release and its download-client staging files?"))
-                                      void torrentAction(() => api.discardTorrent(job.id), "Release removed.");
+                                    if (window.confirm(t("Remove this release and its download-client staging files?")))
+                                      void torrentAction(() => api.discardTorrent(job.id), t("Release removed."));
                                   }}
                                 >
                                   <Icon name="trash" size={15} />
@@ -717,16 +718,16 @@ export default function ActivityPage() {
                         const rowPill = jobStatusPill(job.status);
                         return (
                           <tr key={`job-${job.id}`} className="queue-item-row">
-                            <td className="col-select" data-label="Select">
+                            <td className="col-select" data-label={t("Select")}>
                               <input
                                 type="checkbox"
-                                aria-label={`Select chapter ${job.id}`}
+                                aria-label={t("Select chapter {id}", { id: job.id })}
                                 disabled={job.status === "importing"}
                                 checked={selected.has(`job:${job.id}`)}
                                 onChange={(event) => toggleSelected(`job:${job.id}`, event.target.checked)}
                               />
                             </td>
-                            <td className="queue-item-identity" data-label="Item">
+                            <td className="queue-item-identity" data-label={t("Item")}>
                               <span className="queue-item-heading">
                                 {chapterLabel(job.chapter_volume, job.chapter_number)}
                               </span>
@@ -734,7 +735,7 @@ export default function ActivityPage() {
                                 <span className="muted small queue-item-detail">{job.chapter_title}</span>
                               ) : null}
                             </td>
-                            <td className="col-provider queue-source-cell" data-label="Source">
+                            <td className="col-provider queue-source-cell" data-label={t("Source")}>
                               <span className="queue-source-label">
                                 <strong>
                                   {providerChainLabel(
@@ -742,24 +743,24 @@ export default function ActivityPage() {
                                     job.chapter_source_name,
                                   )}
                                 </strong>
-                                <span>direct source</span>
+                                <span>{t("direct source")}</span>
                               </span>
                             </td>
                             <td
                               className="col-progress queue-status-cell"
-                              data-label="Status"
+                              data-label={t("Status")}
                               title={job.status === "failed" ? job.message : undefined}
                             >
                               <StatusPill kind={rowPill.kind}>{rowPill.label}</StatusPill>
                               {job.status !== "queued" ? <ProgressBar value={job.progress} /> : null}
                             </td>
-                            <td className="col-actions" data-label="Actions">
+                            <td className="col-actions" data-label={t("Actions")}>
                               <div className="queue-row-actions">
                                 {job.status !== "importing" ? (
                                   <button
                                     type="button"
                                     className="btn btn-ghost btn-icon"
-                                    title="Remove from queue"
+                                    title={t("Remove from queue")}
                                     onClick={() => void remove(job.id)}
                                   >
                                     <Icon name="close" size={15} />
@@ -785,29 +786,28 @@ export default function ActivityPage() {
           pageSize={PAGE_SIZE}
           total={filteredSections.length}
           onPageChange={setPage}
-          itemLabel="series"
-          ariaLabel="Queue pages"
+          itemLabel={t("series")}
+          ariaLabel={t("Queue pages")}
         />
         </>
       )}
       {confirmBulkRemove ? (
         <Modal
-          title="Remove selected downloads"
+          title={t("Remove selected downloads")}
           onClose={() => !bulkBusy && setConfirmBulkRemove(false)}
           footer={
             <>
               <button type="button" className="btn" disabled={bulkBusy} onClick={() => setConfirmBulkRemove(false)}>
-                Cancel
+                {t("Cancel")}
               </button>
               <button type="button" className="btn btn-danger" disabled={bulkBusy} onClick={() => void removeSelected()}>
                 {bulkBusy ? (
                   <>
-                    <Spinner /> Removing…
+                    <Spinner /> {t("Removing…")}
                   </>
                 ) : (
                   <>
-                    <Icon name="trash" /> Remove {selectedKeys.length} download
-                    {selectedKeys.length === 1 ? "" : "s"}
+                    <Icon name="trash" /> {tn(selectedKeys.length, "Remove {count} download", "Remove {count} downloads")}
                   </>
                 )}
               </button>
@@ -815,12 +815,10 @@ export default function ActivityPage() {
           }
         >
           <p>
-            Queued chapter jobs will be removed. Downloads already transferring will be stopped and their temporary
-            files cleaned. Selected torrents will also be removed from qBittorrent with their staging data.
+            {t("Queued chapter jobs will be removed. Downloads already transferring will be stopped and their temporary files cleaned. Selected torrents will also be removed from qBittorrent with their staging data.")}
           </p>
           <p className="muted small">
-            Files already imported into the Comics library are never deleted by this action. Jobs currently committing
-            an atomic library import cannot be selected.
+            {t("Files already imported into the Comics library are never deleted by this action. Jobs currently committing an atomic library import cannot be selected.")}
           </p>
         </Modal>
       ) : null}
@@ -845,7 +843,7 @@ function releaseBooks(job: TorrentDownload): { label: string; imported: boolean 
       return Array.from({ length: last - first + 1 }, (_unused, offset) => {
         const number = first + offset;
         return {
-          label: `Volume ${number}`,
+          label: t("Volume {number}", { number }),
           imported: importedNumbers.has(String(number)),
         };
       });
@@ -855,7 +853,7 @@ function releaseBooks(job: TorrentDownload): { label: string; imported: boolean 
 }
 
 function torrentPill(status: string) {
-  if (status === "completed") return { kind: "info", label: "Downloaded" };
-  if (status === "checking") return { kind: "info", label: "Checking" };
+  if (status === "completed") return { kind: "info", label: t("Downloaded") };
+  if (status === "checking") return { kind: "info", label: t("Checking") };
   return jobStatusPill(status);
 }
