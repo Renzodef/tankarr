@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -493,3 +494,61 @@ def test_verified_publication_api_keeps_future_wanted_chapters(cache_app, monkey
         entry = next(item for item in wanted if item["manga"]["id"] == "published")
         assert entry["expected_count"] == 3
         assert {c["chapter"] for c in entry["chapters"]} == {"1", "2", "3"}
+
+
+def test_snapshot_validators_compress_each_snapshot_once():
+    validators = read_model_cache.SnapshotValidators()
+    payload = b'{"items": [' + b"1," * 2000 + b"1]}"
+    assert validators.compressed_if_ready("wanted", payload) is None
+    first = validators.compressed("wanted", payload)
+    assert gzip.decompress(first) == payload
+    assert validators.compressed("wanted", payload) is first
+    assert validators.compressed_if_ready("wanted", payload) is first
+    assert validators.etag("wanted", payload) == validators.etag("wanted", payload)
+
+
+def test_large_snapshots_are_served_precompressed_and_revalidated(tmp_path: Path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        suwayomi_enabled=False,
+        update_check_enabled=False,
+        auth_required=False,
+    )
+    app = create_app(settings)
+    app.state.database.upsert_manga(
+        {
+            "id": "one",
+            "provider": "local",
+            "title": "Work one",
+            "description": "A description long enough to matter. " * 20,
+            "authors": ["Someone"],
+            "original_language": "ja",
+            "status": "ongoing",
+            "available_languages": ["en"],
+        },
+        "en",
+        "all",
+    )
+    with TestClient(app) as client:
+        first = client.get("/api/manga?fresh=true", headers={"Accept-Encoding": "gzip"})
+        assert first.status_code == 200
+        assert first.headers["content-encoding"] == "gzip"
+        assert first.headers["vary"] == "Accept-Encoding"
+        assert first.json()[0]["id"] == "one"
+        second = client.get("/api/manga", headers={"Accept-Encoding": "gzip"})
+        assert second.headers["etag"] == first.headers["etag"]
+        assert second.content == first.content
+        unchanged = client.get(
+            "/api/manga",
+            headers={
+                "Accept-Encoding": "gzip",
+                "If-None-Match": first.headers["etag"],
+            },
+        )
+        assert unchanged.status_code == 304
+        plain = client.get("/api/manga", headers={"Accept-Encoding": "identity"})
+        assert "content-encoding" not in plain.headers
+        assert plain.json() == first.json()

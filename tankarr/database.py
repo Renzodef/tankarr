@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import unicodedata
@@ -12,11 +13,12 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from threading import local
+from threading import Lock, local
 from time import monotonic, time_ns
 from typing import Any
 
-from tankarr import source_health
+from tankarr import __version__, source_health
+from tankarr.assembly_provenance import assembly_provenance
 from tankarr.catalogue import NO_REMOTE_PROVIDERS
 from tankarr.chapter_map import MapEntry, coverage_for_chapter
 from tankarr.chapter_mapping import (
@@ -219,6 +221,14 @@ CREATE TABLE IF NOT EXISTS release_numbering_override (
     canonical_chapter TEXT NOT NULL,
     evidence TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+-- The inputs the last start-up numbering pass saw for each series, so the
+-- next start reconciles only what changed since (see
+-- _numbering_fingerprint_connection).
+CREATE TABLE IF NOT EXISTS numbering_reconciliation (
+    manga_id TEXT PRIMARY KEY REFERENCES manga(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS series_release_history (
@@ -941,9 +951,17 @@ SCHEMA_VERSION = 8
 
 
 class Database:
+    # Idle connections kept open between operations. Opening one costs about
+    # a millisecond (the file, four pragmas, the custom function) against a
+    # few microseconds for a warm one, which also keeps its page cache; every
+    # read model, job update and revision check used to open its own.
+    POOL_SIZE = 8
+
     def __init__(self, path: Path):
         self.path = path
         self._read_snapshot = local()
+        self._idle: list[sqlite3.Connection] = []
+        self._pool_lock = Lock()
         # Operator-ordered download source priority. App wiring keeps it in
         # sync with Settings so release selection prefers trusted providers.
         self.provider_priority: tuple[str, ...] = DOWNLOAD_PROVIDER_PRIORITY_DEFAULT
@@ -951,13 +969,10 @@ class Database:
             provider_priority=DOWNLOAD_PROVIDER_PRIORITY_DEFAULT
         )
 
-    @contextmanager
-    def connect(self):
-        snapshot = getattr(self._read_snapshot, "connection", None)
-        if snapshot is not None:
-            yield snapshot
-            return
-        connection = sqlite3.connect(self.path, timeout=30)
+    def _open(self) -> sqlite3.Connection:
+        # A pooled connection is handed to whichever thread asks next, one at
+        # a time; sqlite3's same-thread check would refuse that hand-over.
+        connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         from tankarr.source_circuit import source_gate_key
 
         connection.create_function(
@@ -972,14 +987,60 @@ class Database:
         # every commit, which dominates import time on a hard disk or a NAS.
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.execute("PRAGMA temp_store=MEMORY")
+        return connection
+
+    def _acquire(self) -> sqlite3.Connection:
+        with self._pool_lock:
+            if self._idle:
+                return self._idle.pop()
+        return self._open()
+
+    def _release(self, connection: sqlite3.Connection, *, discard: bool) -> None:
+        if not discard:
+            with self._pool_lock:
+                if len(self._idle) < self.POOL_SIZE:
+                    self._idle.append(connection)
+                    return
+        try:
+            connection.close()
+        except sqlite3.Error:
+            pass
+
+    def close(self) -> None:
+        """Close the idle connections: at shutdown, or before the file moves."""
+
+        with self._pool_lock:
+            idle, self._idle = self._idle, []
+        for connection in idle:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+
+    @contextmanager
+    def connect(self):
+        snapshot = getattr(self._read_snapshot, "connection", None)
+        if snapshot is not None:
+            yield snapshot
+            return
+        connection = self._acquire()
+        discard = False
         try:
             yield connection
             connection.commit()
-        except Exception:
-            connection.rollback()
+        except BaseException:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                discard = True
             raise
         finally:
-            connection.close()
+            # Only a connection with no transaction left goes back to the pool.
+            try:
+                discard = discard or connection.in_transaction
+            except sqlite3.ProgrammingError:
+                discard = True
+            self._release(connection, discard=discard)
 
     @contextmanager
     def read_snapshot(self):
@@ -1663,8 +1724,18 @@ class Database:
         return self.get_manga(manga["id"])
 
     def list_manga(
-        self, manga_ids: Iterable[str] | None = None
+        self,
+        manga_ids: Iterable[str] | None = None,
+        *,
+        with_logical_counts: bool = True,
     ) -> list[dict[str, Any]]:
+        """Every series with its release counts.
+
+        ``with_logical_counts`` adds the canonical chapter coverage, which
+        decodes every numbered release in Python; callers that only need the
+        series rows and the raw counts (the System page) leave it out.
+        """
+
         ids = tuple(manga_ids) if manga_ids is not None else None
         if ids == ():
             return []
@@ -1703,7 +1774,8 @@ class Database:
                 ids or (),
             ).fetchall()
             result = [self._decode_manga(row) for row in rows]
-            self._attach_logical_chapter_counts(connection, result)
+            if with_logical_counts:
+                self._attach_logical_chapter_counts(connection, result)
         return result
 
     def library_revision(self) -> tuple[str, ...]:
@@ -2614,6 +2686,7 @@ class Database:
         counts: dict[str, int] = defaultdict(int)
         releases_by_id = persisted_releases
         reconciled_at = utc_now()
+        updates: list[tuple[Any, ...]] = []
         for decision in decisions.values():
             status = str(decision["numbering_status"])
             canonical = decision.get("canonical_chapter")
@@ -2658,16 +2731,13 @@ class Database:
                     != int(existing.get("numbering_version") or 0),
                 )
             )
-            connection.execute(
-                """
-                UPDATE chapter_release
-                SET volume=?, source_chapter=?, edition_chapter=?, canonical_chapter=?,
-                    primary_chapter=?, chapter=?,
-                    numbering_status=?, numbering_method=?,
-                    numbering_confidence=?, numbering_evidence_json=?,
-                    numbering_version=?, updated_at=?
-                WHERE id=?
-                """,
+            counts[status] += 1
+            if not changed:
+                # Every value equals the stored row: rewriting it would only
+                # grow the WAL. A start-up pass over a settled library writes
+                # nothing.
+                continue
+            updates.append(
                 (
                     volume,
                     decision.get("source_chapter"),
@@ -2680,35 +2750,128 @@ class Database:
                     decision["numbering_confidence"],
                     json.dumps(evidence, ensure_ascii=False),
                     decision["numbering_version"],
-                    reconciled_at if changed else existing.get("updated_at"),
+                    reconciled_at,
                     decision["id"],
-                ),
+                )
             )
-            counts[status] += 1
+        if updates:
+            connection.executemany(
+                """
+                UPDATE chapter_release
+                SET volume=?, source_chapter=?, edition_chapter=?, canonical_chapter=?,
+                    primary_chapter=?, chapter=?,
+                    numbering_status=?, numbering_method=?,
+                    numbering_confidence=?, numbering_evidence_json=?,
+                    numbering_version=?, updated_at=?
+                WHERE id=?
+                """,
+                updates,
+            )
         return dict(counts)
 
+    @staticmethod
+    def _numbering_fingerprint_connection(
+        connection: sqlite3.Connection, manga_id: str
+    ) -> str:
+        """Everything a numbering pass over one series reads, in one string.
+
+        The rules (their version, the release, the image) and the rows they
+        consult: the series, its releases, the catalogue metadata, the chapter
+        map, the source roles, the operator's overrides and the official
+        edition evidence. Equal fingerprints mean an identical outcome.
+        """
+
+        from tankarr.numbering_reconciliation import NUMBERING_VERSION
+
+        row = connection.execute(
+            """
+            SELECT
+                (SELECT updated_at FROM manga WHERE id = ?),
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '')
+                 FROM chapter_release WHERE manga_id = ?),
+                (SELECT COALESCE(last_enriched_at, '') || ':' ||
+                        COALESCE(last_synced_at, '') || ':' ||
+                        COALESCE(last_error, '')
+                 FROM series_metadata WHERE manga_id = ?),
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '')
+                 FROM series_chapter_map WHERE manga_id = ?),
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '')
+                 FROM manga_release_source WHERE manga_id = ?),
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '')
+                 FROM release_numbering_override WHERE manga_id = ?),
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(rowid), 0) || ':' ||
+                        COALESCE(MAX(publish_at), '')
+                 FROM official_edition_evidence WHERE manga_id = ?)
+            """,
+            (manga_id,) * 7,
+        ).fetchone()
+        return "|".join(
+            [
+                str(NUMBERING_VERSION),
+                __version__,
+                os.environ.get("TANKARR_BUILD_COMMIT", ""),
+                *(str(value or "") for value in row),
+            ]
+        )
+
     def _reconcile_all_numbering_connection(
-        self, connection: sqlite3.Connection
+        self, connection: sqlite3.Connection, *, force: bool = False
     ) -> dict[str, int]:
+        """Reconcile every series, or only those whose inputs changed.
+
+        A start-up pass over a settled library used to redo, for every
+        release, work whose outcome could not differ from the previous start;
+        on a large library that took the first paint minutes away on a small
+        host. Each pass now records what it saw, and the next one skips the
+        series that still look the same. ``force`` is the operator's explicit
+        recompute, which trusts nothing.
+        """
+
         manga_ids = [
             str(row["manga_id"])
             for row in connection.execute(
                 "SELECT DISTINCT manga_id FROM chapter_release"
             ).fetchall()
         ]
+        recorded = {
+            str(row["manga_id"]): str(row["fingerprint"])
+            for row in connection.execute(
+                "SELECT manga_id, fingerprint FROM numbering_reconciliation"
+            ).fetchall()
+        }
         totals: dict[str, int] = defaultdict(int)
+        skipped = 0
         for manga_id in manga_ids:
+            fingerprint = self._numbering_fingerprint_connection(connection, manga_id)
+            if not force and recorded.get(manga_id) == fingerprint:
+                skipped += 1
+                continue
             for status, count in self._reconcile_numbering_connection(
                 connection, manga_id
             ).items():
                 totals[status] += count
+            # The pass may have rewritten releases: record the state it left.
+            connection.execute(
+                "INSERT OR REPLACE INTO numbering_reconciliation (manga_id, fingerprint) "
+                "VALUES (?, ?)",
+                (
+                    manga_id,
+                    self._numbering_fingerprint_connection(connection, manga_id),
+                ),
+            )
+        if skipped:
+            logger.debug(
+                "Numbering pass: %d series unchanged since the last pass, %d reconciled",
+                skipped,
+                len(manga_ids) - skipped,
+            )
         return dict(totals)
 
     def reconcile_all_numbering(self) -> dict[str, int]:
         """Recompute canonical identities without touching library files."""
 
         with self.connect() as connection:
-            return self._reconcile_all_numbering_connection(connection)
+            return self._reconcile_all_numbering_connection(connection, force=True)
 
     def shadow_numbering(self, manga_ids: Iterable[str]) -> list[dict[str, Any]]:
         """Preview a reconciliation without changing releases or library files."""
@@ -9629,8 +9792,6 @@ class Database:
         result["groups"] = (
             [] if groups_json in ("[]", "", None) else json.loads(groups_json)
         )
-        from tankarr.assembly_provenance import assembly_provenance
-
         result["assembled_from"] = assembly_provenance(result.get("assembled_from"))
         evidence_json = result.pop("numbering_evidence_json", "{}")
         result["numbering_evidence"] = (

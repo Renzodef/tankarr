@@ -21,6 +21,9 @@ def main() -> None:
         port=settings.port,
         reload=False,
         log_config=None,
+        # The interface polls every few seconds; uvicorn's five-second default
+        # closed the idle connection just before each poll reopened it.
+        timeout_keep_alive=30,
     )
 
 

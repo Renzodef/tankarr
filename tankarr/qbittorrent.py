@@ -23,6 +23,12 @@ class QBitTorrentClient:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        # One connection pool and one login per configuration. Every poll
+        # used to open a client, log in and close it: two requests and a new
+        # TCP (and TLS) connection for a single torrent list.
+        self._http: httpx.AsyncClient | None = None
+        self._http_key: tuple[str, float, str, str] | None = None
+        self._authenticated = False
 
     @property
     def configured(self) -> bool:
@@ -31,6 +37,34 @@ class QBitTorrentClient:
             and self.settings.qbittorrent_username
             and self.settings.qbittorrent_password
         )
+
+    async def _client(self) -> httpx.AsyncClient:
+        base_url = str(self.settings.qbittorrent_url).rstrip("/")
+        key = (
+            base_url,
+            float(self.settings.request_timeout_seconds),
+            str(self.settings.qbittorrent_username),
+            str(self.settings.qbittorrent_password),
+        )
+        if self._http is None or self._http.is_closed or key != self._http_key:
+            previous = self._http
+            self._http = async_client(
+                base_url=base_url,
+                timeout=httpx.Timeout(key[1]),
+                follow_redirects=False,
+                headers={"Referer": f"{base_url}/", "User-Agent": USER_AGENT},
+            )
+            self._http_key = key
+            self._authenticated = False
+            if previous is not None:
+                await previous.aclose()
+        return self._http
+
+    async def aclose(self) -> None:
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
+            self._authenticated = False
 
     @property
     def import_ready(self) -> bool:
@@ -41,13 +75,8 @@ class QBitTorrentClient:
     async def _session(self) -> AsyncIterator[httpx.AsyncClient]:
         if not self.configured:
             raise QBitTorrentError("qBittorrent is not configured")
-        base_url = str(self.settings.qbittorrent_url).rstrip("/")
-        async with async_client(
-            base_url=base_url,
-            timeout=httpx.Timeout(self.settings.request_timeout_seconds),
-            follow_redirects=False,
-            headers={"Referer": f"{base_url}/", "User-Agent": USER_AGENT},
-        ) as client:
+        client = await self._client()
+        if not self._authenticated:
             response = await client.post(
                 "/api/v2/auth/login",
                 data={
@@ -60,7 +89,18 @@ class QBitTorrentClient:
                 204,
             } or response.text.strip().casefold().startswith("fail"):
                 raise QBitTorrentError("qBittorrent authentication failed")
+            # The SID cookie now lives in the client's jar; qBittorrent keeps
+            # it alive while it is used and answers 403 once it has expired.
+            self._authenticated = True
+        try:
             yield client
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                self._authenticated = False  # the next call logs in again
+            raise
+        except httpx.TransportError:
+            self._authenticated = False  # qBittorrent may have restarted
+            raise
 
     async def probe(self) -> dict[str, Any]:
         async with self._session() as client:

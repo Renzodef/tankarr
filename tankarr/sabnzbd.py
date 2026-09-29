@@ -32,10 +32,23 @@ def nzb_pseudo_hash(guid: str) -> str:
 class SABnzbdClient:
     def __init__(self, settings: Settings):
         self.settings = settings
+        # One connection pool for every poll; the URL is passed per request,
+        # so a changed address needs no new client.
+        self._http: httpx.AsyncClient | None = None
 
     @property
     def configured(self) -> bool:
         return bool(self.settings.sabnzbd_url and self.settings.sabnzbd_api_key)
+
+    def _client(self) -> httpx.AsyncClient:
+        if self._http is None or self._http.is_closed:
+            self._http = async_client(timeout=30.0)
+        return self._http
+
+    async def aclose(self) -> None:
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
 
     @property
     def import_ready(self) -> bool:
@@ -51,12 +64,11 @@ class SABnzbdClient:
             **params,
         }
         try:
-            async with async_client(timeout=30.0) as client:
-                response = await client.get(
-                    str(self.settings.sabnzbd_url).rstrip("/") + "/api", params=query
-                )
-                response.raise_for_status()
-                payload = response.json()
+            response = await self._client().get(
+                str(self.settings.sabnzbd_url).rstrip("/") + "/api", params=query
+            )
+            response.raise_for_status()
+            payload = response.json()
         except httpx.HTTPStatusError as exc:
             # httpx quotes the full URL, API key included: report the status only.
             raise SABnzbdError(

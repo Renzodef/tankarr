@@ -1,5 +1,6 @@
 """Time dependencies shared by the HTTP and canonical-series caches."""
 
+import gzip
 import hashlib
 from collections import OrderedDict
 from collections.abc import Iterable
@@ -20,21 +21,46 @@ class SnapshotValidators:
     Retaining the bytes also prevents Python from reusing their id while an
     entry is live. The validator always describes the bytes served, including
     stale-while-revalidate responses, never the latest database revision.
+
+    The same entry keeps the gzip form of the snapshot: a multi-megabyte
+    Library or Wanted payload is compressed once per change instead of once
+    per request and per browser tab.
     """
 
-    def __init__(self, limit: int = 4) -> None:
+    def __init__(self, limit: int = 8) -> None:
         self.limit = max(1, limit)
-        self.entries: OrderedDict[tuple[str, int], tuple[bytes, str]] = OrderedDict()
+        self.entries: OrderedDict[tuple[str, int], tuple[bytes, str, bytes | None]] = (
+            OrderedDict()
+        )
 
     def etag(self, kind: str, payload: bytes) -> str:
         key = kind, id(payload)
         if key not in self.entries:
             tag = f'"{kind}-{hashlib.sha256(payload).hexdigest()[:24]}"'
-            self.entries[key] = payload, tag
+            self.entries[key] = payload, tag, None
             while len(self.entries) > self.limit:
                 self.entries.popitem(last=False)
         self.entries.move_to_end(key)
         return self.entries[key][1]
+
+    def compressed_if_ready(self, kind: str, payload: bytes) -> bytes | None:
+        """The gzip form when it has already been made, without making it."""
+
+        entry = self.entries.get((kind, id(payload)))
+        return entry[2] if entry is not None else None
+
+    def compressed(self, kind: str, payload: bytes) -> bytes:
+        """The gzip form of the snapshot, made once and kept with its validator."""
+
+        self.etag(kind, payload)
+        key = kind, id(payload)
+        stored, tag, body = self.entries[key]
+        if body is None:
+            # Level 6 costs about twice level 4 once, and every transfer of
+            # this snapshot is smaller for it.
+            body = gzip.compress(payload, compresslevel=6, mtime=0)
+            self.entries[key] = stored, tag, body
+        return body
 
 
 def cache_now() -> float:

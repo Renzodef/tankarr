@@ -62,6 +62,18 @@ def apply_log_level(settings: Settings) -> int:
     return level
 
 
+class _AccessLogFilter(logging.Filter):
+    """uvicorn's one line per request, only at debug.
+
+    The interface polls several endpoints every few seconds and Docker's
+    health check calls every thirty: at info those lines would cost a write
+    per request and bury the events the log is for.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return logging.getLogger().getEffectiveLevel() <= logging.DEBUG
+
+
 def configure_logging(settings: Settings) -> Path | None:
     """Install the console and file handlers once, then keep the level in step.
 
@@ -71,6 +83,9 @@ def configure_logging(settings: Settings) -> Path | None:
 
     root = logging.getLogger()
     apply_log_level(settings)
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, _AccessLogFilter) for item in access.filters):
+        access.addFilter(_AccessLogFilter())
     if not any(getattr(handler, "tankarr_console", False) for handler in root.handlers):
         console = logging.StreamHandler()
         console.setFormatter(logging.Formatter(CONSOLE_FORMAT))

@@ -62,7 +62,8 @@ def _parse_number(raw: str) -> Decimal | None:
 
 
 def _number(value: object) -> Decimal | None:
-    raw = str(value or "").strip()
+    # Labels arrive as text from SQLite; skip the str() round trip for them.
+    raw = value.strip() if isinstance(value, str) else str(value or "").strip()
     if not raw:
         return None
     return _parse_number(raw)
@@ -81,11 +82,11 @@ def is_volume_release(release: dict[str, Any]) -> bool:
     unit = release.get("release_unit")
     if unit is not None and unit != "chapter" and str(unit) == "volume":
         return True
-    chapter = release.get("chapter")
     volume = release.get("volume")
-    has_chapter = bool(chapter) and str(chapter).strip() != ""
-    has_volume = bool(volume) and str(volume).strip() != ""
-    return has_volume and not has_chapter
+    if not volume or not str(volume).strip():
+        return False
+    chapter = release.get("chapter")
+    return not (chapter and str(chapter).strip())
 
 
 def is_chapter_release(release: dict[str, Any]) -> bool:
@@ -135,6 +136,7 @@ def coverage_for_units(
     *,
     normalized_chapters: list[dict[str, Any]] | None = None,
     pending_volumes: set[int] | None = None,
+    official_hosts: frozenset[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """How far each unit can go, aggregating every source and the indexers.
 
@@ -161,12 +163,15 @@ def coverage_for_units(
         beyond_official_edition,
         official_chapter_frontier,
     )
-    from tankarr.source_ranking import official_hosts as _official_hosts
 
-    hosts = _official_hosts(
-        metadata.get("official_links"),
-        language=str(manga.get("preferred_language") or ""),
-    )
+    hosts = official_hosts
+    if hosts is None:
+        from tankarr.source_ranking import official_hosts as _official_hosts
+
+        hosts = _official_hosts(
+            metadata.get("official_links"),
+            language=str(manga.get("preferred_language") or ""),
+        )
     # The same restoration and trim ``select_releases`` applies, so the
     # count agrees with what the series actually shows: a confirmed prologue
     # (chapter 0 the official edition numbers) counts, and a scanlator
@@ -182,22 +187,26 @@ def coverage_for_units(
             for release in chapters
             if not beyond_official_edition(release, verdict)
         ]
-    chapter_numbers = {
-        int(_number(r["chapter"]))
-        for r in chapters
-        if _number(r["chapter"]) is not None
-        and _number(r["chapter"]) == _number(r["chapter"]).to_integral_value()
+    chapter_numbers: set[int] = set()
+    for release in chapters:
+        number = _number(release["chapter"])
+        if number is not None and number == number.to_integral_value():
+            chapter_numbers.add(int(number))
+    volume_numbers = set(usable_offers) | {
+        int(number) for number in (pending_volumes or ()) if int(number) > 0
     }
-    volume_numbers = (
-        {
-            number
-            for item in releases
-            if is_volume_release(item)
-            and (number := _positive_int(item.get("volume"))) is not None
-        }
-        | usable_offers
-        | {int(number) for number in (pending_volumes or ()) if int(number) > 0}
-    )
+    # One classification per release: a render calls this for every series.
+    owned_chapters = 0
+    owned_volumes = 0
+    for item in releases:
+        if is_volume_release(item):
+            number = _positive_int(item.get("volume"))
+            if number is not None:
+                volume_numbers.add(number)
+            if item.get("downloaded"):
+                owned_volumes += 1
+        elif item.get("downloaded") and _number(item.get("chapter")) is not None:
+            owned_chapters += 1
     # The official edition in this language is the reference once it has
     # shown enough of itself to be believed. The catalogue's own
     # chapter_count/latest_release_chapter counts the original-language
@@ -223,12 +232,6 @@ def coverage_for_units(
     # own, not the four the Japanese original was bound into.
     volume_reference = managed_volume_count(metadata) or _positive_int(
         metadata.get("volume_count")
-    )
-    owned_chapters = sum(
-        1 for r in releases if r.get("downloaded") and is_chapter_release(r)
-    )
-    owned_volumes = sum(
-        1 for r in releases if r.get("downloaded") and is_volume_release(r)
     )
     return {
         "chapters": {
@@ -453,11 +456,13 @@ def normalize_chapter_releases(
         ):
             dropped["non_chapter_title"] += 1
             continue
-        if not is_chapter_release(release):
+        if is_volume_release(release):
             dropped["not_a_chapter"] += 1
             continue
         number = _number(release.get("chapter"))
-        assert number is not None
+        if number is None:
+            dropped["not_a_chapter"] += 1
+            continue
         if number <= 0:
             dropped["chapter_zero_or_negative"] += 1
             continue
@@ -678,10 +683,12 @@ def _prologue_releases(
     original Korean edition, which runs ahead of every translation).
     """
 
+    # Almost no release is a chapter 0: test the cached number first and
+    # classify only those.
     zero = [
         item
         for item in items
-        if is_chapter_release(item) and _number(item.get("chapter")) == Decimal(0)
+        if _number(item.get("chapter")) == Decimal(0) and is_chapter_release(item)
     ]
     if not zero:
         return []
@@ -794,11 +801,23 @@ def select_releases(
     metadata: dict[str, Any] | None,
     releases: Iterable[dict[str, Any]],
     canonical_labels: frozenset[str] | set[str] = frozenset(),
+    *,
+    copy: bool = True,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Resolve the unit and return only the releases that belong to it."""
+    """Resolve the unit and return only the releases that belong to it.
 
-    items = [dict(release) for release in releases]
+    The caller's dicts are never changed; ``copy=False`` skips the defensive
+    copies when the caller already works on copies of its own.
+    """
+
+    items = [dict(release) for release in releases] if copy else list(releases)
     context = _context(manga)
+    from tankarr.source_ranking import official_hosts as _official_hosts
+
+    hosts = _official_hosts(
+        (metadata or {}).get("official_links"),
+        language=str(manga.get("preferred_language") or ""),
+    )
     normalized, normalization_dropped = normalize_chapter_releases(items)
     coverage = coverage_for_units(
         manga,
@@ -808,6 +827,7 @@ def select_releases(
         context.get("unobtainable_volumes"),
         normalized_chapters=normalized,
         pending_volumes=context.get("pending_volumes"),
+        official_hosts=hosts,
     )
     # Resolving the unit and reporting its coverage use exactly the same
     # evidence. Recomputing it here normalized and ranked the whole series
@@ -831,12 +851,6 @@ def select_releases(
             normalize_chapter_releases(items, canonical_labels)
             if canonical_labels
             else (list(normalized), dict(normalization_dropped))
-        )
-        from tankarr.source_ranking import official_hosts as _official_hosts
-
-        hosts = _official_hosts(
-            (metadata or {}).get("official_links"),
-            language=str(manga.get("preferred_language") or ""),
         )
         selected, unconfirmed = confirm_chapter_numbers(selected, official_hosts=hosts)
         if unconfirmed:
