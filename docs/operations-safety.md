@@ -74,6 +74,11 @@ Check mounts, library identity, the source engine, jobs and paths. Only after
 that review, restart with `TANKARR_RESTORED_SAFE_MODE=false` and explicitly
 re-enable the automations you want. Do not rename the journal blindly.
 
+The library identity (`.tankarr-library-id` in the data directory and at the
+library root) is part of the bundle. A restored configuration therefore
+expects the library it was backed up with; safe mode never writes a new
+identity, so a restore pointed at another library is reported, not adopted.
+
 ## Importing untrusted archives
 
 The import budgets can be changed in Settings, through the API or with

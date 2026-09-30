@@ -6061,6 +6061,15 @@ class Database:
             ).fetchall()
         return [self._decode_chapter(row) for row in rows]
 
+    def has_downloaded_chapters(self) -> bool:
+        """Whether this configuration already records files in the library."""
+
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM chapter_release WHERE downloaded = 1 LIMIT 1"
+            ).fetchone()
+        return row is not None
+
     def count_chapters(self, manga_ids: Iterable[str] | None = None) -> int:
         selected = tuple(dict.fromkeys(str(item) for item in (manga_ids or ())))
         scope = ""

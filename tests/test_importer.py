@@ -76,7 +76,18 @@ def wait_for_import(client: TestClient) -> dict:
     return state
 
 
+def wait_until_ready(client: TestClient, timeout: float = 30.0) -> None:
+    """Startup recovery runs in the background after create_app; an import
+    posted before it finishes is refused with 503 (issue #6)."""
+
+    deadline = time.monotonic() + timeout
+    while client.get("/api/system/ready").status_code != 200:
+        assert time.monotonic() < deadline, "the application never became ready"
+        time.sleep(0.05)
+
+
 def import_group(client: TestClient, title: str, language: str = "en") -> dict:
+    wait_until_ready(client)
     scan = client.get("/api/import/scan").json()
     group = next(group for group in scan["groups"] if group["title"] == title)
     response = client.post(

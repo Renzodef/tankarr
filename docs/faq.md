@@ -98,6 +98,28 @@ them. Set them to the owner of your folders (`id -u` and `id -g` on the host,
 `99:100` on Unraid) or give that user write access to the host folders. See
 [File permissions](installation.md#file-permissions).
 
+### Setup stays on "Library identity"
+
+Tankarr binds a configuration to one library through a marker file,
+`.tankarr-library-id`, at the library root and a copy in `/config`. A fresh
+installation writes both on its first start, so the check normally passes by
+itself. When it stays red, the detail names the cause:
+
+- **cannot write the identity file**: the library folder is not writable by
+  `PUID:PGID`; fix the ownership as described above and restart;
+- **marker is missing, the volume may be unmounted**: `/config` remembers a
+  library that is not mounted at `/library`. Mount it, or, for a new and empty
+  library, remove `/config/.tankarr-library-id` and restart;
+- **does not match**: `/library` holds another installation's library; point
+  Tankarr at its own or at an empty folder.
+- **not provisioned, yet this configuration already records downloaded
+  files**: `/config` comes from an installation whose library is not the
+  folder mounted now, and neither side carries an identity. Mount the right
+  library, or start from an empty `/config` for a new one.
+
+Version 0.9.0 never wrote the marker on a new installation and stayed on
+this step; update the image.
+
 ### Installing the managed Suwayomi server fails
 
 The container needs outbound HTTPS access to GitHub to download the
