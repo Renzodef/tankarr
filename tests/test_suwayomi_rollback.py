@@ -33,6 +33,7 @@ def runtime_fixture(tmp_path):
     runtime = SuwayomiRuntime(
         root,
         releases_api=RELEASES,
+        pinned_release=None,
         java_executable=sys.executable,
         command_builder=python_command("import time; time.sleep(30)"),
         ready_probe=lambda: True,

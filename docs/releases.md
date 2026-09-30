@@ -47,6 +47,10 @@ change needs a pull request with passing checks. Release tags are immutable.
    `npm version --no-git-tag-version X.Y.Z --prefix frontend`, which also
    updates the lockfile) and `appVersion` in `contrib/helm/tankarr/Chart.yaml`
    (a test checks that it matches).
+   While there, decide whether the pinned Suwayomi-Server release
+   (`PINNED_RELEASE` in `tankarr/suwayomi_runtime.py`) should move to the
+   current upstream release: update its tag and the SHA-256 of the server JAR
+   from the `Checksums.sha256` file of that release.
 4. **Push the release branch.** A branch `release/vX.Y.Z` whose single commit
    "Release vX.Y.Z" holds the tree of that version, with the changes since the
    previous release in its message. Open a pull request against `main` with

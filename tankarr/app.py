@@ -599,8 +599,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     suwayomi_maintenance: dict[str, Any] = {"last_run_at": None, "result": None}
 
     async def maintain_managed_suwayomi(*, force: bool = False) -> dict[str, Any]:
-        """Daily: update the server JAR when a release is out, then the
-        installed extensions. The JVM restart waits for an idle queue."""
+        """Daily: report a newer server release, install it only when
+        automatic updates are on (or the operator asked, ``force``), then
+        update the installed extensions. The JVM restart waits for an idle
+        queue."""
 
         if not settings.suwayomi_managed or not suwayomi_runtime.installed():
             return {"skipped": "not managed"}
@@ -615,10 +617,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     limit=1,
                 )
             )
-            if check.get("update_available") and (force or not busy):
-                await suwayomi_runtime.install()
+            wanted = force or settings.suwayomi_auto_update
+            if check.get("update_available") and wanted and (force or not busy):
+                await suwayomi_runtime.install(channel="latest")
                 await suwayomi_runtime.wait_ready()
                 result["server"]["updated_to"] = check["latest"]
+            elif check.get("update_available") and not wanted:
+                result["server"]["held"] = "automatic server updates are off"
             elif check.get("update_available"):
                 result["server"]["deferred"] = "downloads in progress"
             if suwayomi_runtime.running and (

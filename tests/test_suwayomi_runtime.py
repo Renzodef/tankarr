@@ -12,11 +12,14 @@ from httpx import Response
 
 from tankarr.suwayomi_runtime import (
     MAX_CONSECUTIVE_CRASHES,
+    PINNED_RELEASE,
     RESTART_BACKOFF_CAP_SECONDS,
+    PinnedRelease,
     SuwayomiRuntime,
     SuwayomiRuntimeError,
     jvm_arguments,
     parse_checksums,
+    release_order,
     render_server_conf,
     select_release_assets,
     server_settings,
@@ -109,7 +112,9 @@ async def test_install_verifies_checksum_and_records_state(tmp_path: Path):
         return_value=Response(200, text=f"{digest}  Suwayomi-Server-v9.9.9.jar\n")
     )
     respx.get(JAR_URL).mock(return_value=Response(200, content=JAR_BYTES))
-    runtime = SuwayomiRuntime(tmp_path / "suwayomi", releases_api=RELEASES)
+    runtime = SuwayomiRuntime(
+        tmp_path / "suwayomi", releases_api=RELEASES, pinned_release=None
+    )
     assert runtime.status()["installed"] is False
 
     result = await runtime.install(start=False)
@@ -134,7 +139,9 @@ async def test_install_rejects_a_jar_whose_checksum_does_not_match(tmp_path: Pat
         return_value=Response(200, text=f"{'0' * 64}  Suwayomi-Server-v9.9.9.jar\n")
     )
     respx.get(JAR_URL).mock(return_value=Response(200, content=JAR_BYTES))
-    runtime = SuwayomiRuntime(tmp_path / "suwayomi", releases_api=RELEASES)
+    runtime = SuwayomiRuntime(
+        tmp_path / "suwayomi", releases_api=RELEASES, pinned_release=None
+    )
 
     with pytest.raises(SuwayomiRuntimeError, match="SHA-256 mismatch"):
         await runtime.install(start=False)
@@ -297,7 +304,7 @@ async def test_check_update_reports_the_latest_release_against_the_installed_one
     root = tmp_path / "suwayomi"
     fake_installed(root)  # tag v0
     respx.get(RELEASES).mock(return_value=Response(200, json=release_payload()))
-    runtime = SuwayomiRuntime(root, releases_api=RELEASES)
+    runtime = SuwayomiRuntime(root, releases_api=RELEASES, pinned_release=None)
     check = await runtime.check_update()
     assert check == {
         "installed": "v0",
@@ -344,3 +351,112 @@ async def test_the_login_stays_in_an_owner_only_conf_and_out_of_the_jvm_environm
     assert 'server.authPassword = "s3cret"' in conf.read_text()
     assert conf.stat().st_mode & 0o777 == 0o600
     assert conf.parent.stat().st_mode & 0o777 == 0o700
+
+
+# --- The pinned release (issue #4) -----------------------------------------
+
+PIN = PinnedRelease(tag="v1.2.3", sha256=hashlib.sha256(JAR_BYTES).hexdigest())
+DOWNLOADS = "https://github.test/releases/download"
+PIN_JAR_URL = f"{DOWNLOADS}/v1.2.3/Suwayomi-Server-v1.2.3.jar"
+PIN_SUMS_URL = f"{DOWNLOADS}/v1.2.3/Checksums.sha256"
+
+
+def pinned_runtime(tmp_path: Path, pin: PinnedRelease = PIN) -> SuwayomiRuntime:
+    return SuwayomiRuntime(
+        tmp_path / "suwayomi",
+        releases_api=RELEASES,
+        release_downloads=DOWNLOADS,
+        pinned_release=pin,
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_install_uses_the_pinned_release_without_asking_github_for_latest(
+    tmp_path: Path,
+):
+    latest = respx.get(RELEASES).mock(
+        return_value=Response(200, json=release_payload())
+    )
+    respx.get(PIN_SUMS_URL).mock(
+        return_value=Response(200, text=f"{PIN.sha256}  Suwayomi-Server-v1.2.3.jar\n")
+    )
+    respx.get(PIN_JAR_URL).mock(return_value=Response(200, content=JAR_BYTES))
+    runtime = pinned_runtime(tmp_path)
+
+    result = await runtime.install(start=False)
+
+    assert result["updated"] is True and result["version"] == "v1.2.3"
+    assert result["pinned_version"] == "v1.2.3"
+    assert latest.called is False
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_published_checksum_that_disagrees_with_the_pin_installs_nothing(
+    tmp_path: Path,
+):
+    respx.get(PIN_SUMS_URL).mock(
+        return_value=Response(200, text=f"{'b' * 64}  Suwayomi-Server-v1.2.3.jar\n")
+    )
+    jar = respx.get(PIN_JAR_URL).mock(return_value=Response(200, content=JAR_BYTES))
+    runtime = pinned_runtime(tmp_path)
+
+    with pytest.raises(SuwayomiRuntimeError, match="pinned"):
+        await runtime.install(start=False)
+
+    assert jar.called is False
+    assert runtime.status()["installed"] is False
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_pin_never_downgrades_a_newer_installed_server(tmp_path: Path):
+    root = tmp_path / "suwayomi"
+    server = root / "server"
+    server.mkdir(parents=True)
+    (server / "Suwayomi-Server-v9.9.9.jar").write_bytes(JAR_BYTES)
+    (server / "current.json").write_text(
+        json.dumps({"tag": "v9.9.9", "jar": "Suwayomi-Server-v9.9.9.jar"})
+    )
+    sums = respx.get(PIN_SUMS_URL).mock(return_value=Response(200, text=""))
+    runtime = pinned_runtime(tmp_path)
+
+    result = await runtime.install(start=False)
+
+    assert result["updated"] is False and result["version"] == "v9.9.9"
+    assert sums.called is False
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_latest_channel_upgrades_past_the_pin_with_the_published_checksum(
+    tmp_path: Path,
+):
+    digest = hashlib.sha256(JAR_BYTES).hexdigest()
+    respx.get(RELEASES).mock(return_value=Response(200, json=release_payload()))
+    respx.get(SUMS_URL).mock(
+        return_value=Response(200, text=f"{digest}  Suwayomi-Server-v9.9.9.jar\n")
+    )
+    respx.get(JAR_URL).mock(return_value=Response(200, content=JAR_BYTES))
+    runtime = pinned_runtime(tmp_path)
+
+    result = await runtime.install(start=False, channel="latest")
+
+    assert result["updated"] is True and result["version"] == "v9.9.9"
+    await runtime.aclose()
+
+
+def test_release_order_compares_upstream_tags():
+    assert release_order("v2.4.2366") > release_order("v2.4.1900")
+    assert release_order("v2.4.2366") < release_order("v2.5.1")
+    assert release_order("") == ()
+
+
+def test_the_shipped_pin_is_a_real_release_digest():
+    assert PINNED_RELEASE.tag.startswith("v")
+    assert len(PINNED_RELEASE.sha256) == 64
+    assert PINNED_RELEASE.jar_name == f"Suwayomi-Server-{PINNED_RELEASE.tag}.jar"

@@ -129,6 +129,7 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "qbittorrent_category": SettingSpec("str", min_length=1, max_length=50),
     "torrent_completed_action": SettingSpec("str", min_length=4, max_length=24),
     "suwayomi_auto_install_official": SettingSpec("bool"),
+    "suwayomi_auto_update": SettingSpec("bool"),
     "suwayomi_extension_store": SettingSpec("str", max_length=500),
     "sabnzbd_url": SettingSpec("optional_str", max_length=300),
     "sabnzbd_api_key": SettingSpec("optional_str", secret=True, max_length=300),

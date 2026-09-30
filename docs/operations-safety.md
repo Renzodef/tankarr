@@ -121,6 +121,15 @@ use a filesystem or container with quotas.
 
 ## Suwayomi engine updates
 
+Tankarr installs the Suwayomi-Server release pinned in its source
+(`PINNED_RELEASE` in `tankarr/suwayomi_runtime.py`, tag and SHA-256). The pin
+proves that the JAR is the one reviewed with that Tankarr release; the checksum
+file published upstream only proves the download was not corrupted, and both
+must agree or nothing is installed. Newer upstream releases are reported daily
+and installed only when `TANKARR_SUWAYOMI_AUTO_UPDATE` is on or the operator
+presses **Update**; a server newer than the pin is never downgraded. Extension
+updates apply only to extensions installed from the configured repository.
+
 A managed Suwayomi update checks the official SHA-256 checksum, snapshots the
 engine's data directory (its *home*) with the engine stopped before replacing
 the JAR, and requires the new version to become ready within 180 seconds before
