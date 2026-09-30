@@ -106,7 +106,6 @@ type SectionDef = {
   };
   prowlarrTest?: { keys: string[] };
   internetArchiveTest?: { keys: string[] };
-  komgaTest?: { keys: string[] };
 };
 
 type CatalogOption = {
@@ -994,7 +993,6 @@ export default function SettingsPage() {
   const [suwayomiSources, setSuwayomiSources] = useState<SuwayomiSource[]>([]);
   const [prowlarrTest, setProwlarrTest] = useState<string | null>(null);
   const [internetArchiveTest, setInternetArchiveTest] = useState<string | null>(null);
-  const [komgaTest, setKomgaTest] = useState<string | null>(null);
   const [readerTest, setReaderTest] = useState<string | null>(null);
   const [readerDiscovery, setReaderDiscovery] = useState<string | null>(null);
   const [notificationTests, setNotificationTests] = useState<Record<string, string | null>>({});
@@ -1271,37 +1269,6 @@ export default function SettingsPage() {
     }
   };
 
-  const testKomga = async (keys: string[]) => {
-    setKomgaTest("…");
-    try {
-      const result = await api.testKomga(pickValues(keys));
-      if (!result.ok) {
-        setKomgaTest(t("Failed: {error}", { error: result.error ?? t("unknown error") }));
-        return;
-      }
-      const library = result.library_name
-        ? `${result.library_name}${result.library_id ? ` (${result.library_id})` : ""}`
-        : result.library_id ?? t("library connected");
-      const counts = [
-        result.series_count === undefined
-          ? null
-          : tn(result.series_count, "{count} series", "{count} series"),
-        result.book_count === undefined
-          ? null
-          : tn(result.book_count, "{count} book", "{count} books"),
-      ].filter(Boolean);
-      const authentication = result.auth_method === "api_key"
-        ? t("API key")
-        : result.auth_method === "basic"
-          ? t("username/password")
-          : null;
-      setKomgaTest(
-        t("OK — {summary}", { summary: [library, authentication, ...counts].filter(Boolean).join(" · ") }),
-      );
-    } catch (caught) {
-      setKomgaTest(String(caught));
-    }
-  };
 
   const copyApiKey = async () => {
     if (!apiKey) return;
@@ -1771,26 +1738,6 @@ export default function SettingsPage() {
                 </button>
                 {prowlarrTest ? (
                   <p className="muted small setting-test-result">{prowlarrTest}</p>
-                ) : null}
-              </div>
-            ) : null}
-            {section.komgaTest ? (
-              <div className="form-row setting-test-row">
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  disabled={komgaTest === "…"}
-                  onClick={() => void testKomga(section.komgaTest!.keys)}
-                >
-                  <Icon name="check" size={14} /> {t("Test connection")}
-                </button>
-                {values.komga_url?.trim() ? (
-                  <a className="btn btn-small" href={values.komga_url.trim()} target="_blank" rel="noreferrer">
-                    <Icon name="external" size={14} /> {t("Open Komga")}
-                  </a>
-                ) : null}
-                {komgaTest ? (
-                  <p className="muted small setting-test-result">{komgaTest}</p>
                 ) : null}
               </div>
             ) : null}

@@ -1218,7 +1218,6 @@ export type ProviderProbe = {
   ok: boolean;
   latency_ms: number | null;
   error?: string;
-  supported_sites?: number;
 };
 
 export type SuwayomiSource = {
