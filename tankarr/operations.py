@@ -162,7 +162,10 @@ def local_preflight(
         "ok" if library.get("available") else "error",
         "Library identity matches"
         if library.get("available")
-        else "Library identity is unavailable; check the library mount",
+        else str(
+            library.get("reason")
+            or "Library identity is unavailable; check the library mount"
+        ),
     )
     add(
         "authentication",

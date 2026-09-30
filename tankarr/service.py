@@ -6837,24 +6837,44 @@ class TankarrService:
         return result
 
     def _validate_library_identity(self, root: Path) -> None:
+        """Bind the configuration to one library and refuse another.
+
+        The same identity is kept in two places: a token in the data
+        directory and a marker at the library root. They agree while the
+        configured volume is the one the database describes. A first start
+        (no files recorded yet) provisions both; a library that carries a
+        marker but whose configuration was recreated is adopted. Two cases
+        stay closed because the volume may be unmounted, and writing into
+        the mount point would silently file the library into the container:
+        a token without a marker, and a configuration that already records
+        files but finds no identity at all.
+        """
+
         token_path = self.settings.data_dir / ".tankarr-library-id"
         marker_path = root / ".tankarr-library-id"
         if token_path.is_symlink() or marker_path.is_symlink():
             raise LibraryUnavailable("Library identity files must not be symlinks")
 
         if not token_path.exists() and not marker_path.exists():
-            raise LibraryUnavailable(
-                "Library identity is not provisioned; run the verified deployment "
-                "provisioning step"
-            )
-        if not token_path.exists():
-            raise LibraryUnavailable(
-                "Library config identity is missing; storage must be adopted only "
-                "after mount verification"
-            )
+            if self.database.has_downloaded_chapters():
+                # Files are recorded but neither side carries the identity:
+                # this is not a first start, and nothing proves that the
+                # mounted folder is the library those records describe.
+                raise LibraryUnavailable(
+                    "Library identity is not provisioned, yet this configuration "
+                    f"already records downloaded files. Mount the library they "
+                    f"live in at {root}, or start with an empty data directory "
+                    "to adopt a new library."
+                )
+            self._provision_library_identity(root, token_path, marker_path)
+        elif not token_path.exists():
+            self._adopt_library_identity(root, token_path, marker_path)
         if not marker_path.exists():
             raise LibraryUnavailable(
-                "Library identity marker is missing; storage may be unmounted"
+                f"Library identity marker is missing at {marker_path}; the library "
+                "volume may be unmounted. Mount the library that this configuration "
+                f"was created for, or remove {token_path} to adopt a new, empty "
+                "library on the next start."
             )
         if not token_path.is_file() or not marker_path.is_file():
             raise LibraryUnavailable("Library identity paths must be regular files")
@@ -6864,6 +6884,64 @@ class TankarrService:
             raise LibraryUnavailable(
                 "Library identity marker does not match configured storage"
             )
+
+    def _provision_library_identity(
+        self, root: Path, token_path: Path, marker_path: Path
+    ) -> None:
+        """First start: mint an identity and write it to both places."""
+
+        self._assert_identity_writes_allowed(root)
+        identity = uuid.uuid4().hex
+        # The marker first: it proves the library is mounted and writable
+        # before the configuration commits to it.
+        self._write_library_identity(marker_path, identity, root)
+        self._write_library_identity(token_path, identity, root)
+        logger.info("Adopted new library %s (identity %s)", root, identity[:8])
+
+    def _adopt_library_identity(
+        self, root: Path, token_path: Path, marker_path: Path
+    ) -> None:
+        """The library carries a marker but the configuration lost its token
+        (a recreated config volume): the marker proves the mount, so the
+        configuration adopts it."""
+
+        self._assert_identity_writes_allowed(root)
+        identity = self._read_library_identity(marker_path)
+        self._write_library_identity(token_path, identity, root)
+        logger.info(
+            "Adopted existing library %s (identity %s) into this configuration",
+            root,
+            identity[:8],
+        )
+
+    def _assert_identity_writes_allowed(self, root: Path) -> None:
+        if self.settings.restored_safe_mode:
+            raise LibraryUnavailable(
+                "Library identity is not provisioned and restored safe mode "
+                f"forbids writing to {root}. Verify the restored installation, "
+                "then restart with TANKARR_RESTORED_SAFE_MODE=false."
+            )
+
+    @staticmethod
+    def _write_library_identity(path: Path, identity: str, root: Path) -> None:
+        temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with open(temporary, "w", encoding="utf-8") as handle:
+                handle.write(f"{identity}\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            where = "library directory" if path.parent == root else "data directory"
+            raise LibraryUnavailable(
+                f"Cannot write the library identity file {path} ({exc.strerror}). "
+                f"Make the {where} writable by the user Tankarr runs as "
+                "(PUID/PGID in Docker), then restart."
+            ) from exc
 
     @staticmethod
     def _read_library_identity(path: Path) -> str:

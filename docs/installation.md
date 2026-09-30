@@ -210,6 +210,15 @@ to read `/import`, `/downloads` and `/usenet`.
 sudo chown -R 1001:100 /srv/tankarr/config /path/to/comics
 ```
 
+On its first start Tankarr writes a small identity file, `.tankarr-library-id`,
+both in `/config` and at the root of the library, and from then on refuses a
+library whose marker does not match: a configuration is bound to one library,
+so an unmounted or swapped volume is reported on the System page instead of
+being filled with files. A library that already carries the marker is adopted
+by a new configuration. If the setup page stays on "Library identity", read
+the reason it shows: it names the file it could not write and the permission
+to fix.
+
 ## Download clients
 
 Tankarr hands torrent and Usenet releases to your existing qBittorrent and
