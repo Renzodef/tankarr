@@ -77,6 +77,8 @@ def test_forms_authentication_uses_login_page_cookie_and_logout(tmp_path: Path):
 
     assert client.get("/").status_code == 200
     assert client.get("/assets/app.js").status_code == 200
+    # The tab icon is public like the login page that references it.
+    assert client.get("/favicon.svg").status_code != 401
     assert client.get("/api/manga").status_code == 401
     assert "www-authenticate" not in client.get("/api/manga").headers
     assert client.get("/api/auth/status").json() == {

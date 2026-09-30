@@ -13,6 +13,7 @@ import {
   monitorLabel,
   seriesCoverUrl,
   seriesPath,
+  useApp,
   useAppActions,
 } from "../components";
 import { additionalContentLabel, libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
@@ -347,7 +348,7 @@ export default function LibraryPage() {
               ? t("No series match the filter")
               : t("Your library is empty")
           }
-          hint={filter || hasStatusFilter ? undefined : t("Use Add New to search configured providers.")}
+          hint={filter || hasStatusFilter ? undefined : <EmptyLibraryHint />}
         />
       ) : (
         <>
@@ -446,5 +447,20 @@ export default function LibraryPage() {
         </>
       )}
     </div>
+  );
+}
+
+/** Mounted only while the library is empty, so only this hint re-renders on
+ * health polls: a fresh installation has no chapter source yet. */
+function EmptyLibraryHint() {
+  const { health } = useApp();
+  const noSources = health ? health.providers.every((item) => item.name === "local") : false;
+  return (
+    <>
+      {noSources
+        ? t("Use Add New to search the catalogue. Chapters download from the sources you enable in Settings → Sources; until then only whole volumes from the Internet Archive can be fetched.")
+        : t("Use Add New to search the catalogue and add a series.")}
+      {noSources ? <> <a href="#/settings?tab=sources">{t("Open Sources settings")}</a></> : null}
+    </>
   );
 }

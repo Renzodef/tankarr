@@ -722,7 +722,7 @@ export function Spinner() {
   return <div className="spinner" aria-label={t("Loading")} />;
 }
 
-export function EmptyState({ icon, title, hint }: { icon: IconName; title: string; hint?: string }) {
+export function EmptyState({ icon, title, hint }: { icon: IconName; title: string; hint?: ReactNode }) {
   return (
     <div className="empty-state">
       <Icon name={icon} size={42} />

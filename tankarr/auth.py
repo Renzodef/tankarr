@@ -634,6 +634,7 @@ def _public_forms_asset(path: str) -> bool:
         or path
         in {
             "/favicon.ico",
+            "/favicon.svg",
             "/manifest.webmanifest",
         }
     )
