@@ -526,6 +526,13 @@ const SECTIONS: SectionDef[] = [
         visibleWhen: { key: "suwayomi_mode", equals: "external" },
       },
       {
+        key: "suwayomi_auto_update",
+        label: msg("Automatic server updates"),
+        hint: msg("Tankarr installs the Suwayomi-Server release it was tested with, verified against a digest kept in its own source. The daily check still reports newer releases; switch this on to install them automatically, or use Update in the panel below when you decide."),
+        kind: "boolean",
+        visibleWhen: { key: "suwayomi_mode", equals: "managed" },
+      },
+      {
         key: "suwayomi_auto_install_official",
         label: msg("Auto-install official extensions"),
         hint: msg("When a work's catalogue record names a free official platform (MANGA Plus, WEBTOON, Tapas, Comikey, Manga UP!), Tankarr installs its extension in the managed runtime and maps it as a download source."),

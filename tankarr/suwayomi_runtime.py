@@ -51,7 +51,40 @@ logger = logging.getLogger(__name__)
 
 RELEASES_API = "https://api.github.com/repos/Suwayomi/Suwayomi-Server/releases/latest"
 RELEASE_PAGE = "https://github.com/Suwayomi/Suwayomi-Server/releases"
+RELEASE_DOWNLOADS = "https://github.com/Suwayomi/Suwayomi-Server/releases/download"
 CHECKSUM_ASSET = "Checksums.sha256"
+
+
+@dataclass(frozen=True)
+class PinnedRelease:
+    """The Suwayomi-Server release Tankarr installs by default.
+
+    The digest lives in this source tree and changes through a pull request,
+    like any dependency: it proves the JAR is the one reviewed here, which
+    the checksum file published next to a release cannot (it only proves the
+    download was not corrupted). Automatic upgrades past it are opt-in.
+    """
+
+    tag: str
+    sha256: str
+
+    @property
+    def jar_name(self) -> str:
+        return f"Suwayomi-Server-{self.tag}.jar"
+
+
+PINNED_RELEASE = PinnedRelease(
+    tag="v2.4.2366",
+    sha256="af9feb20af9d7ebe9e30769e6c6ebc7fc7ab1c447388d42e0280b1da5fe07bfd",
+)
+
+
+def release_order(tag: str) -> tuple[int, ...]:
+    """Sort key for tags such as ``v2.4.2366``; unknown shapes sort lowest."""
+
+    return tuple(int(part) for part in re.findall(r"\d+", tag or ""))
+
+
 DEFAULT_PORT = 4567
 READY_TIMEOUT_SECONDS = 180.0
 STOP_TIMEOUT_SECONDS = 25.0
@@ -333,6 +366,8 @@ class SuwayomiRuntime:
         command_builder: Callable[..., list[str]] = jvm_arguments,
         ready_probe: Callable[[], Any] | None = None,
         releases_api: str = RELEASES_API,
+        release_downloads: str = RELEASE_DOWNLOADS,
+        pinned_release: PinnedRelease | None = PINNED_RELEASE,
         sleep: Callable[[float], Any] = asyncio.sleep,
     ) -> None:
         self.root = Path(root)
@@ -354,6 +389,8 @@ class SuwayomiRuntime:
         self._command_builder = command_builder
         self._ready_probe = ready_probe
         self._releases_api = releases_api
+        self._release_downloads = release_downloads.rstrip("/")
+        self.pinned_release = pinned_release
         self._sleep = sleep
         self.url = f"http://127.0.0.1:{port}"
         self._process: asyncio.subprocess.Process | None = None
@@ -441,6 +478,7 @@ class SuwayomiRuntime:
             "exposed": self.credentials is not None,
             "extension_store": self.extension_store,
             "latest_version": self._latest_version,
+            "pinned_version": self.pinned_release.tag if self.pinned_release else None,
             "update_available": bool(
                 installed
                 and self._latest_version
@@ -473,28 +511,64 @@ class SuwayomiRuntime:
 
     # ---------------------------------------------------------------- install
 
-    async def install(self, *, start: bool = True) -> dict[str, Any]:
-        """Download and verify the latest official JAR, then (re)start."""
+    def _pinned_assets(self) -> ReleaseAssets | None:
+        pin = self.pinned_release
+        if pin is None:
+            return None
+        base = f"{self._release_downloads}/{pin.tag}"
+        return ReleaseAssets(
+            tag=pin.tag,
+            jar_name=pin.jar_name,
+            jar_url=f"{base}/{pin.jar_name}",
+            jar_size=0,
+            checksums_url=f"{base}/{CHECKSUM_ASSET}",
+            published_at=None,
+        )
 
+    async def _latest_assets(self) -> ReleaseAssets:
+        response = await self._http.get(
+            self._releases_api,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        response.raise_for_status()
+        return select_release_assets(response.json())
+
+    async def install(
+        self, *, start: bool = True, channel: str = "pinned"
+    ) -> dict[str, Any]:
+        """Download and verify the official JAR, then (re)start.
+
+        ``channel="pinned"`` installs the release this Tankarr was reviewed
+        with, verified against the digest kept in the source tree, and never
+        replaces a newer server already installed. ``channel="latest"`` is
+        the explicit upgrade path (the operator's button, or the daily
+        maintenance when automatic updates are on): it verifies against the
+        checksum file published with that release.
+        """
+
+        if channel not in {"pinned", "latest"}:
+            raise ValueError(f"Unknown release channel: {channel}")
         if self._installing:
             raise SuwayomiRuntimeBusy("A Suwayomi installation is already running")
         self._installing = True
-        self._install_progress = "Checking the latest release"
+        self._install_progress = "Checking the release"
         try:
             self.server_dir.mkdir(parents=True, exist_ok=True)
-            response = await self._http.get(
-                self._releases_api,
-                headers={"Accept": "application/vnd.github+json"},
-            )
-            response.raise_for_status()
-            assets = select_release_assets(response.json())
+            pinned = self._pinned_assets() if channel == "pinned" else None
+            assets = pinned or await self._latest_assets()
             current = self.installed()
             if current and current.get("pending_update", {}).get("attempted"):
                 if self.running:
                     await self.stop()
                 await asyncio.to_thread(self._rollback_update, current)
                 current = self.installed()
-            if current and current.get("tag") == assets.tag:
+            keeps_newer = bool(
+                pinned
+                and current
+                and release_order(str(current.get("tag") or ""))
+                > release_order(assets.tag)
+            )
+            if current and (current.get("tag") == assets.tag or keeps_newer):
                 self._install_progress = None
                 if start and not self.running:
                     await self.start()
@@ -509,6 +583,17 @@ class SuwayomiRuntime:
             if not expected:
                 raise SuwayomiRuntimeError(
                     f"{CHECKSUM_ASSET} does not list {assets.jar_name}"
+                )
+            if (
+                pinned
+                and self.pinned_release
+                and expected != self.pinned_release.sha256
+            ):
+                # Two independent statements about the same file disagree:
+                # the release was republished or tampered with. Install nothing.
+                raise SuwayomiRuntimeError(
+                    f"The published checksum of {assets.jar_name} does not match "
+                    "the digest pinned in Tankarr; refusing to install it"
                 )
 
             self._install_progress = f"Downloading {assets.jar_name}"
@@ -1023,6 +1108,9 @@ class SuwayomiRuntime:
                     "installed": bool(node.get("isInstalled")),
                     "has_update": bool(node.get("hasUpdate")),
                     "obsolete": bool(node.get("isObsolete")),
+                    "from_configured_store": (
+                        node.get("storeIndexUrl") in (None, "", self.extension_store)
+                    ),
                     # The runtime listens on the container's loopback, which a
                     # browser cannot reach: icons are served through Tankarr.
                     "icon_url": (
@@ -1072,11 +1160,17 @@ class SuwayomiRuntime:
         }
 
     async def update_installed_extensions(self) -> list[str]:
-        """Refresh the store and update every installed extension that has one."""
+        """Refresh the store and update the installed extensions that come
+        from the configured repository. An extension installed from another
+        repository is left alone: its updates were never reviewed here."""
 
         updated: list[str] = []
         for item in await self.list_extensions(refresh=True):
-            if item["installed"] and item["has_update"]:
+            if (
+                item["installed"]
+                and item["has_update"]
+                and item["from_configured_store"]
+            ):
                 try:
                     await self.set_extension(item["pkg_name"], installed=True)
                     updated.append(item["pkg_name"])

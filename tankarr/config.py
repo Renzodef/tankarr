@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     # "external": connect to a Suwayomi server you run yourself.
     suwayomi_mode: str = "managed"
     suwayomi_managed_heap_mb: int = Field(default=256, ge=128, le=1024)
+    # Managed mode installs the Suwayomi-Server release pinned in the source
+    # (tankarr/suwayomi_runtime.py, PINNED_RELEASE). The daily maintenance
+    # reports newer upstream releases; it installs them only when this is on.
+    suwayomi_auto_update: bool = False
     # Install the extension of a work's free official platform on its own
     # (managed runtime only), so official sources map by themselves.
     suwayomi_auto_install_official: bool = True

@@ -55,17 +55,23 @@ reference.
 ### Managed mode
 
 Choose **Managed by Tankarr (recommended)** as the **Mode** and click
-**Install Suwayomi**. Tankarr downloads the latest Suwayomi-Server release from
-GitHub, verifies the server JAR against the SHA-256 checksum file published
-with the release, installs it and starts it. Its data lives in the `suwayomi`
-folder of the data directory. Tankarr supervises the process: it restarts it
-with a back-off if it exits and stops it cleanly on shutdown. The panel shows
-its status and offers **Update / reinstall**, **Check updates**, **Restart**,
-**Stop** and the server **Log**.
+**Install Suwayomi**. Tankarr downloads the Suwayomi-Server release it was
+tested with from GitHub, verifies the server JAR against both the SHA-256
+digest pinned in Tankarr's own source and the checksum file published with the
+release, installs it and starts it. Its data lives in the `suwayomi` folder of
+the data directory. Tankarr supervises the process: it restarts it with a
+back-off if it exits and stops it cleanly on shutdown. The panel shows its
+status, the tested version, and offers **Update / reinstall**, **Check
+updates**, **Restart**, **Stop** and the server **Log**.
 
-Once a day Tankarr checks GitHub for a new server release and installs it when
-no download is running, updates the installed extensions that have a newer
-version, and installs new extensions for your languages as described below.
+Once a day Tankarr checks GitHub for a newer server release and reports it in
+the panel and on the System page. It installs it on its own only when
+**Automatic server updates** (`TANKARR_SUWAYOMI_AUTO_UPDATE`) is on and no
+download is running; otherwise press **Update to …** when you decide. The
+release pinned in Tankarr moves forward with Tankarr's own releases, so a
+compromised upstream release cannot reach every installation within a day. The
+same daily pass updates the installed extensions that come from the configured
+repository and installs new extensions for your languages as described below;
 **Check updates** does the same immediately. If an updated server does not
 become ready, Tankarr restores the previous server and its data.
 

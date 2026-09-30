@@ -1512,6 +1512,7 @@ export type SuwayomiRuntimeStatus = {
   exposed: boolean;
   extension_store: string | null;
   latest_version?: string | null;
+  pinned_version?: string | null;
   update_available?: boolean;
   last_update_check_at?: string | null;
   last_extension_refresh_at?: string | null;

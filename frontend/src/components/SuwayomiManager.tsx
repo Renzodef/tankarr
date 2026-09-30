@@ -302,6 +302,7 @@ export function SuwayomiManager({
               {status.uptime_seconds !== null && status.running ? ` · ${t("up {duration}", { duration: formatUptime(status.uptime_seconds) })}` : ""}
               {status.restarts ? ` · ${tn(status.restarts, "{count} restart", "{count} restarts")}` : ""}
               {status.latest_version && status.latest_version !== status.version ? ` · ${t("{version} available", { version: status.latest_version })}` : status.latest_version ? " · " + t("up to date") : ""}
+              {status.pinned_version ? ` · ${t("tested with {version}", { version: status.pinned_version })}` : ""}
             </span>
           ) : null}
         </div>
