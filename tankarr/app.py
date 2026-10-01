@@ -1400,7 +1400,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             del compact["recovery"]
         return compact
 
-    def render_wanted_payloads(revision: tuple[str, ...]) -> tuple[bytes, bytes]:
+    def render_wanted_payloads(revision: tuple[str, ...]) -> bytes:
+        """The compact Wanted payload, the one the page reads.
+
+        The complete payload (every alternative release of every slot) used
+        to be rendered and persisted alongside it on every refresh although
+        only API clients ask for it: five times the bytes, and past 64 MB the
+        snapshot that paints Wanted after a restart was silently dropped. It
+        is now rendered on the first request that wants it.
+        """
+
         records = service.list_wanted()
         compact_records = [
             {
@@ -1411,16 +1420,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             for entry in records
         ]
-        payloads = (fastjson.dumps(records), fastjson.dumps(compact_records))
+        compact_payload = fastjson.dumps(compact_records)
         response_snapshots.save(
             "wanted",
             {
-                "payload": payloads[0],
-                "compact_payload": payloads[1],
+                "compact_payload": compact_payload,
                 "revision": json.dumps(revision, separators=(",", ":")).encode("utf-8"),
             },
         )
-        return payloads
+        return compact_payload
 
     async def current_wanted_revision() -> tuple[str, ...]:
         return (
@@ -1435,11 +1443,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with wanted_cache_lock:
             revision = await current_wanted_revision()
             persisted_revision = wanted_cache.get("persisted_revision") or ()
-            if (
-                wanted_cache["payload"] is not None
-                and wanted_cache["compact_payload"] is not None
-                and persisted_revision
-            ):
+            if wanted_cache["compact_payload"] is not None and persisted_revision:
                 # A provider refresh rewrites timestamps even when its releases
                 # did not change, so the raw table clocks almost never survive a
                 # process restart. The snapshot is already tied to this database
@@ -1452,20 +1456,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return
             if (
                 wanted_cache["revision"] == revision
-                and wanted_cache["payload"] is not None
                 and wanted_cache["compact_payload"] is not None
             ):
                 wanted_cache["startup_ready"] = True
                 wanted_cache["startup_snapshot"] = False
                 return
-            payload, compact_payload = await run_api_blocking(
-                render_wanted_payloads, revision
-            )
+            compact_payload = await run_api_blocking(render_wanted_payloads, revision)
             # The starting revision deliberately stays attached to this
             # complete snapshot. A concurrent import then schedules one more
             # refresh instead of discarding useful work.
             wanted_cache["revision"] = revision
-            wanted_cache["payload"] = payload
+            wanted_cache["payload"] = None
             wanted_cache["compact_payload"] = compact_payload
             wanted_cache["startup_ready"] = True
             wanted_cache["startup_snapshot"] = False
@@ -1493,8 +1494,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         task.add_done_callback(completed)
         return task
 
+    async def full_wanted_payload() -> bytes:
+        """The complete payload of the revision the compact one is at."""
+
+        async with wanted_cache_lock:
+            payload = wanted_cache.get("payload")
+            if payload is None:
+                payload = await run_api_blocking(
+                    lambda: fastjson.dumps(service.list_wanted())
+                )
+                wanted_cache["payload"] = payload
+            return payload
+
     async def cached_wanted_payload(*, compact: bool, fresh: bool) -> bytes:
-        payload_key = "compact_payload" if compact else "payload"
+        compact_payload = await cached_compact_wanted_payload(fresh=fresh)
+        if compact:
+            return compact_payload
+        return await full_wanted_payload()
+
+    async def cached_compact_wanted_payload(*, fresh: bool) -> bytes:
+        payload_key = "compact_payload"
         cached_payload = wanted_cache.get(payload_key)
         if cached_payload is not None and wanted_cache.get("startup_snapshot"):
             # First paint uses the saved snapshot. An explicit fresh request
