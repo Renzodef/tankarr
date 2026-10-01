@@ -4935,6 +4935,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     calendar_cache: OrderedDict[tuple[str, ...], tuple[bytes, float]] = OrderedDict()
     calendar_cache_lock = asyncio.Lock()
+    # The decoded snapshot behind a Calendar render: every preferred-language
+    # release of every series. Moving from one month to the next used to
+    # rebuild it (2.6 s for 1,500 series); one revision now decodes it once,
+    # and the burst over, it is released again.
+    calendar_inputs_cache: dict[str, Any] = {
+        "revision": None,
+        "inputs": None,
+        "drop": None,
+    }
+    calendar_inputs_ttl_seconds = 90.0
     calendar_cache_limit = 12
 
     def render_calendar(
@@ -4944,6 +4954,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         start_on: date | None,
         end_on: date | None,
         _with_expiry: bool = False,
+        calendar_inputs: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         if (start_on is None) != (end_on is None):
@@ -4983,7 +4994,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         release_window_end = published_at(release_end)
         assert release_window_start is not None and release_window_end is not None
 
-        calendar_inputs = database.list_calendar_inputs()
+        if calendar_inputs is None:
+            calendar_inputs = database.list_calendar_inputs()
         # A release can cross its announcement/window boundary without a DB
         # write. Expire exactly at the next such transition or UTC midnight.
         expires_at = datetime.combine(
@@ -5329,6 +5341,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.state.render_calendar = render_calendar
 
+    def remember_calendar_inputs(
+        revision: tuple[str, ...], inputs: list[dict[str, Any]]
+    ) -> None:
+        previous = calendar_inputs_cache["drop"]
+        if previous is not None:
+            previous.cancel()
+        calendar_inputs_cache["revision"] = revision
+        calendar_inputs_cache["inputs"] = inputs
+
+        def drop() -> None:
+            if calendar_inputs_cache["drop"] is handle:
+                calendar_inputs_cache["revision"] = None
+                calendar_inputs_cache["inputs"] = None
+                calendar_inputs_cache["drop"] = None
+
+        handle = asyncio.get_running_loop().call_later(
+            calendar_inputs_ttl_seconds, drop
+        )
+        calendar_inputs_cache["drop"] = handle
+
     async def cached_calendar_payload(
         *,
         days: int,
@@ -5354,18 +5386,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 calendar_cache.move_to_end(key)
                 return cached[0]
 
-            def build_payload() -> tuple[bytes, float]:
+            shared_inputs = (
+                calendar_inputs_cache["inputs"]
+                if calendar_inputs_cache["revision"] == revision
+                else None
+            )
+
+            def build_payload() -> tuple[bytes, float, list[dict[str, Any]]]:
+                inputs = (
+                    database.list_calendar_inputs()
+                    if shared_inputs is None
+                    else shared_inputs
+                )
                 rendered = render_calendar(
                     days=days,
                     ahead=ahead,
                     start_on=start_on,
                     end_on=end_on,
                     _with_expiry=True,
+                    calendar_inputs=inputs,
                 )
                 expires_at = rendered.pop("_expires_at")
-                return fastjson.dumps(rendered), expires_at
+                return fastjson.dumps(rendered), expires_at, inputs
 
-            payload, expires_at = await run_api_blocking(build_payload)
+            payload, expires_at, inputs = await run_api_blocking(build_payload)
+            remember_calendar_inputs(revision, inputs)
             calendar_cache[key] = payload, expires_at
             calendar_cache.move_to_end(key)
             while len(calendar_cache) > calendar_cache_limit:
