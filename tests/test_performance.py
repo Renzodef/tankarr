@@ -415,3 +415,66 @@ def test_compact_wanted_omits_the_boilerplate_verdict_of_unsearched_slots(
     assert all("recovery" not in item for item in compact_chapters)
     # The page's row model still gets every field it renders.
     assert set(compact_chapters[0]) >= {"id", "chapter", "volume", "title", "slot_key"}
+
+
+def test_status_reuses_the_orphan_summary_and_the_series_rows(
+    tmp_path: Path, monkeypatch
+):
+    """The System page polls the status; at 1,500 series the orphan scan
+    (a stat per tracked file) and the release aggregate behind the series
+    rows cost two seconds per call. Both are reused until something changes."""
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        auth_required=False,
+    )
+    provision_library_identity(settings)
+    (settings.library_dir / "Stray").mkdir()
+    (settings.library_dir / "Stray" / "Stray 001.cbz").write_bytes(b"PK")
+    app = create_app(settings)
+    with TestClient(app) as client:
+        service = app.state.service
+        database = app.state.database
+        scans = {"count": 0}
+        original_scan = service.library_orphans
+
+        def counted_scan(**kwargs):
+            scans["count"] += 1
+            return original_scan(**kwargs)
+
+        monkeypatch.setattr(service, "library_orphans", counted_scan)
+        listings = {"count": 0}
+        original_list = database.list_manga
+
+        def counted_list(*args, **kwargs):
+            listings["count"] += 1
+            return original_list(*args, **kwargs)
+
+        monkeypatch.setattr(database, "list_manga", counted_list)
+
+        first = client.get("/api/system/status").json()
+        second = client.get("/api/system/status").json()
+        assert [
+            alert["key"]
+            for alert in first["alerts"]
+            if alert["key"] == "library_orphans"
+        ]
+        assert second["alerts"] == first["alerts"]
+        assert scans["count"] == 1, "the alert must reuse the cached orphan summary"
+        assert listings["count"] == 1, (
+            "the rows must be reused while the library revision is unchanged"
+        )
+
+        # An explicit scan from the System page is always fresh and refreshes the summary.
+        assert client.get("/api/library/orphans").json()["count"] == 1
+        assert scans["count"] == 2
+        client.get("/api/system/status")
+        assert scans["count"] == 2
+
+        # A library change invalidates the rows; the orphan summary follows the
+        # next organization or deletion, not the row revision.
+        database.upsert_manga(manga(), "en", "all")
+        client.get("/api/system/status")
+        assert listings["count"] == 2

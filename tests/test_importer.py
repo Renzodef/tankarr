@@ -116,17 +116,25 @@ def build_import_tree(root: Path) -> None:
 def test_importer_purges_only_stale_private_workspaces(tmp_path: Path):
     settings = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
     settings.ensure_directories()
-    stale_import = settings.staging_dir / "import-interrupted"
-    stale_nyaa = settings.staging_dir / "nyaa-import-interrupted"
+    stale = [
+        settings.staging_dir / name
+        for name in (
+            "import-interrupted",
+            "nyaa-import-interrupted",
+            "torrent-import-interrupted",
+            "job-12-interrupted",
+            "manual-import-interrupted",
+            "assemble-interrupted",
+        )
+    ]
     unrelated = settings.staging_dir / "user-kept"
-    for directory in (stale_import, stale_nyaa, unrelated):
+    for directory in (*stale, unrelated):
         directory.mkdir()
         (directory / "payload").write_bytes(b"temporary")
 
     LibraryImporter(settings, object(), object())  # type: ignore[arg-type]
 
-    assert stale_import.exists() is False
-    assert stale_nyaa.exists() is False
+    assert [directory.name for directory in stale if directory.exists()] == []
     assert (unrelated / "payload").read_bytes() == b"temporary"
 
 

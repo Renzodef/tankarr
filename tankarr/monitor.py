@@ -142,7 +142,16 @@ class ReleaseMonitor:
 
     async def _run(self) -> None:
         while True:
-            await self.run_cycle(include_wanted=False)
+            try:
+                await self.run_cycle(include_wanted=False)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one failed cycle is not a dead monitor
+                # A blocked organization or a transient database error used to
+                # end this task for the life of the process, while the status
+                # only said "running: false". The next interval retries.
+                self.last_cycle_error = f"{type(exc).__name__}: {exc}"[:300]
+                logger.exception("Release monitor cycle failed; retrying next interval")
             try:
                 await asyncio.wait_for(
                     self._stop.wait(), timeout=self.settings.monitor_interval_seconds

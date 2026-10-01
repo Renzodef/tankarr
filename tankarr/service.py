@@ -425,6 +425,7 @@ class TankarrService:
             str, tuple[tuple[Any, ...], dict[str, Any] | None, float, frozenset[str]]
         ] = {}
         self._wanted_series_cache_lock = Lock()
+        self._orphan_summary: tuple[float, dict[str, Any]] | None = None
 
     @property
     def provider(self) -> Provider:
@@ -5664,6 +5665,26 @@ class TankarrService:
             )
         return gaps
 
+    ORPHAN_SUMMARY_MAX_AGE_SECONDS = 600.0
+
+    def library_orphans_summary(self) -> dict[str, Any]:
+        """The orphan scan for alerts, at most once every ten minutes.
+
+        The full scan stats every tracked file (about a second per 15,000
+        files) and the System page polls the status that carries the alert.
+        An explicit scan or a change to the library refreshes it at once.
+        """
+
+        cached = self._orphan_summary
+        if cached is not None and monotonic() - cached[0] < (
+            self.ORPHAN_SUMMARY_MAX_AGE_SECONDS
+        ):
+            return cached[1]
+        return self.library_orphans(folder_limit=5)
+
+    def invalidate_orphan_summary(self) -> None:
+        self._orphan_summary = None
+
     def library_orphans(self, *, folder_limit: int = 100) -> dict[str, Any]:
         """Library files no Tankarr release claims, grouped by folder.
 
@@ -5678,6 +5699,7 @@ class TankarrService:
         try:
             root = self._library_root()
         except LibraryUnavailable as exc:
+            self._orphan_summary = None
             return {"available": False, "reason": str(exc), "count": 0, "folders": []}
         tracked: set[Path] = set()
         for recorded in self.database.list_tracked_library_paths():
@@ -5708,13 +5730,19 @@ class TankarrService:
             total += 1
             total_bytes += size
         folders = sorted(by_folder.values(), key=lambda item: -item["files"])
-        return {
+        report = {
             "available": True,
             "count": total,
             "bytes": total_bytes,
             "folders": folders[:folder_limit],
             "truncated": len(folders) > folder_limit,
         }
+        # Every scan is the freshest summary there is.
+        self._orphan_summary = (
+            monotonic(),
+            {**report, "folders": folders[:5], "truncated": len(folders) > 5},
+        )
+        return report
 
     async def delete_library_orphans(
         self, folders: list[str] | None = None
@@ -5749,6 +5777,7 @@ class TankarrService:
                 {path.parent.relative_to(root).as_posix() or "." for path in targets}
             )
             self._remove_empty_directories({path.parent for path in targets}, root)
+            self._orphan_summary = None
             scan = await self._request_komga_reconciliation(
                 not result["cleanup_errors"]
                 and not result["quarantine_files_remaining"]
@@ -5879,6 +5908,8 @@ class TankarrService:
         reconcile_reader: bool = True,
     ) -> dict[str, Any]:
         """Normalize every tracked download without overwriting library content."""
+        if not dry_run:
+            self._orphan_summary = None
 
         if not dry_run and getattr(self.settings, "restored_safe_mode", False):
             self.assert_mutations_allowed()
@@ -8409,7 +8440,16 @@ class TankarrService:
                 return
             if chapter["manga_id"] != manga["id"]:
                 return
-            library_root = self._library_root()
+            try:
+                library_root = self._library_root()
+            except LibraryUnavailable as exc:
+                # The volume is gone for the moment: the job stays queued and
+                # the worker backs off; it is downloaded when the library is
+                # back, instead of the worker dying with it.
+                self.database.update_job(
+                    job_id, message=f"Waiting for the library: {exc}"[:300]
+                )
+                return
             if queued.get("planned_path"):
                 planned_path = self._recorded_library_path(
                     str(queued["planned_path"]), library_root
@@ -8433,9 +8473,19 @@ class TankarrService:
                     # leave the job to its current owner without any file I/O.
                     return
             else:
-                planned_path = self._confined_library_path(
-                    final_library_path(library_root, manga, chapter), library_root
-                )
+                try:
+                    planned_path = self._confined_library_path(
+                        final_library_path(library_root, manga, chapter), library_root
+                    )
+                except (UnsafeLibraryPath, ValueError) as exc:
+                    self.database.update_job(
+                        job_id,
+                        status="failed",
+                        message=f"Unable to plan the library path: {type(exc).__name__}: {exc}"[
+                            :300
+                        ],
+                    )
+                    return
                 if queued.get("supersedes_chapter_id"):
                     # Both releases normally share a canonical filename. Keep
                     # the current book available while copying/fsyncing the new

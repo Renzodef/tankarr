@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 from tankarr.database import Database
@@ -26,6 +27,7 @@ class DownloadWorker:
         self._selection_lock = asyncio.Lock()
         self._cancel_lock = asyncio.Lock()
         self._stopping = False
+        self._stalls = 0
         self._successful_import_since_drain = False
         self._last_job_error: str | None = None
         self.pipeline = AdaptivePipelineConcurrency(
@@ -53,6 +55,8 @@ class DownloadWorker:
             await self.task
         except asyncio.CancelledError:
             pass
+        except Exception:  # noqa: BLE001 - a dead worker must not abort shutdown
+            logger.exception("The download worker had already stopped with an error")
         self.task = None
         self._active_tasks.clear()
         self._active_jobs.clear()
@@ -227,6 +231,7 @@ class DownloadWorker:
             token = await self.queue.get()
             requeue = False
             idle = False
+            stalled = False
             job_id = token
             processing: asyncio.Task[None] | None = None
             try:
@@ -276,13 +281,35 @@ class DownloadWorker:
                             and completed.get("status") == "queued"
                         ):
                             requeue = True  # transient failure: back in line
+                            # Left queued without a retry deadline: the job
+                            # made no progress (its release is gone, the
+                            # library is unreachable) and would be selected
+                            # again at once. Back off instead of spinning.
+                            stalled = (
+                                float(completed.get("next_retry_at") or 0)
+                                <= datetime.now(UTC).timestamp()
+                            )
                     except asyncio.CancelledError:
                         if self._stopping:
                             raise
+                    except Exception as exc:  # noqa: BLE001 - one job must never end the slot
+                        # Everything a job can do wrong is handled inside
+                        # process_download_job; what escapes (a library that
+                        # vanished between two checks, a database error) used
+                        # to end this slot, then the whole worker, for the
+                        # life of the process. Record it, back off, go on.
+                        stalled = True
+                        self._last_job_error = (
+                            f"Job {job_id}: {type(exc).__name__}: {exc}"[:300]
+                        )
+                        logger.exception(
+                            "Download job %s failed outside its own handling", job_id
+                        )
                     await self._failover_failed_release(job_id)
                 except RecoveryBlocked:
                     # A runtime recovery failure must not kill the long-lived
                     # worker task or mutate the queued job.
+                    stalled = True
                     continue
             finally:
                 async with self._selection_lock:
@@ -320,6 +347,11 @@ class DownloadWorker:
                         except Exception:  # noqa: BLE001 - maintenance retries it
                             pass
                 self.queue.task_done()
+                if stalled:
+                    self._stalls += 1
+                    await asyncio.sleep(min(30.0, float(2 ** min(self._stalls, 5))))
+                else:
+                    self._stalls = 0
                 if idle and remaining:
                     # A persisted retry may leave every pending job ineligible.
                     # Wait outside the selection lock, never for deleted jobs.
