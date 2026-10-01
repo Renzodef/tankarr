@@ -33,7 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
 from starlette.staticfiles import NotModifiedResponse
 
-from tankarr import __version__, series_unit
+from tankarr import __version__, fastjson, series_unit
 from tankarr.artwork_thumbnails import (
     ARTWORK_THUMBNAIL_VERSION,
     SUPPORTED_ARTWORK_THUMBNAIL_WIDTHS,
@@ -1039,9 +1039,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 library_cards[manga_id] = {
                     "revision": revisions[manga_id],
                     "expires_at": next_publication(entry["releases"], since=now),
-                    "payload": json.dumps(
-                        card, ensure_ascii=False, separators=(",", ":")
-                    ).encode("utf-8"),
+                    "payload": fastjson.dumps(card),
                 }
             for manga_id in library_cards.keys() - revisions.keys():
                 del library_cards[manga_id]
@@ -1242,9 +1240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # chapter-search endpoint only when the operator asks for them.
             compact_chapter_releases(decorated["chapter_index"])
             decorated.pop("chapters", None)
-        return json.dumps(decorated, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        return fastjson.dumps(decorated)
 
     async def current_series_revision(manga_id: str) -> tuple[str, ...]:
         source_revision = repr(
@@ -1415,14 +1411,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             for entry in records
         ]
-        payloads = (
-            json.dumps(records, ensure_ascii=False, separators=(",", ":")).encode(
-                "utf-8"
-            ),
-            json.dumps(
-                compact_records, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8"),
-        )
+        payloads = (fastjson.dumps(records), fastjson.dumps(compact_records))
         response_snapshots.save(
             "wanted",
             {
@@ -5374,10 +5363,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     _with_expiry=True,
                 )
                 expires_at = rendered.pop("_expires_at")
-                payload = json.dumps(
-                    rendered, ensure_ascii=False, separators=(",", ":")
-                ).encode("utf-8")
-                return payload, expires_at
+                return fastjson.dumps(rendered), expires_at
 
             payload, expires_at = await run_api_blocking(build_payload)
             calendar_cache[key] = payload, expires_at
