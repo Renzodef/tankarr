@@ -13,6 +13,7 @@ on:
       - "frontend/**"
       - "tankarr/**"
       - "tests/demo_snapshot.py"
+      - "tests/demo_real.py"
       - "tests/browser_server.py"
       - "build-demo.sh"
       - "pyproject.toml"
@@ -57,6 +58,7 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           TANKARR_PYTHON: python
+          TANKARR_DEMO_DATASET: real
         run: |
           sudo apt-get install -y --no-install-recommends fonts-dejavu-core
           python -m pip install -e .

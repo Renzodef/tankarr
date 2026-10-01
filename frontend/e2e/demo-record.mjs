@@ -1,8 +1,10 @@
 // Record the API of the fictional library for the online demo.
 //
 // Walks every page of the interface against a running tests/browser_server.py
-// (the same server the screenshots use) and writes each API response it saw
-// to <output>/recording.json, binary ones (covers, pages) to <output>/files/.
+// (the same server the screenshots use) and writes each API response it saw:
+// an index in <output>/recording.json, every body as its own file under
+// <output>/files/ (identical bodies share one), so the demo loads only what
+// a visitor opens.
 // The demo build (scripts/build-demo.mjs) ships that folder beside the
 // interface, and src/demo/sw.ts answers the interface from it.
 //
@@ -20,6 +22,8 @@ const output = resolve(process.env.TANKARR_DEMO_OUTPUT ?? "demo-data");
 const origin = new URL(baseURL).origin;
 
 const EXTENSIONS = {
+  "application/json": "json",
+  "text/plain": "txt",
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
@@ -53,16 +57,16 @@ async function record(response) {
   } catch {
     return; // the page navigated away before the body arrived
   }
-  if (type.startsWith("application/json") || type.startsWith("text/")) {
-    responses[key] = { status, type, body: body.toString("utf8") };
-    return;
-  }
   const extension = EXTENSIONS[type] ?? "bin";
   const name = `files/${createHash("sha256").update(body).digest("hex").slice(0, 20)}.${extension}`;
-  await writeFile(resolve(output, name), body);
-  files += 1;
+  if (!written.has(name)) {
+    written.add(name);
+    await writeFile(resolve(output, name), body);
+    files += 1;
+  }
   responses[key] = { status, type, file: name };
 }
+const written = new Set();
 
 const browser = await chromium.launch({
   executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
@@ -147,21 +151,17 @@ try {
   await openEveryTab();
   await visit("#/add?q=lantern", "main");
 
-  const books = await page.evaluate(async () => {
-    const manga = await fetch("/api/manga?cached=true").then((r) => r.json());
-    const ids = [];
-    for (const item of manga) {
-      const detail = await fetch(`/api/manga/${encodeURIComponent(item.id)}`).then((r) => r.json());
-      for (const chapter of detail.chapters ?? []) {
-        if (chapter.downloaded && chapter.library_path && chapter.library_path.endsWith(".cbz")) ids.push(chapter.id);
-      }
-    }
-    return ids;
-  });
+  // Books the reader can open: the newest downloaded chapters of each series
+  // are probed outside the page, so the probes are not recorded; the manifests
+  // and pages are recorded when the reader opens them below.
   const readable = [];
-  for (const id of books) {
-    const manifest = await page.evaluate((bookId) => fetch(`/api/reader/books/${encodeURIComponent(bookId)}`).then((r) => r.status), id);
-    if (manifest === 200) readable.push(id);
+  for (const id of seriesIds) {
+    const detail = await (await page.request.get(`${baseURL}/api/manga/${encodeURIComponent(id)}`)).json();
+    const downloaded = (detail.chapters ?? []).filter((chapter) => chapter.downloaded && String(chapter.library_path ?? "").endsWith(".cbz"));
+    for (const chapter of downloaded.slice(-12)) {
+      const probe = await page.request.get(`${baseURL}/api/reader/books/${encodeURIComponent(chapter.id)}`);
+      if (probe.status() === 200) readable.push(chapter.id);
+    }
   }
   console.log(`${readable.length} readable books`);
   for (const id of readable) {
@@ -175,7 +175,7 @@ try {
 
   await Promise.all([...pending]);
   const recording = {
-    version: 1,
+    version: 2,
     recorded_at: new Date().toISOString(),
     responses,
   };

@@ -27,8 +27,8 @@ works: add a series once, pick a monitoring profile, and Tankarr keeps the
 series complete.
 
 **[Try it online](https://renzodef.github.io/tankarr/demo/)**: the real
-interface on a fictional library, every page and the built-in reader, nothing
-to install.
+interface on a library of well-known manga, manhwa and manhua, every page and
+the built-in reader, nothing to install.
 
 <p align="center">
   <a href="https://renzodef.github.io/tankarr/screenshots/"><img src="docs/assets/screenshots/library.webp" width="880" alt="The Tankarr Library: a grid of series covers with chapter counts, language and status badges"></a>

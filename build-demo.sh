@@ -5,6 +5,7 @@
 # https://renzodef.github.io/tankarr/demo/.
 #
 #   ./build-demo.sh                          -> frontend/dist-demo, for /tankarr/demo/
+#   TANKARR_DEMO_DATASET=real ./build-demo.sh -> on real works (what the site publishes)
 #   TANKARR_DEMO_BASE=/demo/ ./build-demo.sh  -> for another host path
 #
 # Needs the Python environment with Tankarr installed (TANKARR_PYTHON, default
@@ -33,7 +34,14 @@ if [[ ! -f frontend/dist/index.html ]]; then
   npm run build --prefix frontend
 fi
 
-"$PYTHON" tests/demo_snapshot.py "$WORK/demo"
+# TANKARR_DEMO_DATASET=real adds well-known works by their MangaBaka identity
+# through Tankarr's own code path (tests/demo_real.py, needs network); the
+# default is the fictional, offline library of tests/demo_snapshot.py.
+case "${TANKARR_DEMO_DATASET:-fictional}" in
+  real) "$PYTHON" tests/demo_real.py "$WORK/demo" ;;
+  fictional) "$PYTHON" tests/demo_snapshot.py "$WORK/demo" ;;
+  *) echo "TANKARR_DEMO_DATASET must be real or fictional" >&2; exit 2 ;;
+esac
 "$PYTHON" tests/browser_server.py \
   --snapshot "$WORK/demo/tankarr.sqlite3" \
   --artwork-root "$WORK/demo/artwork" \
