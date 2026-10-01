@@ -7,7 +7,7 @@ export default function DemoBanner({ error }: { error?: string | null }) {
     <div className="demo-banner" role="note">
       <span>
         <strong>{t("Demo")}</strong>{" "}
-        {error ?? t("You are looking at Tankarr with a fictional library: nothing is downloaded and changes are not saved.")}
+        {error ?? t("You are looking at a demo of Tankarr: nothing is downloaded and changes are not saved.")}
       </span>
       <a href={install}>{t("Install Tankarr")}</a>
     </div>

@@ -295,13 +295,23 @@ the size with the gradients intact.
 ## Online demo
 
 [renzodef.github.io/tankarr/demo](https://renzodef.github.io/tankarr/demo/)
-is the real interface in front of a recording of that fictional library, so
-it runs on GitHub Pages without a server and cannot download anything:
+is the real interface in front of a recording of a demo library, so it runs
+on GitHub Pages without a server and cannot download anything:
 
 ```sh
-./build-demo.sh                        # -> frontend/dist-demo, for /tankarr/demo/
-npm run demo:test --prefix frontend    # opens the built demo in a browser
+./build-demo.sh                                 # fictional library -> frontend/dist-demo
+TANKARR_DEMO_DATASET=real ./build-demo.sh       # the library the site publishes
+npm run demo:test --prefix frontend             # opens the built demo in a browser
 ```
+
+The published demo uses `tests/demo_real.py`: it adds well-known manga,
+manhwa and manhua by their MangaBaka identity through Tankarr's own code
+path ("Add New", then the metadata enrichment that fetches covers and
+catalogue data), so the demo shows exactly what an installation shows. Only
+the release history is invented. The one series with real pages is
+[Pepper&Carrot](https://www.peppercarrot.com) by David Revoy, published under
+CC BY 4.0; no page of a licensed work is distributed. The fictional library of
+`tests/demo_snapshot.py` is the offline default, used by CI.
 
 The script builds the snapshot, starts `tests/browser_server.py` on it,
 walks every page with `frontend/e2e/demo-record.mjs` and writes each API
