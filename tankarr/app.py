@@ -3843,7 +3843,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Files on disk that no Tankarr release claims: the library and the
         # reader must always show the same thing.
         try:
-            orphans = service.library_orphans(folder_limit=5)
+            orphans = service.library_orphans_summary()
         except Exception:  # noqa: BLE001 - a scan failure is not an alert
             orphans = {"count": 0, "folders": []}
         if orphans.get("count"):
@@ -3981,6 +3981,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if dismissed.get(str(alert["key"])) != alert["signature"]
         ]
 
+    status_rows_cache: dict[str, Any] = {"revision": None, "rows": []}
+
     @app.get("/api/system/status")
     async def system_status():
         def render() -> dict[str, Any]:
@@ -4002,8 +4004,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }
 
             # Totals and alerts need the rows and the raw counts, not the
-            # canonical coverage that decodes every release.
-            manga_list = database.list_manga(with_logical_counts=False)
+            # canonical coverage that decodes every release. The rows are
+            # reused until the library changes: the aggregate over every
+            # release costs half a second per 1,500 series.
+            revision = database.library_revision()
+            if status_rows_cache.get("revision") != revision:
+                status_rows_cache["rows"] = database.list_manga(
+                    with_logical_counts=False
+                )
+                status_rows_cache["revision"] = revision
+            manga_list = status_rows_cache["rows"]
             jobs = database.list_jobs(500)
             return {
                 "version": __version__,
