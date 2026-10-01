@@ -1,15 +1,18 @@
 """Build a fictional library for screenshots and demos.
 
 Writes ``<output>/tankarr.sqlite3`` (a database snapshot for
-``tests/browser_server.py --snapshot``) and ``<output>/artwork`` (its
-``--artwork-root``: one drawn cover per series). Every title, author and
-cover is invented, so nothing here is anyone's work; the shapes of the data
-are real: running and finished works, chapters and books, a backlog, a
-queue, releases dated around today for the Calendar.
+``tests/browser_server.py --snapshot``), ``<output>/artwork`` (its
+``--artwork-root``: one drawn cover per series) and ``<output>/library``
+(its ``--library-root``: a few small CBZ books with drawn pages, so the
+built-in reader has something to open). Every title, author, cover and page
+is invented, so nothing here is anyone's work; the shapes of the data are
+real: running and finished works, chapters and books, a backlog, a queue,
+releases dated around today for the Calendar.
 
     .venv/bin/python tests/demo_snapshot.py /tmp/tankarr-demo
     .venv/bin/python tests/browser_server.py --snapshot /tmp/tankarr-demo/tankarr.sqlite3 \\
-        --artwork-root /tmp/tankarr-demo/artwork --port 18880
+        --artwork-root /tmp/tankarr-demo/artwork \\
+        --library-root /tmp/tankarr-demo/library --port 18880
     npm run screenshots --prefix frontend   # writes docs/assets/screenshots/*.png
     .venv/bin/python tests/demo_snapshot.py --shrink docs/assets/screenshots  # -> .webp
 """
@@ -18,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import sys
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -291,6 +296,72 @@ def draw_cover(title: str, authors: list[str], palette: tuple[str, str]) -> Imag
     return image
 
 
+# The series whose newest books exist as real CBZ files, for the reader.
+BOOK_SERIES = ("cartographers-daughter", "paper-lanterns")
+BOOKS_PER_SERIES = 3
+PAGES_PER_BOOK = 6
+
+
+def draw_page(
+    title: str, label: str, number: int, total: int, palette: tuple[str, str]
+) -> Image.Image:
+    """One drawn comic page: a light sheet with panel frames and a caption."""
+
+    width, height = 900, 1350
+    accent = _hex(palette[1])
+    image = Image.new("RGB", (width, height), (246, 243, 236))
+    draw = ImageDraw.Draw(image)
+    margin, gutter = 54, 26
+    seed = int(hashlib.sha256(f"{title}{label}{number}".encode()).hexdigest()[:8], 16)
+    rows = 3
+    row_height = (height - 2 * margin - 140 - gutter * (rows - 1)) // rows
+    y = margin + 110
+    for row in range(rows):
+        columns = 1 + (seed >> (row * 3)) % 2
+        column_width = (width - 2 * margin - gutter * (columns - 1)) // columns
+        x = margin
+        for column in range(columns):
+            box = (x, y, x + column_width, y + row_height)
+            draw.rectangle(box, outline=(40, 40, 40), width=5)
+            # A soft tint and one shape per panel, so pages differ.
+            tint = tuple(min(255, channel + 150) for channel in accent)
+            draw.rectangle((box[0] + 5, box[1] + 5, box[2] - 5, box[3] - 5), fill=tint)
+            radius = 40 + (seed >> (row * 5 + column)) % 70
+            cx = (
+                box[0]
+                + radius
+                + (seed >> (column * 4)) % max(1, column_width - 2 * radius)
+            )
+            cy = box[1] + radius + (seed >> (row * 2)) % max(1, row_height - 2 * radius)
+            draw.ellipse(
+                (cx - radius, cy - radius, cx + radius, cy + radius), fill=accent
+            )
+            x += column_width + gutter
+        y += row_height + gutter
+    header = ImageFont.truetype(str(FONT_DIR / "DejaVuSans-Bold.ttf"), 34)
+    small = ImageFont.truetype(str(FONT_DIR / "DejaVuSans.ttf"), 26)
+    draw.text((margin, margin), title, font=header, fill=(30, 30, 30))
+    draw.text((margin, margin + 46), label, font=small, fill=(90, 90, 90))
+    footer = f"{number} / {total}"
+    draw.text(
+        (width - margin - draw.textlength(footer, font=small), height - margin - 30),
+        footer,
+        font=small,
+        fill=(90, 90, 90),
+    )
+    return image
+
+
+def write_book(path: Path, title: str, label: str, palette: tuple[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+        for number in range(1, PAGES_PER_BOOK + 1):
+            page = draw_page(title, label, number, PAGES_PER_BOOK, palette)
+            buffer = io.BytesIO()
+            page.save(buffer, format="JPEG", quality=72, optimize=True)
+            archive.writestr(f"{number:03}.jpg", buffer.getvalue())
+
+
 def build(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     artwork_root = output / "artwork" / "metadata" / "artwork"
@@ -401,15 +472,26 @@ def build(output: Path) -> None:
             source_status=[{"source": "demo", "ok": True}],
         )
         folder = f"{title} ({', '.join(authors)})"
-        for release in releases[:owned]:
+        owned_releases = releases[:owned]
+        with_books = (
+            {id(release) for release in owned_releases[-BOOKS_PER_SERIES:]}
+            if identifier in BOOK_SERIES
+            else set()
+        )
+        for release in owned_releases:
             label = (
                 f"v{int(release['volume']):02}"
                 if unit == "volumes"
                 else f"c{int(release['chapter']):03}"
             )
+            file_name = f"{title} - {label} [en].cbz"
             database.mark_chapter_downloaded(
-                release["id"], Path("/library") / folder / f"{title} - {label} [en].cbz"
+                release["id"], Path("/library") / folder / file_name
             )
+            if id(release) in with_books:
+                write_book(
+                    output / "library" / folder / file_name, title, label, palette
+                )
     # A short queue for the Activity page.
     for identifier, release_id in (
         ("harbour-of-glass", "harbour-of-glass-c189"),
@@ -418,7 +500,10 @@ def build(output: Path) -> None:
     ):
         database.create_job(identifier, release_id, "en", origin="automatic")
     database.close()
-    print(f"demo snapshot: {database_path}\nartwork root: {output / 'artwork'}")
+    print(
+        f"demo snapshot: {database_path}\nartwork root: {output / 'artwork'}"
+        f"\nlibrary root: {output / 'library'}"
+    )
 
 
 def shrink(directory: Path) -> None:
