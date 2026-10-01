@@ -2577,3 +2577,62 @@ def test_start_up_numbering_pass_skips_series_it_has_already_seen(tmp_path: Path
         again = database._reconcile_all_numbering_connection(connection)
         assert sum(again.values()) == 4
         assert database._reconcile_all_numbering_connection(connection) == {}
+
+
+def test_forgetting_a_release_drops_its_queued_job(tmp_path: Path):
+    """Measured live: a queued job whose release was forgotten stayed the
+    head of its series' queue, and the worker reselected it as fast as it
+    could until the next restart pruned it. History is untouched."""
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    _seed_series(database)
+    database.upsert_chapters("m", [_release("r1", "1"), _release("r2", "2")])
+    gone = database.create_job("m", "r1", "en")
+    kept = database.create_job("m", "r2", "en")
+    database.update_job(int(kept["id"]), status="completed")
+
+    assert database.forget_undownloaded_releases("m", ["r1", "r2"]) == 2
+
+    assert database.list_queued_job_ids() == []
+    with pytest.raises(KeyError):
+        database.get_job(int(gone["id"]))
+    assert database.get_job(int(kept["id"]))["status"] == "completed"
+
+
+def test_forgetting_a_source_drops_the_queued_jobs_of_its_releases(tmp_path: Path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    _seed_series(database)
+    database.upsert_chapters(
+        "m",
+        [
+            {**_release("a1", "1"), "source_key": "suwayomi:a", "source_name": "A"},
+            {**_release("b1", "1"), "source_key": "suwayomi:b", "source_name": "B"},
+        ],
+    )
+    database.create_job("m", "a1", "en")
+    other = database.create_job("m", "b1", "en")
+
+    database.forget_source_releases("m", provider="suwayomi", source_name="A")
+
+    assert database.list_queued_job_ids() == [int(other["id"])]
+
+
+def test_retiring_a_source_drops_the_queued_jobs_of_its_releases(tmp_path: Path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    _seed_series(database)
+    database.upsert_chapters(
+        "m",
+        [
+            {**_release("kept-1", "1"), "source_key": "suwayomi:kept"},
+            {**_release("gone-1", "1"), "source_key": "suwayomi:gone"},
+        ],
+    )
+    database.create_job("m", "gone-1", "en")
+    kept = database.create_job("m", "kept-1", "en")
+
+    database.retire_uninstalled_sources({"suwayomi:kept"})
+
+    assert database.list_queued_job_ids() == [int(kept["id"])]

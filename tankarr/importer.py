@@ -383,7 +383,14 @@ class LibraryImporter:
                 candidate.is_symlink()
                 or not candidate.is_dir()
                 or not candidate.name.startswith(
-                    ("import-", "nyaa-import-", "torrent-import-")
+                    (
+                        "import-",
+                        "nyaa-import-",
+                        "torrent-import-",
+                        "job-",
+                        "manual-import-",
+                        "assemble-",
+                    )
                 )
             ):
                 continue

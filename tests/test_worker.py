@@ -273,3 +273,143 @@ async def test_worker_prefers_an_idle_series_and_source(tmp_path: Path, monkeypa
         await asyncio.wait_for(worker.queue.join(), timeout=2)
     finally:
         await worker.stop()
+
+
+def _seed_two_jobs(database: Database) -> list[dict]:
+    database.upsert_manga(
+        {"id": "work", "title": "Work", "authors": [], "available_languages": ["en"]},
+        "en",
+        "all",
+    )
+    database.upsert_chapters(
+        "work",
+        [
+            {
+                "id": f"c{i}",
+                "chapter": str(i),
+                "language": "en",
+                "provider": "local",
+                "groups": [],
+                "source_url": f"https://example.test/{i}",
+            }
+            for i in (1, 2)
+        ],
+    )
+    return [database.create_job("work", f"c{i}", "en") for i in (1, 2)]
+
+
+@pytest.mark.asyncio
+async def test_an_exception_escaping_a_job_does_not_end_the_worker(
+    tmp_path, monkeypatch
+):
+    """Measured live: one unexpected error ended the slot, then the whole
+    worker task, for the life of the process; the queue sat still while the
+    status said only "running: false". The slot records it and goes on."""
+
+    database = Database(tmp_path / "escape.sqlite3")
+    database.initialize()
+    jobs = _seed_two_jobs(database)
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        await real_sleep(0)
+
+    class Service:
+        settings = SimpleNamespace(downloads_paused=False)
+        processed = []
+
+        async def process_download_job(self, job_id):
+            self.processed.append(job_id)
+            if len(self.processed) == 1:
+                raise RuntimeError("library vanished between two checks")
+            database.update_job(job_id, status="completed")
+
+        async def failover_failed_release(self, _job_id):
+            return []
+
+    service = Service()
+    worker = DownloadWorker(database, service)
+    monkeypatch.setattr(worker, "_pipeline_depth", lambda: 1)
+    monkeypatch.setattr(worker.pipeline, "slot_ceiling", lambda: 1)
+    monkeypatch.setattr("tankarr.worker.asyncio.sleep", fake_sleep)
+    await worker.start()
+    try:
+        for _ in range(100):
+            if len(service.processed) >= 3 and not worker._active_tasks:
+                break
+            await real_sleep(0.02)
+        assert worker.status()["running"] is True
+        assert "RuntimeError: library vanished" in (worker._last_job_error or "")
+        # The failed job stayed queued, was retried, and the other job ran too.
+        assert {database.get_job(job["id"])["status"] for job in jobs} == {"completed"}
+        # The slot backed off after the failure instead of reselecting at once.
+        assert sleeps and sleeps[0] >= 2
+    finally:
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_job_left_queued_without_a_retry_deadline_backs_off(
+    tmp_path, monkeypatch
+):
+    """A job that returns without touching its row (its release is gone, the
+    library is unreachable) used to be reselected as fast as the loop could
+    turn. The slot now waits, longer each time, up to thirty seconds."""
+
+    database = Database(tmp_path / "spin.sqlite3")
+    database.initialize()
+    _seed_two_jobs(database)
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        await real_sleep(0)
+
+    class Service:
+        settings = SimpleNamespace(downloads_paused=False)
+        processed = []
+
+        async def process_download_job(self, job_id):
+            self.processed.append(job_id)
+
+        async def failover_failed_release(self, _job_id):
+            return []
+
+    service = Service()
+    worker = DownloadWorker(database, service)
+    monkeypatch.setattr(worker, "_pipeline_depth", lambda: 1)
+    monkeypatch.setattr(worker.pipeline, "slot_ceiling", lambda: 1)
+    monkeypatch.setattr("tankarr.worker.asyncio.sleep", fake_sleep)
+    await worker.start()
+    try:
+        for _ in range(100):
+            if len(sleeps) >= 6:
+                break
+            await real_sleep(0.01)
+    finally:
+        await worker.stop()
+    assert sleeps[:6] == [2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+    assert len(service.processed) <= len(sleeps) + 1
+
+
+@pytest.mark.asyncio
+async def test_stopping_a_worker_whose_task_died_does_not_raise(tmp_path):
+    database = Database(tmp_path / "dead.sqlite3")
+    database.initialize()
+
+    class Service:
+        settings = SimpleNamespace(downloads_paused=False)
+
+    worker = DownloadWorker(database, Service())
+
+    async def dead():
+        raise RuntimeError("slot crashed")
+
+    worker.task = asyncio.create_task(dead())
+    await asyncio.sleep(0)
+    assert worker.status()["running"] is False
+    await worker.stop()
+    assert worker.task is None

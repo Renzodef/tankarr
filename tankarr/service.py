@@ -8440,7 +8440,16 @@ class TankarrService:
                 return
             if chapter["manga_id"] != manga["id"]:
                 return
-            library_root = self._library_root()
+            try:
+                library_root = self._library_root()
+            except LibraryUnavailable as exc:
+                # The volume is gone for the moment: the job stays queued and
+                # the worker backs off; it is downloaded when the library is
+                # back, instead of the worker dying with it.
+                self.database.update_job(
+                    job_id, message=f"Waiting for the library: {exc}"[:300]
+                )
+                return
             if queued.get("planned_path"):
                 planned_path = self._recorded_library_path(
                     str(queued["planned_path"]), library_root
@@ -8464,9 +8473,19 @@ class TankarrService:
                     # leave the job to its current owner without any file I/O.
                     return
             else:
-                planned_path = self._confined_library_path(
-                    final_library_path(library_root, manga, chapter), library_root
-                )
+                try:
+                    planned_path = self._confined_library_path(
+                        final_library_path(library_root, manga, chapter), library_root
+                    )
+                except (UnsafeLibraryPath, ValueError) as exc:
+                    self.database.update_job(
+                        job_id,
+                        status="failed",
+                        message=f"Unable to plan the library path: {type(exc).__name__}: {exc}"[
+                            :300
+                        ],
+                    )
+                    return
                 if queued.get("supersedes_chapter_id"):
                     # Both releases normally share a canonical filename. Keep
                     # the current book available while copying/fsyncing the new

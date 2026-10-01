@@ -3064,6 +3064,12 @@ class Database:
         with self.connect() as connection:
             for start in range(0, len(ids), 500):
                 chunk = ids[start : start + 500]
+                self._forget_queued_jobs(
+                    connection,
+                    "manga_id=? AND downloaded=0 "
+                    f"AND id IN ({','.join('?' * len(chunk))})",
+                    (manga_id, *chunk),
+                )
                 cursor = connection.execute(
                     "DELETE FROM chapter_release WHERE manga_id=? AND downloaded=0 "
                     f"AND id IN ({','.join('?' * len(chunk))})",
@@ -3071,6 +3077,24 @@ class Database:
                 )
                 removed += int(cursor.rowcount or 0)
         return removed
+
+    @staticmethod
+    def _forget_queued_jobs(
+        connection: sqlite3.Connection, release_predicate: str, parameters: tuple
+    ) -> int:
+        """Drop the queued jobs of releases about to be forgotten.
+
+        A queued job whose release is gone has nothing to download; left
+        behind, it stays the head of its series' queue and the worker
+        reselects it as fast as it can until the next restart prunes it.
+        """
+
+        cursor = connection.execute(
+            "DELETE FROM download_job WHERE status='queued' AND chapter_id IN "
+            f"(SELECT id FROM chapter_release WHERE {release_predicate})",
+            parameters,
+        )
+        return int(cursor.rowcount or 0)
 
     def forget_source_releases(
         self,
@@ -3092,17 +3116,21 @@ class Database:
         removed = self.forget_undownloaded_releases(manga_id, list(release_ids or []))
         with self.connect() as connection:
             if source_name:
-                cursor = connection.execute(
-                    "DELETE FROM chapter_release WHERE manga_id=? AND downloaded=0 "
-                    "AND provider=? AND lower(COALESCE(source_name,''))=lower(?)",
-                    (manga_id, provider, source_name),
+                predicate = (
+                    "manga_id=? AND downloaded=0 "
+                    "AND provider=? AND lower(COALESCE(source_name,''))=lower(?)"
                 )
+                parameters: tuple = (manga_id, provider, source_name)
             else:
-                cursor = connection.execute(
-                    "DELETE FROM chapter_release WHERE manga_id=? AND downloaded=0 "
-                    "AND provider=? AND (source_key IS NULL OR source_key=? OR source_key='')",
-                    (manga_id, provider, provider),
+                predicate = (
+                    "manga_id=? AND downloaded=0 "
+                    "AND provider=? AND (source_key IS NULL OR source_key=? OR source_key='')"
                 )
+                parameters = (manga_id, provider, provider)
+            self._forget_queued_jobs(connection, predicate, parameters)
+            cursor = connection.execute(
+                f"DELETE FROM chapter_release WHERE {predicate}", parameters
+            )
             removed += int(cursor.rowcount or 0)
         return removed
 
@@ -3191,6 +3219,9 @@ class Database:
             ]
             releases = mappings = 0
             for key, source_name in gone:
+                self._forget_queued_jobs(
+                    connection, "source_key=? AND downloaded=0", (key,)
+                )
                 releases += connection.execute(
                     "DELETE FROM chapter_release WHERE source_key=? AND downloaded=0",
                     (key,),

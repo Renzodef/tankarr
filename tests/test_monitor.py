@@ -1193,3 +1193,43 @@ async def test_manual_ended_excludes_scheduled_wanted_but_allows_manual_recovery
     monitor.queue_missing.assert_not_awaited()
     await monitor.search_wanted(trigger="manual")
     monitor.queue_missing.assert_awaited_once_with("frozen")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cycle_does_not_end_the_monitor(tmp_path: Path):
+    """One blocked organization or a transient database error used to end
+    the monitor task for the life of the process. The loop records the error,
+    keeps running and the next cycle succeeds."""
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    settings = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
+    # Below the configurable floor on purpose: the test needs several cycles.
+    settings = settings.model_copy(update={"monitor_interval_seconds": 0.01})
+    service = FakeService(database, [])
+    service.settings = settings  # type: ignore[attr-defined]
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+    cycles: list[int] = []
+
+    async def run_cycle(*, include_wanted=True):
+        cycles.append(len(cycles))
+        if len(cycles) == 1:
+            raise RuntimeError("Library organization is blocked")
+        return {"checked": 0, "queued": 0, "errors": []}
+
+    monitor.run_cycle = run_cycle  # type: ignore[method-assign]
+    await monitor.start()
+    try:
+        for _ in range(200):
+            if len(cycles) >= 3:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await monitor.stop()
+    assert len(cycles) >= 3
+    assert monitor.last_cycle_error == "RuntimeError: Library organization is blocked"
