@@ -239,20 +239,13 @@ class AuthorRegistry:
     def _sync_library(self) -> dict[str, int]:
 
         checked = linked = 0
-        for manga in self.database.list_manga():
+        # Three bulk reads instead of two queries per series: on a large
+        # library this pass used to be a visible share of every start.
+        work_records = self.database.work_records_by_series("mangabaka")
+        existing_links = self.database.manga_authors_by_series()
+        for manga in self.database.list_manga(with_logical_counts=False):
             manga_id = str(manga["id"])
-            records = self.database.list_metadata_source_records(
-                manga_id, entity_type="work"
-            )
-            source = next(
-                (
-                    item.get("data")
-                    for item in records
-                    if item.get("source") == "mangabaka"
-                    and isinstance(item.get("data"), dict)
-                ),
-                None,
-            )
+            source = work_records.get(manga_id)
             if (
                 source is None
                 and manga.get("provider") == "catalogue"
@@ -282,7 +275,7 @@ class AuthorRegistry:
                 continue
             checked += 1
             credits = _credits(source)
-            existing = self.database.list_manga_authors(manga_id)
+            existing = existing_links.get(manga_id, [])
             expected_names = {
                 author_key(alias) for credit in credits for alias in credit["aliases"]
             }

@@ -4910,6 +4910,36 @@ class Database:
             ).fetchall()
         return [self._decode_metadata_source_row(row) for row in rows]
 
+    def work_records_by_series(self, source: str) -> dict[str, dict[str, Any]]:
+        """The decoded ``work`` record of one source for every series at once.
+
+        The author backfill used to ask for every series' records one by one
+        and decode their raw payloads too: 1,500 queries for 1,500 series at
+        every start. One query, data only, first entity key per series.
+        """
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT manga_id, data_json FROM metadata_source_record
+                WHERE entity_type='work' AND source=?
+                ORDER BY manga_id, entity_key
+                """,
+                (source,),
+            ).fetchall()
+        records: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            manga_id = str(row["manga_id"])
+            if manga_id in records:
+                continue
+            try:
+                data = json.loads(row["data_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if isinstance(data, dict):
+                records[manga_id] = data
+        return records
+
     def catalogue_identity_owners(self) -> dict[str, str]:
         """MangaBaka id → series id, for every work already in the library.
 
@@ -5315,6 +5345,32 @@ class Database:
             }
             for row in rows
         ]
+
+    def manga_authors_by_series(self) -> dict[str, list[dict[str, Any]]]:
+        """``list_manga_authors`` for every series in one query."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT manga_author.manga_id, author.id, author.display_name,
+                       manga_author.credited_names_json, manga_author.roles_json
+                FROM manga_author
+                JOIN author ON author.id=manga_author.author_id
+                WHERE author.merged_into IS NULL
+                ORDER BY manga_author.manga_id, lower(author.display_name), author.id
+                """
+            ).fetchall()
+        links: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            links[str(row["manga_id"])].append(
+                {
+                    "id": str(row["id"]),
+                    "name": str(row["display_name"]),
+                    "credited_names": json.loads(row["credited_names_json"] or "[]"),
+                    "roles": json.loads(row["roles_json"] or "[]"),
+                }
+            )
+        return dict(links)
 
     def merge_authors(
         self,
