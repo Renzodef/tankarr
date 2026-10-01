@@ -285,8 +285,33 @@ npm run screenshots --prefix frontend      # writes docs/assets/screenshots/*.pn
 .venv/bin/python tests/demo_snapshot.py --shrink docs/assets/screenshots   # PNG -> WebP
 ```
 
-`tests/demo_snapshot.py` invents the titles, authors and covers and gives the
-data realistic shapes (running and finished works, chapters and books, a
-backlog, a queue, an official platform with a weekly schedule). The capture
-script waits for every cover and font before each page; `--shrink` converts
-the PNG captures to WebP, a fifth of the size with the gradients intact.
+`tests/demo_snapshot.py` invents the titles, authors, covers and a few CBZ
+books with drawn pages, and gives the data realistic shapes (running and
+finished works, chapters and books, a backlog, a queue, an official platform
+with a weekly schedule). The capture script waits for every cover and font
+before each page; `--shrink` converts the PNG captures to WebP, a fifth of
+the size with the gradients intact.
+
+## Online demo
+
+[renzodef.github.io/tankarr/demo](https://renzodef.github.io/tankarr/demo/)
+is the real interface in front of a recording of that fictional library, so
+it runs on GitHub Pages without a server and cannot download anything:
+
+```sh
+./build-demo.sh                        # -> frontend/dist-demo, for /tankarr/demo/
+npm run demo:test --prefix frontend    # opens the built demo in a browser
+```
+
+The script builds the snapshot, starts `tests/browser_server.py` on it,
+walks every page with `frontend/e2e/demo-record.mjs` and writes each API
+response it saw to `frontend/demo-data/` (JSON inline, covers and pages as
+files), then `frontend/scripts/build-demo.mjs` builds the interface with
+`VITE_TANKARR_DEMO=1` and the final base path, and bundles the service
+worker `frontend/src/demo/sw.ts` beside it. In the browser the worker
+answers every request under `demo/api/` from the recording
+(`frontend/src/demo/recording.ts`): reads come back as recorded, writes are
+acknowledged and never applied, which the banner says. CI builds and opens
+the demo on every pull request (`e2e/demo.spec.ts`); the docs workflow
+publishes it from `main` with the site, so a change to the interface or the
+API republishes it.

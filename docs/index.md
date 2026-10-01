@@ -15,6 +15,13 @@ that Komga, Kavita, Stump or its own built-in reader can open.
 It is free software under the GPL-3.0 licence, distributed as a Docker image
 for `amd64` and `arm64`.
 
+[Try the online demo](demo/){ .md-button .md-button--primary }
+[Install Tankarr](installation.md){ .md-button }
+
+The demo is the real interface on a fictional library: every page, the
+Calendar, the Wanted list, Settings and the built-in reader. Nothing is
+downloaded and nothing you change is saved.
+
 [![The Tankarr Library: series covers with chapter counts and status](assets/screenshots/library.webp)](screenshots.md)
 
 More in the [screenshots](screenshots.md); if you are weighing it against

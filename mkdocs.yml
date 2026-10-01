@@ -60,6 +60,7 @@ extra:
 
 nav:
   - Home: index.md
+  - Online demo: https://renzodef.github.io/tankarr/demo/
   - Screenshots: screenshots.md
   - Compared with other tools: comparison.md
   - Getting started:

@@ -15,6 +15,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Renzodef/tankarr" alt="License: GPL-3.0"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/Renzodef/tankarr"><img src="https://api.scorecard.dev/projects/github.com/Renzodef/tankarr/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://renzodef.github.io/tankarr/"><img src="https://img.shields.io/badge/docs-renzodef.github.io%2Ftankarr-informational" alt="Documentation"></a>
+  <a href="https://renzodef.github.io/tankarr/demo/"><img src="https://img.shields.io/badge/demo-try%20it%20online-b6451b" alt="Online demo"></a>
 </p>
 
 Tankarr follows the manga, manhwa, webtoons and comics you read. It downloads
@@ -24,6 +25,10 @@ them into a clean, reader-ready CBZ library for [Komga](https://komga.org),
 its own built-in reader. If you know Sonarr or Radarr, you already know how it
 works: add a series once, pick a monitoring profile, and Tankarr keeps the
 series complete.
+
+**[Try it online](https://renzodef.github.io/tankarr/demo/)**: the real
+interface on a fictional library, every page and the built-in reader, nothing
+to install.
 
 <p align="center">
   <a href="https://renzodef.github.io/tankarr/screenshots/"><img src="docs/assets/screenshots/library.webp" width="880" alt="The Tankarr Library: a grid of series covers with chapter counts, language and status badges"></a>
