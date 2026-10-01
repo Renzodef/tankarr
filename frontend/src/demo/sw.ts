@@ -1,7 +1,7 @@
 // Service worker of the online demo: answers every request under
 // <scope>/api/ from the recording in <scope>/demo-data/, so the real
 // interface runs on a static host (GitHub Pages) without a server.
-import { lookup, type Recording } from "./recording";
+import { lookup, type Recorded, type Recording } from "./recording";
 
 type FetchLikeEvent = Event & {
   request: Request;
@@ -35,12 +35,23 @@ function loadRecording(): Promise<Recording> {
   return recording;
 }
 
+function fileOf(entry: Recorded): Promise<Response> {
+  return fetch(new URL(`demo-data/${entry.file}`, scope));
+}
+
+async function readBody(entry: Recorded): Promise<string> {
+  if (entry.file === undefined) return entry.body ?? "";
+  const file = await fileOf(entry);
+  if (!file.ok) throw new Error(`${entry.file}: HTTP ${file.status}`);
+  return file.text();
+}
+
 async function respond(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const target = url.pathname.slice(scope.pathname.length - 1) + url.search;
-  const entry = lookup(await loadRecording(), request.method, target);
+  const entry = await lookup(await loadRecording(), request.method, target, readBody);
   if (entry.file) {
-    const file = await fetch(new URL(`demo-data/${entry.file}`, scope));
+    const file = await fileOf(entry);
     return new Response(file.body, {
       status: file.ok ? entry.status : file.status,
       headers: { "Content-Type": entry.type, "Cache-Control": "max-age=3600" },
