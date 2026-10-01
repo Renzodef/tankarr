@@ -40,6 +40,7 @@ classifiers = [
 dependencies = [
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
+  "orjson>=3.10,<4",
   "pillow>=11,<13",
   "pydantic-settings>=2.7,<3",
   "py3langid>=0.3,<1",

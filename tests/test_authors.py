@@ -254,3 +254,55 @@ async def test_refresh_blocks_merge_when_both_people_are_credited_on_shared_work
     assert len(candidates) == 1
     assert candidates[0]["shared_works"] == ["30"]
     assert candidates[0]["reason"] == "conflicting shared credit"
+
+
+def test_bulk_reads_match_the_per_series_queries(tmp_path: Path):
+    """The startup backfill reads every series' work record and author links
+    in one query each; what it sees must be what the per-series readers see."""
+
+    authors, database, _source = registry(tmp_path)
+    for identifier, title, credit in (
+        ("1", "First", "Author One"),
+        ("2", "Second", "Author Two"),
+    ):
+        record = work(identifier, title, [credit])
+        manga = manga_from_record(
+            record, language="en", manga_id=f"series-{identifier}"
+        )
+        database.upsert_manga(manga, "en", "none")
+    assert authors.sync_library() == {"checked": 2, "linked": 2}
+    database.save_metadata_source_record(
+        "series-1",
+        entity_type="work",
+        entity_key="",
+        source="mangabaka",
+        external_id="1",
+        match_confidence=1.0,
+        match_reason="test",
+        data={"external_id": "1", "title": "First", "authors": ["Author One"]},
+        raw={},
+    )
+    database.save_metadata_source_record(
+        "series-1",
+        entity_type="work",
+        entity_key="",
+        source="anilist",
+        external_id="9",
+        match_confidence=1.0,
+        match_reason="test",
+        data={"title": "Other source"},
+        raw={},
+    )
+
+    records = database.work_records_by_series("mangabaka")
+    assert set(records) == {"series-1"}
+    assert records["series-1"]["title"] == "First"
+    per_series = database.list_metadata_source_records("series-1", entity_type="work")
+    assert [item["data"] for item in per_series if item["source"] == "mangabaka"] == [
+        records["series-1"]
+    ]
+
+    links = database.manga_authors_by_series()
+    assert set(links) == {"series-1", "series-2"}
+    for manga_id in links:
+        assert links[manga_id] == database.list_manga_authors(manga_id)

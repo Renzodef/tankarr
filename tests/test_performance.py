@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
 import threading
 from pathlib import Path
 
@@ -478,3 +479,96 @@ def test_status_reuses_the_orphan_summary_and_the_series_rows(
         database.upsert_manga(manga(), "en", "all")
         client.get("/api/system/status")
         assert listings["count"] == 2
+
+
+def test_calendar_windows_of_one_revision_share_the_decoded_snapshot(
+    tmp_path: Path, monkeypatch
+):
+    """Moving from one month to the next decoded every release again: 2.6 s
+    for 1,500 series. One revision decodes once; a library change decodes
+    anew."""
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        komga_link_enabled=False,
+    )
+    provision_library_identity(settings)
+    app = create_app(settings)
+    database = app.state.database
+    _seed_series(database, 3)
+    snapshots: list[int] = []
+    original = database.list_calendar_inputs
+
+    def counting():
+        snapshots.append(1)
+        return original()
+
+    monkeypatch.setattr(database, "list_calendar_inputs", counting)
+    with TestClient(app) as client:
+        assert client.get("/api/calendar?days=14&ahead=14").status_code == 200
+        assert client.get("/api/calendar?days=30&ahead=30").status_code == 200
+        assert (
+            client.get("/api/calendar?start=2026-09-01&end=2026-09-30").status_code
+            == 200
+        )
+        assert len(snapshots) == 1
+        database.upsert_chapters(
+            "bulk-0",
+            [
+                {
+                    **chapter(),
+                    "id": "bulk-0-chapter-9",
+                    "chapter": "9",
+                    "volume": None,
+                    "pages": 20,
+                    "publish_at": "2026-09-21T00:00:00Z",
+                }
+            ],
+        )
+        assert client.get("/api/calendar?days=14&ahead=14").status_code == 200
+        assert len(snapshots) == 2
+
+
+def test_the_complete_wanted_payload_is_rendered_only_when_asked_for(
+    tmp_path: Path, monkeypatch
+):
+    """Every refresh rendered and persisted the complete payload beside the
+    compact one the page reads: five times the bytes, and past 64 MB the
+    snapshot that paints Wanted after a restart was silently dropped."""
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        komga_link_enabled=False,
+    )
+    provision_library_identity(settings)
+    app = create_app(settings)
+    database = app.state.database
+    service = app.state.service
+    _seed_series(database, 2)
+    renders: list[int] = []
+    original = service.list_wanted
+
+    def counting():
+        renders.append(1)
+        return original()
+
+    monkeypatch.setattr(service, "list_wanted", counting)
+    with TestClient(app) as client:
+        compact = client.get("/api/wanted?compact=true&fresh=true")
+        assert compact.status_code == 200 and len(compact.json()) == 2
+        assert client.get("/api/wanted?compact=true").status_code == 200
+        assert len(renders) == 1
+        full = client.get("/api/wanted")
+        assert full.status_code == 200 and len(full.json()) == 2
+        assert client.get("/api/wanted").status_code == 200
+        assert len(renders) == 2
+        saved = json.loads(
+            (settings.data_dir / "cache" / "responses" / "wanted.json").read_bytes()
+        )
+        assert set(saved["payloads"]) == {"compact_payload", "revision"}

@@ -12,6 +12,8 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
+from tankarr import fastjson
+
 logger = logging.getLogger(__name__)
 VERSION = 1
 MAX_BYTES = 64 * 1024 * 1024
@@ -58,7 +60,7 @@ class ResponseSnapshots:
     def save(self, kind: str, payloads: dict[str, bytes]) -> None:
         temporary = None
         try:
-            raw = json.dumps(
+            raw = fastjson.dumps(
                 {
                     "version": VERSION,
                     "database": self.identity(),
@@ -67,10 +69,8 @@ class ResponseSnapshots:
                     "payloads": {
                         key: value.decode("utf-8") for key, value in payloads.items()
                     },
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
+                }
+            )
             if len(raw) > MAX_BYTES:
                 return
             self.root.mkdir(parents=True, exist_ok=True)

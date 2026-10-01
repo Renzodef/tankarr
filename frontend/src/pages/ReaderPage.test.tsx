@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { ReaderBook } from "../types";
@@ -199,6 +199,9 @@ it("uses left-to-right paging for a Chinese book", async () => {
   });
   render(<ReaderPage id="book-1" initialPage={null} />);
   await screen.findByText("1 / 3");
+  // The counter is in the DOM one commit before the effect that attaches the
+  // keyboard listener has run; flush it, or the key press can arrive first.
+  await act(async () => {});
   expect((screen.getByRole("slider") as HTMLInputElement).dir).toBe("ltr");
   expect(screen.getByRole("button", { name: "Pages · LTR" })).toBeTruthy();
   fireEvent.keyDown(document.body, { key: "ArrowRight" });

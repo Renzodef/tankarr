@@ -65,7 +65,12 @@ def test_restart_paints_wanted_snapshot_while_changed_inputs_reconcile(
         for _attempt in range(100):
             if client.get("/api/ready").status_code == 200:
                 break
-        assert client.get("/api/wanted", params={"fresh": "true"}).status_code == 200
+        assert (
+            client.get(
+                "/api/wanted", params={"compact": "true", "fresh": "true"}
+            ).status_code
+            == 200
+        )
 
     with first.state.database.connect() as connection:
         connection.execute(
@@ -83,7 +88,7 @@ def test_restart_paints_wanted_snapshot_while_changed_inputs_reconcile(
             if response.status_code == 200:
                 break
         assert response.status_code == 200
-        assert client.get("/api/wanted").status_code == 200
+        assert client.get("/api/wanted", params={"compact": "true"}).status_code == 200
 
 
 def test_reader_api_is_not_part_of_startup_or_readiness(tmp_path: Path, monkeypatch):

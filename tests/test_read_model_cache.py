@@ -418,7 +418,9 @@ def test_wanted_hydrates_complete_candidates_after_slim_selection(cache_app):
     assert {key: selected[key] for key in original} == original
 
 
-@pytest.mark.parametrize("endpoint", ["manga", "wanted", "wanted?compact=true"])
+# The compact Wanted payload is the one the page reads and the one the
+# snapshot persists; the complete one is rendered on request.
+@pytest.mark.parametrize("endpoint", ["manga", "wanted?compact=true"])
 def test_first_cached_read_after_restart_returns_saved_snapshot(
     tmp_path, monkeypatch, endpoint
 ):
