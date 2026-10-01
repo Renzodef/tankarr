@@ -531,7 +531,6 @@ export default function SystemPage() {
                       ) : probe?.ok ? (
                         <StatusPill kind="success">
                           {t("Online · {latency} ms", { latency: probe.latency_ms })}
-                          {probe.supported_sites ? ` · ${t("{count} sites", { count: probe.supported_sites })}` : ""}
                         </StatusPill>
                       ) : probe ? (
                         <StatusPill kind="danger" >{t("Unreachable")}</StatusPill>

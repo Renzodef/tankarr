@@ -781,7 +781,6 @@
   "OK — qBittorrent {version}": "OK — qBittorrent {version}",
   "OK — {detail}": "OK — {detail}",
   "OK — {source} reachable{results}.": "OK — {source} raggiungibile{results}.",
-  "OK — {summary}": "OK — {summary}",
   "Obsolete": "Obsoleta",
   "Off: requests from private and loopback addresses skip the login, like \"Disabled for local addresses\" in the other *arr applications. Behind a reverse proxy, set Trusted proxies first; forwarding headers from an untrusted address never count as local.": "Off: le richieste da indirizzi privati e di loopback saltano il login, come \"Disabilitato per indirizzi locali\" nelle altre applicazioni *arr. Dietro un reverse proxy imposta prima i Proxy fidati; gli header di inoltro da un indirizzo non fidato non contano mai come locali.",
   "Official available": "Ufficiale disponibile",
@@ -801,7 +800,6 @@
   "Only needed if your external processor requires authentication. This is not your AI provider key and is unused for local processing.": "Necessario solo se il tuo processore esterno richiede l'autenticazione. Non è la chiave del provider AI e non viene usato per l'elaborazione locale.",
   "Only these Prowlarr categories will be eligible for Tankarr searches. At least one category must remain selected.": "Solo queste categorie Prowlarr saranno idonee per le ricerche di Tankarr. Deve restare selezionata almeno una categoria.",
   "Open": "Apri",
-  "Open Komga": "Apri Komga",
   "Open Sources settings": "Apri le impostazioni delle fonti",
   "Open Suwayomi": "Apri Suwayomi",
   "Open a book and select Save bookmark to keep your place.": "Apri un libro e seleziona Salva segnalibro per tenere il punto.",
@@ -1485,7 +1483,6 @@
   "installs automatically": "si installa automaticamente",
   "issue": "numero",
   "issues": "numeri",
-  "library connected": "libreria connessa",
   "listed by a source": "indicato da una fonte",
   "manually excluded": "esclusi manualmente",
   "mapped as a download source": "mappata come fonte di download",
@@ -1528,7 +1525,6 @@
   "unsaved changes": "modifiche non salvate",
   "up to date": "aggiornato",
   "up {duration}": "attivo da {duration}",
-  "username/password": "nome utente/password",
   "verified {sources}": "verificate {sources}",
   "via Prowlarr": "tramite Prowlarr",
   "volume": "volume",
@@ -1774,7 +1770,6 @@
     "one": "{count} serie",
     "other": "{count} serie"
   },
-  "{count} sites": "{count} siti",
   "{count} skipped": {
     "one": "{count} saltato",
     "other": "{count} saltati"
