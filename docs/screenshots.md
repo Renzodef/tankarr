@@ -5,6 +5,9 @@ description: What Tankarr looks like - the manga and comics Library with covers 
 
 # Screenshots
 
+Prefer to click around? The [online demo](demo/) is the same interface on
+the same fictional library, with every page and the built-in reader.
+
 Every page follows the layout the *arr applications share, so Sonarr and
 Radarr users find their way at once. The library below is fictional: the
 titles, authors and covers are invented for the documentation, and the

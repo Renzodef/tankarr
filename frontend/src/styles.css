@@ -5370,3 +5370,24 @@ select.input option {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ------------------------------ online demo ------------------------------ */
+
+.demo-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem 1rem;
+  padding: 0.45rem 1rem;
+  background: #b6451b;
+  color: #fff;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.demo-banner a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+}

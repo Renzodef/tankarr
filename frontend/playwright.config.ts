@@ -21,7 +21,8 @@ export default defineConfig({
   projects: [
     {
       name: "root",
-      testIgnore: /subpath\.spec\.ts/,
+      // The online demo has its own config (playwright.demo.config.ts).
+      testIgnore: [/subpath\.spec\.ts/, /demo\.spec\.ts/],
       use: { baseURL: "http://127.0.0.1:18878" },
     },
     {

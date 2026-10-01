@@ -1871,5 +1871,8 @@
   "← Next": "← Successivo",
   "← Next book": "← Libro successivo",
   "← Previous": "← Precedente",
-  "↑ Previous": "↑ Precedente"
+  "↑ Previous": "↑ Precedente",
+  "Demo": "Demo",
+  "Install Tankarr": "Installa Tankarr",
+  "You are looking at Tankarr with a fictional library: nothing is downloaded and changes are not saved.": "Stai guardando Tankarr con una libreria di fantasia: non viene scaricato nulla e le modifiche non vengono salvate."
 }

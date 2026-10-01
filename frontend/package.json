@@ -10,6 +10,9 @@
     "test:e2e": "playwright test",
     "benchmark": "node e2e/benchmark.mjs",
     "screenshots": "node e2e/screenshots.mjs",
+    "demo:record": "node e2e/demo-record.mjs",
+    "demo:build": "node scripts/build-demo.mjs",
+    "demo:test": "playwright test --config playwright.demo.config.ts",
     "i18n:check": "node scripts/i18n-check.mjs",
     "test": "vitest run"
   },

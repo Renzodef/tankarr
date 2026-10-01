@@ -26,6 +26,11 @@ def main() -> None:
     )
     parser.add_argument("--artwork-root", type=Path)
     parser.add_argument(
+        "--library-root",
+        type=Path,
+        help="Books to copy into the server's library (tests/demo_snapshot.py writes one)",
+    )
+    parser.add_argument(
         "--temp-root",
         type=Path,
         help="Existing scratch directory; prefer disk-backed storage for large artwork copies",
@@ -112,6 +117,19 @@ def main() -> None:
                 origin = options.artwork_root / relative
                 if origin.is_dir():
                     shutil.copytree(origin, data / relative, dirs_exist_ok=True)
+
+        if options.library_root and options.library_root.is_dir():
+            import shutil
+
+            # The snapshot records its books under /library; the copies live
+            # in this disposable root, so the reader's confinement check holds.
+            shutil.copytree(options.library_root, library, dirs_exist_ok=True)
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE chapter_release SET library_path = ? || substr(library_path, 10) "
+                    "WHERE library_path LIKE '/library/%'",
+                    (f"{library.resolve()}/",),
+                )
 
         settings = Settings(
             _env_file=None,

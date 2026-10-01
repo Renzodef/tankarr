@@ -108,6 +108,13 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Test the production UI against an isolated real API
         run: npm run test:e2e --prefix frontend
+      - name: Build the online demo and check it in a browser
+        env:
+          TANKARR_PYTHON: python
+        run: |
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+          ./build-demo.sh
+          npm run demo:test --prefix frontend
       - name: Keep browser failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
