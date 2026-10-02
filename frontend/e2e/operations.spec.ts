@@ -234,3 +234,48 @@ test("advanced import limits display MiB while saving exact byte values", async 
   expect(saved!.import_max_expanded_bytes).toBe(String(8192 * 1024 * 1024));
   expect(saved!.import_disk_reserve_bytes).toBe(String(768 * 1024 * 1024));
 });
+
+test("interactive search keeps the source name clear of the automatic-choice reasons", async ({ page }) => {
+  // A blocked chapter lists why each release was or was not chosen; those
+  // reasons are a sentence long and used to squeeze the source name to zero
+  // width, writing it over the details beside it.
+  const reasons = ["blocked by you for this chapter", "source in cooldown after 3 failures", "a better ranked source exists: Official platform (EN)"];
+  const release = (id: string, source: string, selected: boolean) => ({
+    id, manga_id: "browser-000", provider: "suwayomi", source_name: source, chapter: "1", volume: null,
+    source_chapter: null, version: 1, publish_at: "2026-09-20T00:00:00Z", downloaded: false,
+    source_url: "https://example.test/1", queue_status: null,
+    selection: { selected, reasons, source_class: "scanlation", source_priority: 3, next_retry_at: 1790000000 },
+  });
+  await page.route("**/api/manga/*/chapters/search", (route) =>
+    route.fulfill({
+      json: {
+        manga_id: "browser-000", chapter: "1", volume: null,
+        direct_sources: [{ provider: "suwayomi", label: "MangaDex (EN)", state: "matched", provider_manga_id: "a", reason: "", error: null }],
+        direct_releases: [release("r1", "MangaDex (EN)", false), release("r2", "Source Two (EN)", true)],
+        torrent: { query: "Browser Series 000 1", results: [], errors: [] },
+      },
+    }),
+  );
+  for (const width of [1280, 800, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/#/series/browser-000");
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await page.getByRole("button", { name: /interactive search/i }).first().click();
+    const rows = page.locator(".manual-release-row-direct");
+    await expect(rows).toHaveCount(2);
+    for (let index = 0; index < 2; index += 1) {
+      const row = rows.nth(index);
+      const pill = await row.locator(".manual-release-identity > *").first().boundingBox();
+      const details = await row.locator(".manual-release-details").boundingBox();
+      const identity = await row.locator(".manual-release-identity").boundingBox();
+      expect(pill && details && identity, `row ${index} at ${width}px`).toBeTruthy();
+      // The identity cell holds its content, and the details start after it
+      // (side by side) or below it (one column on a phone).
+      expect(identity!.width).toBeGreaterThanOrEqual(pill!.width - 1);
+      const sideBySide = details!.x >= pill!.x + pill!.width - 1;
+      const stacked = details!.y >= pill!.y + pill!.height - 1;
+      expect(sideBySide || stacked, `details overlap the source name at ${width}px`).toBe(true);
+    }
+    await page.keyboard.press("Escape");
+  }
+});

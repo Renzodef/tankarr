@@ -325,32 +325,94 @@ def _conf_value(key: str, value: str | list[str]) -> str:
     return json.dumps(value)
 
 
+def _split_comment(text: str) -> tuple[str, str, int]:
+    """Split ``text`` at its HOCON comment and count its open square brackets.
+
+    Returns the code before the comment, the comment with the whitespace in
+    front of it (kept when a value is rewritten), and the number of ``[`` minus
+    ``]`` outside quoted strings. A ``#`` or ``//`` inside a string, such as
+    the fragment of a URL, is not a comment.
+    """
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "#" or (char == "/" and text[index + 1 : index + 2] == "/"):
+            code = text[:index].rstrip()
+            return code, text[len(code) :], depth
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+    return text, "", depth
+
+
+_KEY_LINE = re.compile(r"^server\.([A-Za-z0-9_]+)\s*=\s*(.*)$")
+_LIST_REMNANT = re.compile(r'^\s*"(?:[^"\\]|\\.)*"\s*,?\s*(?:#.*)?$')
+_LIST_CLOSER = re.compile(r"^\s*\]\s*(?:#.*)?$")
+
+
 def render_server_conf(existing: str, settings: dict[str, str | list[str]]) -> str:
     """Apply Tankarr's settings to Suwayomi's ``server.conf`` text.
 
     Suwayomi honours scalar overrides passed as system properties but not
     list values, and it persists the file it generated on first start, so
     the file itself is edited the way the official Docker image does: each
-    managed ``server.<key> = …`` line is rewritten in place (its trailing
+    managed ``server.<key> = …`` setting is rewritten in place (its trailing
     comment kept), missing keys are appended.
+
+    A setting is a value, not a line: Suwayomi writes a list over several
+    lines and puts the comment after the closing bracket, so the whole
+    bracketed value is replaced. Version 0.9.0 replaced only the first line
+    and left the rest behind, which stopped Suwayomi from starting; such a
+    file is repaired here, by dropping the quoted strings and the lone ``]``
+    that directly follow a list that is already closed.
     """
 
     lines = existing.splitlines()
+    result: list[str] = []
     seen: set[str] = set()
-    for index, line in enumerate(lines):
-        match = re.match(r"^(server\.([A-Za-z0-9_]+))\s*=\s*(.*?)(\s*#.*)?$", line)
-        if not match:
+    index = 0
+    while index < len(lines):
+        match = _KEY_LINE.match(lines[index])
+        if match is None or match.group(1) not in settings:
+            result.append(lines[index])
+            index += 1
             continue
-        key = match.group(2)
-        if key not in settings:
-            continue
+        key = match.group(1)
         seen.add(key)
-        comment = match.group(4) or ""
-        lines[index] = f"server.{key} = {_conf_value(key, settings[key])}{comment}"
+        _code, comment, depth = _split_comment(match.group(2))
+        index += 1
+        # The value goes on until its brackets close; a new setting at the
+        # start of a line means the list was never closed, so stop there.
+        while depth > 0 and index < len(lines) and not _KEY_LINE.match(lines[index]):
+            _code, tail_comment, change = _split_comment(lines[index])
+            depth += change
+            comment = tail_comment or comment
+            index += 1
+        if isinstance(settings[key], list):
+            while index < len(lines) and (
+                _LIST_REMNANT.match(lines[index]) or _LIST_CLOSER.match(lines[index])
+            ):
+                _code, tail_comment, _change = _split_comment(lines[index])
+                comment = comment or tail_comment
+                index += 1
+        result.append(f"server.{key} = {_conf_value(key, settings[key])}{comment}")
     for key, value in settings.items():
         if key not in seen:
-            lines.append(f"server.{key} = {_conf_value(key, value)}")
-    return "\n".join(lines).rstrip("\n") + "\n"
+            result.append(f"server.{key} = {_conf_value(key, value)}")
+    return "\n".join(result).rstrip("\n") + "\n"
 
 
 class SuwayomiRuntime:

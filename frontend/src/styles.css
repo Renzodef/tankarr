@@ -1858,6 +1858,24 @@ select.input option {
   background: var(--bg-panel);
 }
 
+/* A direct release carries the reasons of the automatic choice, which can be a
+   sentence long. The identity column is sized to its content and the details
+   take what is left, so the source name is never squeezed to nothing and
+   written over the text beside it. */
+.manual-release-row-direct {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.manual-release-row-direct .manual-release-identity {
+  flex-shrink: 0;
+}
+
+.manual-release-selection {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .manual-release-identity {
   display: flex;
   align-items: center;

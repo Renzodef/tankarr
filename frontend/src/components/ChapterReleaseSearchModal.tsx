@@ -202,7 +202,7 @@ export function ChapterReleaseSearchModal({
             {directReleases.length ? (
               <div className="manual-release-list">
                 {directReleases.map((release) => (
-                  <article className="manual-release-row" key={release.id}>
+                  <article className="manual-release-row manual-release-row-direct" key={release.id}>
                     <div className="manual-release-identity">
                       <StatusPill kind="provider">{release.source_name || humanize(release.provider)}</StatusPill>
                     </div>
@@ -214,7 +214,7 @@ export function ChapterReleaseSearchModal({
                           {t("Canonical {chapter} · source item {source}", { chapter: release.chapter, source: release.source_chapter })}
                         </span>
                       ) : null}
-                      {release.selection ? <div className="muted small" aria-label={t("Automatic selection")}>
+                      {release.selection ? <div className="manual-release-selection muted small" aria-label={t("Automatic selection")}>
                         {release.selection.selected ? t("Automatic choice:") : t("Not selected:")} {release.selection.reasons.join(" · ")}
                         {release.selection.next_retry_at ? " · " + t("Retry after {time}", { time: new Date(release.selection.next_retry_at * 1000).toLocaleTimeString(locale()) }) : ""}
                       </div> : null}
