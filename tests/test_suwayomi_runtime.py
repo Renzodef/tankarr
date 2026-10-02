@@ -264,6 +264,80 @@ def test_render_server_conf_rewrites_managed_keys_and_appends_missing_ones():
     assert server_settings(port=4567)["extensionStores"] == []
 
 
+# What Suwayomi writes on its first start: the list spans several lines and
+# the comment sits after the closing bracket.
+MULTILINE_CONF = (
+    "server.port = 4567 # default: 4567\n"
+    "server.extensionStores = [\n"
+    '    "https://raw.githubusercontent.com/suwayomi/tachiyomi-extension/repo/index.min.json"\n'
+    '    "https://raw.githubusercontent.com/Suwayomi/tachiyomi-extension/repo/repo.json"\n'
+    "] # default: [] ; List of extension store index URLs\n"
+    "server.authMode = NONE # default: NONE\n"
+    "server.opdsItemsPerPage = 100 # untouched\n"
+)
+# What Tankarr 0.9.0 made of it: the first line replaced, the rest left behind
+# (issue 23), so that Suwayomi could not start.
+CORRUPTED_CONF = (
+    "server.port = 4567 # default: 4567\n"
+    'server.extensionStores = ["https://raw.githubusercontent.com/suwayomi/tachiyomi-extension/repo/index.min.json"]\n'
+    '    "https://raw.githubusercontent.com/Suwayomi/tachiyomi-extension/repo/repo.json"\n'
+    "] # default: [] ; List of extension store index URLs\n"
+    "server.authMode = NONE # default: NONE\n"
+    "server.opdsItemsPerPage = 100 # untouched\n"
+)
+EXPECTED_STORE_LINE = (
+    f'server.extensionStores = ["{STORE}"]'
+    " # default: [] ; List of extension store index URLs"
+)
+
+
+def _managed() -> dict:
+    return server_settings(port=4567, extension_stores=[STORE])
+
+
+def test_a_multiline_extension_list_is_replaced_as_one_value():
+    rendered = render_server_conf(MULTILINE_CONF, _managed())
+    lines = rendered.splitlines()
+    assert lines.count(EXPECTED_STORE_LINE) == 1
+    # Nothing of the old list is left behind, and the neighbours are intact.
+    assert not any("tachiyomi-extension" in line for line in lines)
+    assert "]" not in [line.strip() for line in lines]
+    assert "server.opdsItemsPerPage = 100 # untouched" in lines
+    assert "server.authMode = NONE # default: NONE" in lines
+    assert render_server_conf(rendered, _managed()) == rendered
+
+
+def test_a_file_corrupted_by_an_earlier_version_is_repaired_on_the_next_start():
+    rendered = render_server_conf(CORRUPTED_CONF, _managed())
+    lines = rendered.splitlines()
+    assert lines.count(EXPECTED_STORE_LINE) == 1
+    assert not any("tachiyomi-extension" in line for line in lines)
+    assert lines == render_server_conf(MULTILINE_CONF, _managed()).splitlines()
+    assert render_server_conf(rendered, _managed()) == rendered
+
+
+def test_a_list_that_never_closes_does_not_swallow_the_next_setting():
+    broken = (
+        "server.extensionStores = [\n"
+        '    "https://example.com/old.json"\n'
+        "server.authMode = NONE # default: NONE\n"
+    )
+    lines = render_server_conf(broken, _managed()).splitlines()
+    assert "server.authMode = NONE # default: NONE" in lines
+    assert f'server.extensionStores = ["{STORE}"]' in lines
+
+
+def test_a_url_with_a_fragment_is_not_taken_for_a_comment():
+    fragment = "https://example.com/index.json#stable"
+    rendered = render_server_conf(
+        'server.extensionStores = ["https://example.com/old.json#x"] # default: []\n',
+        server_settings(port=4567, extension_stores=[fragment]),
+    )
+    assert rendered.splitlines()[0] == (
+        f'server.extensionStores = ["{fragment}"] # default: []'
+    )
+
+
 def test_the_extension_repository_is_the_operators_choice(tmp_path: Path):
     runtime = SuwayomiRuntime(tmp_path / "suwayomi", java_executable=sys.executable)
     assert runtime.extension_store is None
