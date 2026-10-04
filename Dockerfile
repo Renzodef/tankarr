@@ -1,6 +1,6 @@
 # The frontend bundle is platform independent: build it once on the build
 # host, even when the image targets another architecture.
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS frontend
+FROM --platform=$BUILDPLATFORM node:26-bookworm-slim AS frontend
 WORKDIR /src/frontend
 COPY frontend/package*.json ./
 RUN npm ci --no-audit --no-fund
