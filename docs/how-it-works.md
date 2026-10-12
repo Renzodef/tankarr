@@ -149,6 +149,7 @@ together with Tesseract's script detection. For an automatic import:
 | Text in a non-Latin alphabet on the sampled pages | Refused |
 | The release or a file name is tagged with another language, such as `[raw]` or `(French)` | Refused |
 | The OCR reads mostly short fragments rather than dialogue | Refused, for you to review |
+| An uncorroborated non-Latin script guess, with inconclusive OCR | Manual language confirmation required; an English tag alone cannot approve it |
 | The OCR confirms English dialogue | Imported |
 | The OCR cannot read the pages, and the release is tagged English and nothing contradicts it | Imported on the strength of the English tag |
 

@@ -119,3 +119,105 @@ def test_japanese_ocr_fragments_cannot_confirm_english_by_metadata():
     )
     assert decision["verdict"] == "review"
     assert decision["basis"] == "ocr_noise"
+
+
+NOISE = (
+    "CT Wet MD A i ta Be NM aD whim x al a a ko I HT Fe SS d oa al Ne "
+    "be ars RE wb ih hk held a BY hy zg be Ww i Ml VJ MI ial Xl bd Se "
+    "Ser Wo AS xe LD WA eae oe AB ERS yuan A AN ne w wk We age WAN te t AN "
+)
+
+
+def _guessing_run(guesses: list[tuple[str, float]], text: str):
+    """One script guess per sampled page, in page order."""
+    remaining = list(guesses)
+
+    def run(command, **_kwargs):
+        if "osd" in command:
+            script, confidence = remaining.pop(0)
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"Script: {script}\nScript confidence: {confidence}\n",
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout=text, stderr="")
+
+    return run
+
+
+def test_one_page_guessing_a_script_does_not_refuse_the_book(tmp_path, monkeypatch):
+    """Official English chapters came back "Arabic" 5.0, "Cyrillic" 15.0 and
+    "Greek" 2.2 on one sampled page each, with no non-Latin letter read and
+    the other pages disagreeing: Japanese book spines drawn into the art."""
+    monkeypatch.setattr(
+        language_audit.shutil, "which", lambda _name: "/usr/bin/tesseract"
+    )
+    guesses = [("Japanese", 0.67), ("Arabic", 5.0), ("Japanese", 0.29)]
+    monkeypatch.setattr(
+        language_audit.subprocess, "run", _guessing_run(guesses, NOISE * 3)
+    )
+
+    evidence = language_audit.audit_english_pages(_pages(tmp_path), detect_scripts=True)
+
+    assert evidence["foreign_letter_count"] == 0
+    assert evidence["poor_english_signal"] is True
+    assert evidence["verdict"] == "review"
+    assert evidence.get("foreign_script_detected") is False
+    assert "single page" in evidence["script_note"]
+    decision = language_audit.automatic_english_decision(
+        evidence,
+        declared_language="en",
+        expected_language="en",
+        names=["Series 168 (2024) (Digital)"],
+    )
+    assert decision["verdict"] == "review"
+    assert decision["basis"] == "ocr_noise"
+
+
+def test_the_same_script_on_two_pages_still_refuses_the_book(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        language_audit.shutil, "which", lambda _name: "/usr/bin/tesseract"
+    )
+    guesses = [("Japanese", 4.2), ("Arabic", 0.5), ("Japanese", 2.5)]
+    monkeypatch.setattr(
+        language_audit.subprocess, "run", _guessing_run(guesses, NOISE * 3)
+    )
+
+    evidence = language_audit.audit_english_pages(_pages(tmp_path), detect_scripts=True)
+
+    assert evidence["verdict"] == "refused"
+    assert evidence["foreign_script_detected"] is True
+    assert evidence["reason"] == "Sampled pages use a non-Latin alphabet"
+    decision = language_audit.automatic_english_decision(
+        evidence,
+        declared_language="en",
+        expected_language="en",
+        names=["Series v01 (raw)"],
+    )
+    assert decision["verdict"] == "refused"
+    assert decision["basis"] == "foreign_script"
+
+
+def test_uncorroborated_script_with_sparse_ocr_requires_manual_confirmation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(language_audit.shutil, "which", lambda _name: "tesseract")
+    monkeypatch.setattr(
+        language_audit.subprocess,
+        "run",
+        _guessing_run(
+            [("Japanese", 6.0), ("Latin", 3.0), ("Unknown", 0.0)], "ka ta na"
+        ),
+    )
+
+    evidence = language_audit.audit_english_pages(_pages(tmp_path), detect_scripts=True)
+    assert evidence["verdict"] == "review"
+    assert not evidence["poor_english_signal"]
+    decision = language_audit.automatic_english_decision(
+        evidence,
+        declared_language="en",
+        expected_language="en",
+        names=["Series v01 [English]"],
+    )
+    assert decision["verdict"] == "review"
+    assert decision["basis"] == "script_uncertain"

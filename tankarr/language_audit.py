@@ -209,6 +209,12 @@ def automatic_english_decision(
             "basis": "ocr",
             "reason": "OCR confirmed English dialogue",
         }
+    if audit.get("script_review_required"):
+        return {
+            "verdict": "review",
+            "basis": "script_uncertain",
+            "reason": "A script guess conflicts with inconclusive OCR; confirm the page language manually",
+        }
     return {
         "verdict": "confirmed",
         "basis": "metadata_fallback",
@@ -324,10 +330,22 @@ def audit_english_pages(
         evidence["reason"] = "OCR could not read any sampled page"
     if detect_scripts:
         evidence["script_samples"] = scripts
-        foreign_script = any(
-            sample["script"] not in {"Latin", "Common", "Unknown"}
-            and sample["confidence"] >= 2
+        guesses = [
+            sample["script"]
             for sample in scripts
+            if sample["script"] not in {"Latin", "Common", "Unknown"}
+            and sample["confidence"] >= 2
+        ]
+        # One page's guess is not evidence of a language: official English
+        # chapters came back "Arabic" (5.0), "Cyrillic" (15.0) and "Greek"
+        # (2.2) on a single sampled page each, with 0 non-Latin letters read
+        # and the other pages of the same book disagreeing with it (Japanese
+        # book spines and sound effects drawn into the art). A raw is
+        # Japanese on page after page, so the same script must be seen on
+        # at least two sampled pages. A book whose only script sample is that
+        # guess has no other page to confirm or contradict it.
+        foreign_script = any(guesses.count(script) >= 2 for script in set(guesses)) or (
+            len(guesses) == 1 and len(scripts) == 1
         )
         # Script detection reads the whole page, and an official English
         # digital edition keeps the Japanese sound effects drawn into the
@@ -354,5 +372,10 @@ def audit_english_pages(
         elif foreign_script:
             evidence["script_note"] = (
                 "non-Latin script seen in the artwork, dialogue is English"
+            )
+        elif guesses:
+            evidence["script_review_required"] = evidence.get("verdict") == "review"
+            evidence["script_note"] = (
+                "a script guess on a single page is not corroborated by another page"
             )
     return evidence
