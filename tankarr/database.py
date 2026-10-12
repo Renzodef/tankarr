@@ -4075,6 +4075,12 @@ class Database:
         metadata_row = self.get_series_metadata(manga_id)
         metadata = (metadata_row or {}).get("data") or {}
         all_chapters = self.list_chapters(manga_id, manga["preferred_language"])
+        # The series unit is what the series page and Wanted show: it is
+        # resolved from every release. The gates below drop releases that
+        # cannot be queued; resolving the unit again from what is left made a
+        # series followed in volumes switch to chapters as soon as its books
+        # were unqueueable, and queue every chapter a source had.
+        offered_chapters = all_chapters
         if explain is not None:
             for release in self.list_all_chapters(manga_id):
                 if release.get("language") != manga["preferred_language"]:
@@ -4183,8 +4189,24 @@ class Database:
             all_chapters,
             chapter_total=counted_chapter_total(manga, metadata),
         )
+        series_unit: str | None = None
+        if len(all_chapters) != len(offered_chapters):
+            series_unit = select_releases(
+                manga,
+                metadata,
+                offered_chapters,
+                canonical_labels=canonical_decimal_labels(
+                    map_entries,
+                    offered_chapters,
+                    chapter_total=counted_chapter_total(manga, metadata),
+                ),
+            )[0]["unit"]
         _unit_info, chapters = select_releases(
-            manga, metadata, all_chapters, canonical_labels=canonical_labels
+            manga,
+            metadata,
+            all_chapters,
+            canonical_labels=canonical_labels,
+            unit=series_unit,
         )
         if (
             continuing

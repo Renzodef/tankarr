@@ -2733,3 +2733,74 @@ def test_a_release_can_be_upgraded_to_a_book_but_not_downgraded(tmp_path: Path):
     database.upsert_chapters("manga-1", [chapter_row])
     stored = {item["id"]: item for item in database.list_all_chapters("manga-1")}
     assert stored["entry-1"]["release_unit"] == "volume"
+
+
+def test_unqueueable_books_do_not_switch_a_series_followed_in_volumes_to_chapters(
+    tmp_path: Path,
+):
+    """A source whose books cannot be queued yet must make their slots
+    unavailable. Resolving the unit again after dropping them made the
+    series follow chapters, and every chapter a second source had was queued
+    while the series page and Wanted said volumes."""
+    from tankarr.series_unit import select_releases
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "manga-1",
+            "title": "Example",
+            "description": "",
+            "cover_url": None,
+            "authors": [],
+            "original_language": "ja",
+            "status": "ended",
+        },
+        "fr",
+    )
+    database.update_manga(
+        "manga-1",
+        {"expected_count_override": 20, "expected_count_unit_override": "volume"},
+    )
+    books = [
+        {
+            **_volume_release(f"book-{number}", str(number)),
+            # How a source's books were stored before their unit was kept:
+            # a chapter without a number, awaiting evidence.
+            "release_unit": "chapter",
+            "numbering_status": "pending_evidence",
+            "numbering_method": "awaiting_official_evidence",
+        }
+        for number in range(1, 21)
+    ]
+    chapters = [
+        {
+            "id": f"ch-{number}",
+            "volume": None,
+            "chapter": str(number),
+            "title": f"Chapter {number}",
+            "language": "fr",
+            "provider": "mangadex",
+            "groups": [],
+            "publish_at": None,
+            "source_url": f"https://example.test/ch-{number}",
+        }
+        for number in range(1, 15)
+    ]
+    database.upsert_chapters("manga-1", [*books, *chapters])
+
+    manga = database.get_manga("manga-1")
+    metadata = (database.get_series_metadata("manga-1") or {}).get("data") or {}
+    shown, _selected = select_releases(
+        manga, metadata, database.list_chapters("manga-1", "fr")
+    )
+    assert shown["unit"] == "volumes"
+
+    queued = database.preferred_missing_releases("manga-1")
+
+    assert [
+        release["id"] for release in queued if release["id"].startswith("ch-")
+    ] == []
+    # The slot search for a volume asks for the releases that carry that
+    # volume number; a chapter release of the other source is not a book.
+    assert database.preferred_missing_releases("manga-1", ["ch-1"]) == []

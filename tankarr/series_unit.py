@@ -803,11 +803,15 @@ def select_releases(
     canonical_labels: frozenset[str] | set[str] = frozenset(),
     *,
     copy: bool = True,
+    unit: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Resolve the unit and return only the releases that belong to it.
 
     The caller's dicts are never changed; ``copy=False`` skips the defensive
-    copies when the caller already works on copies of its own.
+    copies when the caller already works on copies of its own. ``unit`` pins
+    the unit the caller already resolved from the full release set, when
+    ``releases`` is a subset of it: a gate that drops releases which cannot be
+    queued must not make the series follow the other unit.
     """
 
     items = [dict(release) for release in releases] if copy else list(releases)
@@ -835,6 +839,9 @@ def select_releases(
     unit_info = resolve_series_unit(
         {**manga, "_unit_context": context}, metadata, items, coverage=coverage
     )
+    pinned = normalize_series_unit(unit)
+    if pinned is not None and pinned != unit_info["unit"]:
+        unit_info = {**unit_info, "unit": pinned, "reason": "the series unit"}
     if unit_info["unit"] == "volumes":
         selected = [
             item
