@@ -3440,7 +3440,10 @@ class TankarrService:
             if job["status"] != "failed":
                 return []
             failure_name = str(job.get("failure_code") or "")
-            if failure_name in self.TRANSIENT_FAILURE_NAMES:
+            if (
+                job.get("failure_scope") == "service"
+                or failure_name in self.TRANSIENT_FAILURE_NAMES
+            ):
                 # A restarting engine must not condemn a good release, so the
                 # release is not blocked. The source is still counted apart:
                 # "temporarily unavailable" over and over is a broken source,
@@ -8760,7 +8763,11 @@ class TankarrService:
                             status="failed",
                             failure_code=type(exc).__name__,
                             failure_scope="service"
-                            if type(exc).__name__ in self.TRANSIENT_FAILURE_NAMES
+                            if (
+                                isinstance(exc, ProviderUnavailableError)
+                                or getattr(exc, "transient", False) is True
+                                or type(exc).__name__ in self.TRANSIENT_FAILURE_NAMES
+                            )
                             else "release",
                             next_retry_at=0,
                             message=failure_detail,

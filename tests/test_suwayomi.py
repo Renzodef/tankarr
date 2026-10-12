@@ -689,8 +689,10 @@ async def test_page_prepare_timeout_classifies_source_and_runtime_failures(
     monkeypatch.setattr(client, "_graphql", stalled)
     monkeypatch.setattr(client, "_runtime_responding", probe)
     try:
-        with pytest.raises(expected, match=message):
+        with pytest.raises(expected, match=message) as caught:
             await client.download_pages("suwayomi-70", tmp_path, progress)
+        if runtime_responding:
+            assert caught.value.transient is True
     finally:
         await client.aclose()
 

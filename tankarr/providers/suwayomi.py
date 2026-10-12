@@ -643,7 +643,8 @@ class SuwayomiProvider(Provider):
         except TimeoutError as exc:
             if await self._runtime_responding():
                 raise ProviderRequestError(
-                    "Suwayomi source timed out while preparing chapter pages"
+                    "Suwayomi source timed out while preparing chapter pages",
+                    transient=True,
                 ) from exc
             raise ProviderUnavailableError(
                 "Suwayomi runtime stopped responding while preparing chapter pages"

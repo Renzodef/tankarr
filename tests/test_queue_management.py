@@ -911,6 +911,9 @@ async def test_transient_download_attempts_advance_and_eventually_fail(
     terminal = database.get_job(job["id"])
     assert terminal["status"] == "failed"
     assert terminal["message"].startswith(prefix)
+    assert terminal["failure_scope"] == "service"
+    assert await service.failover_failed_release(job["id"]) == []
+    assert database.blocked_releases("manga-1") == {}
 
 
 @pytest.mark.asyncio
