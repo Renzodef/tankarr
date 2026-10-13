@@ -140,6 +140,38 @@ def status_consensus(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     return {"value": votes.get(SPINE, value), "confidence": CONFLICT, "votes": votes}
 
 
+def _edition_note(note: str) -> dict[str, Any]:
+    """Keep each binding's count and completion status in the same clause."""
+
+    clauses: list[str] = []
+    for part in re.split(r"[;|]", note):
+        if _EDITION_OMNIBUS.search(part) or _EDITION_VOLUMES.search(part):
+            clauses.append(part)
+        elif clauses:
+            # "12 Physical Volumes; Complete" is one edition, whereas a
+            # second count starts another edition with its own status.
+            clauses[-1] += ";" + part
+    candidates: list[dict[str, Any]] = []
+    for clause in clauses or [note]:
+        omnibus = _EDITION_OMNIBUS.search(clause)
+        match = _EDITION_VOLUMES.search(clause)
+        candidates.append(
+            {
+                "volume_count": int(omnibus.group(1))
+                if omnibus
+                else int(match.group(1))
+                if match
+                else None,
+                "omnibus": int(omnibus.group(2)) if omnibus else 1,
+                "complete": bool(re.search(r"\bcomplete(?:d)?\b", clause, re.I)),
+            }
+        )
+    return next(
+        (c for c in candidates if c["volume_count"] and c["complete"]),
+        candidates[0],
+    )
+
+
 def english_edition(records: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
     """The English edition MangaBaka describes, with its own volume count."""
 
@@ -152,17 +184,9 @@ def english_edition(records: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
             if str(item.get("type") or "").strip().casefold() not in _ENGLISH:
                 continue
             note = str(item.get("note") or "")
-            omnibus = _EDITION_OMNIBUS.search(note)
-            match = _EDITION_VOLUMES.search(note)
-            if omnibus:
-                volume_count: int | None = int(omnibus.group(1))
-            else:
-                volume_count = int(match.group(1)) if match else None
             edition = {
                 "publisher": str(item.get("name") or "").strip(),
-                "volume_count": volume_count,
-                "omnibus": int(omnibus.group(2)) if omnibus else 1,
-                "complete": "complete" in note.casefold(),
+                **_edition_note(note),
                 "note": note.strip(),
                 "source": SPINE,
             }
@@ -207,6 +231,11 @@ def managed_volume_count(metadata: dict[str, Any] | None) -> int | None:
     """
 
     edition = (metadata or {}).get("managed_edition") or {}
+    note = str(edition.get("note") or "")
+    if _EDITION_OMNIBUS.search(note) or _EDITION_VOLUMES.search(note):
+        # Older cached records may pair a print count with a digital
+        # completion flag. Correct that pairing before a metadata refresh.
+        edition = {**edition, **_edition_note(note)}
     if not edition.get("complete"):
         return None
     # An omnibus ("5 3-in-1 Volumes") is a binding, not the work's extent:

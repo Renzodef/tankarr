@@ -69,7 +69,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageStat, UnidentifiedImageError
 
 from tankarr.archive import IMAGE_SUFFIXES
 
@@ -155,11 +155,12 @@ DARK_PAGE_RATIO = 0.15  # more than this share of black cards is not a chapter
 
 
 def _page_darkness(payload: bytes) -> tuple[float, float] | None:
-    """Mean and spread of luminance on a tiny thumbnail: is this a black card?
+    """Measure luminance; confirm suspected black cards at source resolution.
 
-    Decoding is confined to a 32 px draft, so it costs about as much as the
-    header read; it is done only on freshly downloaded pages, never in the
-    library sweep.
+    The cheap thumbnail accepts ordinary pages. Averaging can erase fine
+    bright line art on dark pages, so a suspected uniform card needs its
+    original pixels measured before classification. This is done only on
+    freshly downloaded pages, never in the library sweep.
     """
 
     try:
@@ -174,7 +175,15 @@ def _page_darkness(payload: bytes) -> tuple[float, float] | None:
         return None
     mean = sum(pixels) / len(pixels)
     spread = (sum((value - mean) ** 2 for value in pixels) / len(pixels)) ** 0.5
-    return mean, spread
+    if mean >= DARK_PAGE_LUMINANCE or spread >= DARK_PAGE_SPREAD:
+        return mean, spread
+    try:
+        # Reopen: JPEG draft decoding above discarded the source resolution.
+        with Image.open(BytesIO(payload)) as image:
+            stats = ImageStat.Stat(image.convert("L"))
+            return stats.mean[0], stats.stddev[0]
+    except (UnidentifiedImageError, OSError, ValueError):
+        return mean, spread
 
 
 def _summarize(geometries: Sequence[tuple[int, int]]) -> dict[str, Any]:
@@ -214,7 +223,7 @@ def _summarize(geometries: Sequence[tuple[int, int]]) -> dict[str, Any]:
 
 # How the measurement is taken. Bumped when the numbers change meaning, so
 # every stored row is re-measured instead of being compared across versions.
-MEASURE_VERSION = "2"
+MEASURE_VERSION = "3"
 
 # Slicing: a page of this height-to-width ratio reads on any screen.
 SLICE_TARGET_ASPECT = 1.45
@@ -446,6 +455,7 @@ def assess(
     if measurement.get("measured_pages") and aspect > MAX_READABLE_ASPECT:
         return {
             "verdict": DEGRADED,
+            "refusal_kind": "shape",
             "reason": (
                 f"pages are {aspect:.0f} times taller than they are wide: the "
                 "source serves un-sliced strips that no reader can fit on a screen"
@@ -457,6 +467,7 @@ def assess(
     if measured >= 4 and dark_pages / measured >= DARK_PAGE_RATIO:
         return {
             "verdict": DEGRADED,
+            "refusal_kind": "black_cards",
             "reason": (
                 f"{dark_pages} of {measured} pages are black cards (piracy "
                 "notices, studio splashes): a re-cut edition of the work, not "
@@ -474,6 +485,7 @@ def assess(
     ):
         return {
             "verdict": DEGRADED,
+            "refusal_kind": "shape",
             "reason": (
                 f"pages are {aspect:.1f} times taller than wide while this "
                 f"series reads in pages ({baseline_aspect:.1f}): strip slices "
@@ -485,6 +497,7 @@ def assess(
     if measurement.get("measured_pages") and 0 < median_width < MIN_PAGE_WIDTH:
         return {
             "verdict": DEGRADED,
+            "refusal_kind": "resolution",
             "reason": (
                 f"pages are {median_width} px wide: thumbnails or placeholders, "
                 "not pages"
@@ -519,6 +532,7 @@ def assess(
     share = height / float(baseline["quartile"]) if baseline["quartile"] else 0.0
     return {
         "verdict": DEGRADED,
+        "refusal_kind": "length",
         "reason": (
             f"carries {share:.0%} of what this series' shorter chapters carry "
             f"({round(height)} against a floor of {round(floor)})"

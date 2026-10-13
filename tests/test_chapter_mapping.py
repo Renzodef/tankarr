@@ -1,6 +1,6 @@
 import pytest
 
-from tankarr.chapter_mapping import build_chapter_index
+from tankarr.chapter_mapping import build_chapter_index, logical_release_key
 
 
 def release(
@@ -24,7 +24,25 @@ def release(
     }
 
 
-def test_documented_numbered_chapters_satisfy_catalogue_extra_count():
+def test_numbered_prologue_identity_matches_sources_without_matching_chapter():
+    owned = {
+        **release("1", identifier="owned"),
+        "title": "Prologue 1",
+        "canonical_chapter": None,
+        "numbering_method": "special_title",
+    }
+    alternate = {**owned, "id": "alternate", "chapter": None}
+    ordinary = {**release("1"), "title": "Chapter 1"}
+
+    assert logical_release_key(owned, volume_scoped=False) == logical_release_key(
+        alternate, volume_scoped=False
+    )
+    assert logical_release_key(owned, volume_scoped=False) != logical_release_key(
+        ordinary, volume_scoped=False
+    )
+
+
+def test_documented_numbered_extras_are_excluded_from_catalogue_count():
     from tankarr.chapter_mapping import documented_extra_count
 
     manga = {
@@ -49,15 +67,15 @@ def test_documented_numbered_chapters_satisfy_catalogue_extra_count():
 
     assert documented_extra_count(manga, metadata) == 2
     index = build_chapter_index(manga, metadata, chapters)
-    assert index["catalogue_extra_coverage"] == {"expected": 2, "owned": 2}
+    assert index["expected_count"] == 21
     assert index["sequence_end"] == 21
     assert index["raw_missing_count"] == 0
     assert not any(slot["chapter"] in {"22", "23"} for slot in index["slots"])
 
     chapters[-1]["downloaded"] = False
     index = build_chapter_index(manga, metadata, chapters)
-    assert index["catalogue_extra_coverage"] == {"expected": 2, "owned": 1}
-    assert index["unresolved_expected_count"] == 1
+    assert index["expected_count"] == 21
+    assert index["unresolved_expected_count"] == 0
 
     metadata["description"] = "Includes 3 bonus chapters"
     assert documented_extra_count(manga, metadata) is None
@@ -66,7 +84,7 @@ def test_documented_numbered_chapters_satisfy_catalogue_extra_count():
     assert documented_extra_count(manga, metadata) is None
 
 
-def test_documented_word_count_accepts_a_separately_imported_named_extra():
+def test_documented_named_extra_is_never_required():
     from tankarr.chapter_mapping import documented_extra_count
 
     manga = {
@@ -93,18 +111,18 @@ def test_documented_word_count_accepts_a_separately_imported_named_extra():
 
     assert documented_extra_count(manga, metadata) == 1
     index = build_chapter_index(manga, metadata, chapters)
-    assert index["catalogue_extra_coverage"] == {"expected": 1, "owned": 1}
+    assert index["expected_count"] == 96
     assert index["sequence_end"] == 96
     assert index["raw_missing_count"] == 0
     assert not any(slot["chapter"] == "97" for slot in index["slots"])
 
     chapters[-1]["title"] = "Vol.11 Chapter 1"
     index = build_chapter_index(manga, metadata, chapters)
-    assert index["catalogue_extra_coverage"] == {"expected": 1, "owned": 0}
-    assert index["raw_missing_count"] == 1
+    assert index["expected_count"] == 96
+    assert index["raw_missing_count"] == 0
 
 
-def test_exact_chapter_map_already_counts_documented_decimal_extra():
+def test_documented_decimal_extra_is_excluded_even_when_mapped():
     from tankarr.chapter_map import MapEntry
     from tankarr.series_summary import decorate_series_summary
 
@@ -127,16 +145,16 @@ def test_exact_chapter_map_already_counts_documented_decimal_extra():
 
     index = build_chapter_index(manga, metadata, chapters, chapter_map=chapter_map)
     counts = decorate_series_summary(dict(manga), metadata, index)["library_count"]
-    assert index["catalogue_extra_coverage"] is None
+    assert index["expected_count"] == 4
     assert index["raw_missing_count"] == 0
-    assert counts["downloaded_count"] == counts["expected_count"] == 5
+    assert counts["downloaded_count"] == counts["expected_count"] == 4
 
     chapters[-1]["downloaded"] = False
     index = build_chapter_index(manga, metadata, chapters, chapter_map=chapter_map)
-    assert index["raw_missing_count"] == 1
+    assert index["raw_missing_count"] == 0
 
 
-def test_documented_volume_extras_satisfy_catalogue_cardinality_only_when_imported():
+def test_documented_volume_extras_never_create_wanted():
     from tankarr.series_summary import decorate_series_summary
 
     manga = {
@@ -166,35 +184,33 @@ def test_documented_volume_extras_satisfy_catalogue_cardinality_only_when_import
     ]
     index = build_chapter_index(manga, metadata, chapters)
     summary = decorate_series_summary(dict(manga), metadata, index)["library_count"]
-    assert index["catalogue_extra_coverage"] == {"expected": 2, "owned": 2}
+    assert index["expected_count"] == 10
     assert index["sequence_end"] == 10
     assert not any(slot["chapter"] == "12" for slot in index["slots"])
-    assert summary["downloaded_count"] == summary["expected_count"] == 12
+    assert summary["downloaded_count"] == summary["expected_count"] == 10
     assert summary["missing_count"] == 0
 
     chapters[-1]["downloaded"] = False
     index = build_chapter_index(manga, metadata, chapters)
     summary = decorate_series_summary(dict(manga), metadata, index)["library_count"]
-    assert index["catalogue_extra_coverage"] == {"expected": 2, "owned": 1}
-    assert index["unresolved_expected_count"] == 1
-    assert summary["missing_count"] == 1
-    assert summary["unindexed_missing_count"] == 1
+    assert index["expected_count"] == 10
+    assert index["unresolved_expected_count"] == 0
+    assert summary["missing_count"] == 0
 
     chapters[-1]["downloaded"] = True
     chapters[-1]["title"] = "Hiatus notice"
     index = build_chapter_index(manga, metadata, chapters)
-    assert index["catalogue_extra_coverage"] == {"expected": 2, "owned": 1}
-    assert index["raw_missing_count"] == 1
+    assert index["expected_count"] == 10
+    assert index["raw_missing_count"] == 0
 
     manga["description"] = "A story without an explicit extra count"
     index = build_chapter_index(manga, metadata, chapters)
-    assert index["catalogue_extra_coverage"] is None
     assert index["raw_missing_count"] > 0
 
     manga["description"] = "Note: Includes 2 extra chapters"
     chapters.append({**release("11"), "title": "Chapter 11"})
     index = build_chapter_index(manga, metadata, chapters)
-    assert index["catalogue_extra_coverage"] is None
+    assert index["expected_count"] != 10
 
 
 def test_decimal_extra_cannot_exceed_the_finished_works_cardinality():
@@ -219,7 +235,7 @@ def test_decimal_extra_cannot_exceed_the_finished_works_cardinality():
 
 
 @pytest.mark.parametrize("downloaded", [True, False])
-def test_mapped_optional_extra_does_not_become_a_missing_canonical_chapter(downloaded):
+def test_mapped_optional_extra_has_no_chapter_slot(downloaded):
     from tankarr.chapter_map import MapEntry
 
     index = build_chapter_index(
@@ -230,11 +246,21 @@ def test_mapped_optional_extra_does_not_become_a_missing_canonical_chapter(downl
         chapter_map=[MapEntry(("2",), ("16", "16.5"), True, "operator")],
     )
 
-    extra = next(slot for slot in index["slots"] if slot["chapter"] == "16.5")
-    assert extra["downloaded"] is downloaded
-    assert extra["expected"] is False
-    assert extra["special"] is True
+    assert "16.5" not in {slot["chapter"] for slot in index["slots"]}
     assert index["raw_missing_count"] == 0
+
+
+def test_volume_series_map_does_not_create_a_supplemental_extra_slot():
+    from tankarr.chapter_map import MapEntry
+
+    index = build_chapter_index(
+        {"status": "ended", "monitor_mode": "all", "series_unit_override": "volumes"},
+        {"status": "ended", "chapter_count": 2, "volume_count": 1},
+        [release("1"), release("2"), release("1.5")],
+        chapter_map=[MapEntry(("1",), ("1", "1.5", "2"), True, "operator")],
+    )
+
+    assert "1.5" not in {slot["chapter"] for slot in index["mapped_chapter_slots"]}
 
 
 def test_complete_read_map_counts_parts_without_inventing_parent_chapters():
@@ -561,6 +587,30 @@ def test_owned_volumes_cover_their_chapters_through_the_map():
     assert blind["raw_missing_count"] == 0
 
 
+def test_owned_early_books_cannot_hide_missing_chapters_after_later_chapter_file():
+    manga = {
+        "status": "completed",
+        "monitor_mode": "all",
+        "series_unit_override": "chapters",
+        "expected_count_override": 8,
+        "expected_count_unit_override": "chapter",
+    }
+    releases = [
+        {**release("", volume="1", identifier="book-1"), "chapter": None},
+        release("1", volume="1"),
+        release("2", volume="1", downloaded=False),
+        release("3", volume="2"),
+        release("4", volume="2"),
+    ]
+
+    index = build_chapter_index(manga, {"status": "ended", "volume_count": 3}, releases)
+    slots = {slot["chapter"]: slot for slot in index["slots"]}
+
+    assert slots["2"]["covered_unmapped"]  # The owned first book may contain it.
+    assert all(not slots[str(n)]["covered_unmapped"] for n in range(5, 9))
+    assert index["raw_missing_count"] == 4
+
+
 @pytest.mark.parametrize("source", ["operator", "ocr"])
 def test_partial_owned_book_map_keeps_known_edition_head_and_tail_missing(source):
     from tankarr.chapter_map import MapEntry
@@ -661,12 +711,12 @@ def test_extras_and_chapter_zero_never_reach_the_index():
     manga = {"status": "ongoing", "monitor_mode": "all"}
     index = build_chapter_index(manga, {}, releases)
     assert {slot["key"] for slot in index["slots"]} == {"chapter:1", "chapter:2"}
-    assert index["special_count"] == 0
+    assert "special_count" not in index
     assert index["series_unit"] == "chapters"
     assert index["dropped_releases"] == {"chapter_zero_or_negative": 1, "extra": 2}
 
 
-def test_owned_optional_half_chapter_is_counted_without_becoming_wanted():
+def test_owned_optional_half_chapter_is_not_counted_or_wanted():
     releases = [
         release("1"),
         release("1.5"),
@@ -677,8 +727,9 @@ def test_owned_optional_half_chapter_is_counted_without_becoming_wanted():
     )
 
     assert {slot["key"] for slot in index["slots"]} == {"chapter:1", "chapter:2"}
-    assert index["additional_content"] == {"prologues": 0, "extras": 1}
-    assert index["special_count"] == index["special_downloaded_count"] == 1
+    assert "additional_content" not in index
+    assert "special_count" not in index
+    assert index["expected_count"] == 2
     assert index["raw_missing_count"] == 0
 
 
@@ -875,6 +926,53 @@ def test_a_chapter_only_aggregators_have_yet_is_not_missing():
     }
     index = build_chapter_index(first_available, metadata, [*official, *ahead])
     assert index["raw_missing_count"] == 1
+
+
+def test_official_season_opener_is_main_episode_not_optional_special():
+    from tankarr.series_summary import decorate_series_summary
+
+    manga = {"status": "ongoing", "monitor_mode": "all", "preferred_language": "en"}
+    metadata = {
+        "status": "ongoing",
+        "official_links": [
+            {
+                "url": "https://www.webtoons.com/en/fantasy/example/list",
+                "language": "en",
+            }
+        ],
+    }
+    chapters = [
+        {
+            **release(str(number), identifier=f"ep-{number}"),
+            "source_url": f"https://www.webtoons.com/en/fantasy/example/{number}",
+        }
+        for number in range(1, 4)
+    ]
+    chapters.append(
+        {
+            **release("1.5", downloaded=False, identifier="season-two-zero"),
+            "title": "[Season 2] Ep. 0 (ch. 1)",
+            "numbering_method": "official_season_opening",
+            "source_url": "https://www.webtoons.com/en/fantasy/example/season-two-zero",
+        }
+    )
+
+    index = build_chapter_index(manga, metadata, chapters)
+    opener = next(slot for slot in index["slots"] if slot["chapter"] == "1.5")
+    counts = decorate_series_summary(manga, metadata, index)["library_count"]
+    assert opener["expected"] is True and opener["special"] is False
+    assert counts["expected_count"] == 4
+    assert counts["downloaded_count"] == 3
+    assert counts["missing_count"] == 1
+
+    chapters[-1]["downloaded"] = True
+    completed = build_chapter_index(manga, metadata, chapters)
+    completed_counts = decorate_series_summary(manga, metadata, completed)[
+        "library_count"
+    ]
+    assert completed_counts["expected_count"] == 4
+    assert completed_counts["downloaded_count"] == 4
+    assert completed_counts["missing_count"] == 0
 
 
 def test_running_work_reference_is_the_official_source_or_available_chapters():
@@ -1406,10 +1504,8 @@ def test_a_decimal_chapter_the_map_places_in_a_volume_is_a_chapter_not_an_extra(
 
 
 def test_a_side_episode_every_source_lists_explains_the_count_but_stays_an_extra():
-    # The same work seen before its map is fetched: several aggregators all
-    # list "5.5" (one upload mirrored), the catalogues count 45. The side
-    # episode explains the count - no chapter 45 is invented - but it stays
-    # an extra: specials are opt-in, and mirrors are not agreement.
+    # Without an exact map, a mirrored .5 upload cannot prove whether the
+    # catalogue's additional chapter is story content or an extra.
     releases = [release(str(number)) for number in range(1, 45)]
     releases.append(
         {**release("5.5", downloaded=False, identifier="a-5.5"), "source_name": "A"}
@@ -1424,7 +1520,7 @@ def test_a_side_episode_every_source_lists_explains_the_count_but_stays_an_extra
 
     keys = {slot["key"] for slot in index["slots"]}
     assert "chapter:5.5" not in keys and "chapter:45" not in keys
-    assert index["unresolved_expected_count"] == 0
+    assert index["unresolved_expected_count"] == 1
 
 
 def _book(volume: str, *, downloaded: bool = True) -> dict:
@@ -2120,7 +2216,7 @@ def test_numbers_past_a_manual_chapter_total_are_not_expected():
 
     by = {slot.get("chapter"): slot for slot in index["slots"]}
     assert by["200"]["expected"] is True
-    assert by["202"]["expected"] is False and by["203"]["expected"] is False
+    assert "202" not in by and "203" not in by
     assert index["raw_missing_count"] == 0
     assert index["expected_count"] == 200
 
@@ -2291,7 +2387,7 @@ def test_a_lone_list_matching_the_count_does_not_turn_its_omake_into_a_chapter()
     assert index["sequence_end"] == 45
 
 
-def test_complete_source_lists_count_internal_extras_without_phantom_tail():
+def test_complete_source_lists_do_not_promote_internal_extras_to_chapters():
     rows = [
         {**release(str(n), provider=source, downloaded=n <= 8), "source_name": source}
         for source in ("first", "second")
@@ -2312,8 +2408,9 @@ def test_complete_source_lists_count_internal_extras_without_phantom_tail():
         for slot in index["slots"]
         if slot["expected"] and not slot["downloaded"]
     ]
-    assert set(missing) == {"2.5", "5.5"}
-    assert index["raw_missing_count"] == 2
+    assert missing == []
+    assert index["raw_missing_count"] == 0
+    assert index["unresolved_expected_count"] == 2
     assert index["expected_count"] == 10
     assert index["expected_satisfied_count"] == 8
     assert not any(slot["chapter"] in {"9", "10"} for slot in index["slots"])
@@ -2418,17 +2515,71 @@ def test_owned_prologues_are_visible_without_inflating_numbered_chapters():
     assert index["expected_count"] == 3
     assert index["expected_satisfied_count"] == 3
     assert index["raw_missing_count"] == 0
-    assert index["additional_content"] == {"prologues": 2, "extras": 0}
+    assert "additional_content" not in index
 
 
-def test_catalogue_counted_content_is_not_added_twice():
-    from tankarr.chapter_mapping import owned_additional_content
-
-    prologue = {"id": "prelude", "title": "Prologue 1", "downloaded": True}
-    extra = {"id": "extra", "title": "Omake", "downloaded": True}
-    missing = {"id": "absent", "title": "Prologue 2", "downloaded": False}
-    slots = [{"expected": True, "releases": [prologue]}]
-    assert owned_additional_content([prologue, extra, missing], slots) == {
-        "prologues": 0,
-        "extras": 1,
+def test_owned_afterword_does_not_cover_a_missing_opening_chapter():
+    manga = {
+        "status": "ended",
+        "monitor_mode": "all",
+        "series_unit_override": "chapters",
     }
+    chapters = [
+        {
+            **release(str(number), downloaded=number != 1),
+            "title": f"Chapter {number}",
+        }
+        for number in range(1, 10)
+    ]
+    afterword = {
+        **release("1", identifier="owned-afterword"),
+        "title": "Afterword to Volume 1",
+    }
+    chapters.append(afterword)
+
+    index = build_chapter_index(manga, {"chapter_count": 9}, chapters)
+
+    assert index["expected_count"] == 9
+    assert index["expected_satisfied_count"] == 8
+    assert index["raw_missing_count"] == 1
+    opening = next(slot for slot in index["slots"] if slot["chapter"] == "1")
+    assert not opening["downloaded"]
+    assert all(item["id"] != "owned-afterword" for item in opening["releases"])
+    assert afterword in chapters
+    assert afterword["downloaded"]
+    assert afterword["chapter"] == "1"
+
+
+def test_unmapped_owned_chapter_with_volume_tag_cannot_supply_a_whole_book():
+    manga = {"status": "ended", "monitor_mode": "all"}
+    chapters = [
+        {
+            **release(str(number), volume="1", downloaded=number != 1),
+            "title": f"Chapter {number}",
+            "release_unit": "chapter",
+            "source_chapter": str(number),
+        }
+        for number in range(1, 10)
+    ]
+    extra = {
+        **release(None, volume="1", identifier="unmapped-extra"),
+        "title": "Afterword to Volume 1",
+        "release_unit": "chapter",
+        "source_chapter": "1",
+        "canonical_chapter": None,
+        "numbering_status": "unmapped",
+        "numbering_method": "special_title",
+    }
+    chapters.append(extra)
+
+    index = build_chapter_index(
+        manga, {"chapter_count": 9, "volume_count": 1}, chapters
+    )
+
+    assert index["unit"] == "chapter"
+    assert index["expected_count"] == 9
+    assert index["expected_satisfied_count"] == 8
+    assert index["raw_missing_count"] == 1
+    assert index["owned_volume_count"] == 0
+    assert extra["source_chapter"] == "1"
+    assert extra["downloaded"] is True

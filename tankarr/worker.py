@@ -172,14 +172,29 @@ class DownloadWorker:
         async with self._cancel_lock:
             job = self.database.get_job(job_id)
             if job["status"] == "queued":
-                return self.database.cancel_job(job_id)
+                async with self._selection_lock:
+                    task = self._active_tasks.get(job_id)
+                    if task is not None and not task.done():
+                        raise ValueError(
+                            "The active job is changing state; retry cancellation"
+                        )
+                    removed = self.database.cancel_job(job_id)
+                    await self.service.discard_download_staging(job_id)
+                    return removed
             if job["status"] not in {
                 "running",
                 "downloading",
                 "packaging",
                 "importing",
             }:
-                return self.database.delete_job(job_id)
+                task = self._active_tasks.get(job_id)
+                if task is not None and not task.done():
+                    raise ValueError(
+                        "The active job is changing state; retry cancellation"
+                    )
+                removed = self.database.delete_job(job_id)
+                await self.service.discard_download_staging(job_id)
+                return removed
             if job["status"] == "importing":
                 raise ValueError(
                     "Wait for the atomic library import to finish before removing this job"

@@ -508,7 +508,7 @@ def test_a_fragment_without_a_chapter_number_is_not_a_whole_book():
     assert is_whole_book(chapter) is False
 
 
-def test_a_special_no_book_contains_is_a_row_only_if_asked_for():
+def test_a_special_no_book_contains_never_becomes_a_row():
     """FLCL's second cut of its chapters, published apart, is not part of any
     tankobon. A shelf of books should not carry rows for it unless the reader
     turned them on, and it is never counted as missing either way."""
@@ -542,12 +542,8 @@ def test_a_special_no_book_contains_is_a_row_only_if_asked_for():
 
     manga = {"id": "m", "title": "FLCL", "status": "ended", "monitor_mode": "all"}
     hidden = apply_series_form(payload(), manga, None)
-    assert hidden["hidden_specials"] == 1
+    assert "hidden_specials" not in hidden
     assert [s["chapter"] for s in hidden["unassigned_chapters"]] == ["99"]
-
-    shown = apply_series_form(payload(), manga, None, specials_outside_books=True)
-    assert shown["hidden_specials"] == 0
-    assert {s["chapter"] for s in shown["unassigned_chapters"]} == {"2.1", "99"}
 
 
 def test_a_count_set_by_hand_is_the_answer_not_a_floor():

@@ -156,6 +156,16 @@ series being searched, including sources installed later. A manual selection
 stores Suwayomi's numeric source IDs (`TANKARR_SUWAYOMI_SOURCE_IDS`). A series
 is only ever searched in the sources of its own language.
 
+For a single series, open **Download source** on its series page, search the
+installed sources and choose **Use this source** on the matching title.
+Tankarr saves that source mapping and preference for this series, including
+after restart and metadata refresh. The chosen source takes priority when it
+offers a usable release; other eligible sources remain available when it
+cannot. A source in another language is refused, and normal numbering,
+language, ownership and import checks still apply. Existing library files
+are kept. **Use automatic source selection** removes the preference while
+retaining the verified mappings.
+
 ### External mode
 
 Choose **External server** as the **Mode** to use a Suwayomi server you already
@@ -287,6 +297,11 @@ those: a torrent another application or you put in the same category is left
 alone and listed on the System page. Torrents outside the category are never
 touched.
 
+Moving a managed download to another client category marks that download as
+failed without interrupting other downloads. Restore Tankarr's category before
+using **Retry**. Retention cleanup checks all retained imports in pages, so a
+long history of completed downloads does not hide older seeding jobs.
+
 A magnet link whose metadata no peer delivers within 30 minutes
 (`TANKARR_TORRENT_METADATA_TIMEOUT_MINUTES`) is removed from qBittorrent and its
 download fails, so the next candidate release gets its turn.
@@ -317,6 +332,9 @@ and the key, and creates the category in SABnzbd when it is missing.
 Usenet downloads too. With **Keep seeding**, a finished download stays in
 SABnzbd's history; with either removal option, Tankarr deletes it and its files
 from SABnzbd right after the import.
+
+**Retry** resubmits a failed NZB even while its failed entry remains in SABnzbd's
+history. A download still queued or successfully completed is reused instead.
 
 ## Internet Archive
 

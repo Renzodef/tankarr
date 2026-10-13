@@ -72,7 +72,7 @@ def test_volume_progress_and_diagnostics_ignore_inactive_chapter_override():
     assert "4 original-work volumes" in summary["count_note"]
 
 
-def test_logical_chapter_coverage_collapses_split_parts_and_keeps_specials():
+def test_logical_chapter_coverage_collapses_split_parts_and_ignores_extras():
     coverage = logical_chapter_coverage(
         [
             {"chapter": "1", "downloaded": True},
@@ -88,9 +88,26 @@ def test_logical_chapter_coverage_collapses_split_parts_and_keeps_specials():
     assert coverage == {
         "logical_chapter_count": 5,
         "logical_downloaded_count": 5,
-        "special_chapter_count": 1,
-        "special_downloaded_count": 1,
     }
+
+
+def test_numbered_season_opener_counts_as_main_chapter():
+    coverage = logical_chapter_coverage(
+        [
+            {"chapter": "78", "downloaded": True},
+            {
+                "chapter": "78.5",
+                "downloaded": True,
+                "numbering_method": "official_season_opening",
+            },
+            {"chapter": "79", "downloaded": True},
+            {"chapter": "79.5", "downloaded": True},
+        ]
+    )
+
+    assert coverage["logical_chapter_count"] == 3
+    assert coverage["logical_downloaded_count"] == 3
+    assert "special_chapter_count" not in coverage
 
 
 def test_split_chapter_is_downloaded_only_when_every_known_part_is_present():
@@ -134,7 +151,7 @@ def test_catalogue_count_uses_logical_chapters_instead_of_physical_parts():
     assert summary["count_conflict"] is False
 
 
-def test_metadata_cardinality_can_be_satisfied_by_numbered_specials():
+def test_metadata_cardinality_does_not_count_numbered_specials():
     summary = library_count_summary(
         {
             "provider": "local",
@@ -155,10 +172,9 @@ def test_metadata_cardinality_can_be_satisfied_by_numbered_specials():
         },
     )
 
-    assert summary["available_count"] == 92
-    assert summary["downloaded_count"] == 92
-    assert summary["missing_count"] == 0
-    assert summary["count_conflict"] is False
+    assert summary["available_count"] == 90
+    assert summary["downloaded_count"] == 90
+    assert summary["missing_count"] == 2
 
 
 def test_integral_provider_final_keeps_exact_sequence_semantics():
@@ -210,11 +226,11 @@ def test_cardinality_still_reports_indexed_and_unindexed_deficits():
         },
     )
 
-    assert summary["available_count"] == 5
-    assert summary["downloaded_count"] == 4
-    assert summary["missing_count"] == 3
+    assert summary["available_count"] == 4
+    assert summary["downloaded_count"] == 3
+    assert summary["missing_count"] == 4
     assert summary["indexed_missing_count"] == 1
-    assert summary["unindexed_missing_count"] == 2
+    assert summary["unindexed_missing_count"] == 3
 
 
 def test_catalogue_total_exposes_unindexed_missing_chapters_for_ended_work():
@@ -463,6 +479,23 @@ def test_any_catalogue_that_tracks_pauses_can_declare_one():
         {"status": "ongoing"},
     )
     assert resumed["paused"] is False and resumed["pause_sources"] == []
+
+
+def test_a_new_official_chapter_resumes_a_work_before_catalogues_catch_up():
+    summary = publication_summary(
+        {
+            "status": "hiatus",
+            "publication_signals": {
+                "mangabaka": "hiatus",
+                "official": "ongoing",
+                "official_resume": "published",
+            },
+        },
+        {"status": "hiatus"},
+    )
+    assert summary["status"] == "continuing"
+    assert summary["paused"] is False
+    assert summary["source"] == "official release"
 
 
 def test_hiatus_can_be_set_by_hand_and_stays_a_continuing_work():

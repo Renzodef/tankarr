@@ -13,6 +13,7 @@ so they are not download candidates and must not inflate the chapter count.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -237,6 +238,14 @@ _SPECIAL_TITLE = re.compile(
 )
 
 
+_VOLUME_AFTERWORD = re.compile(
+    r"^\s*(?:afterwords?\s+(?:to|of|for)\s+(?:[\w' -]+\s+)?"
+    r"(?:vol(?:ume)?\.?|book)\s*\d+\b|"
+    r"(?:vol(?:ume)?\.?|book)\s*\d+\s*[:–-]?\s*afterwords?\b)",
+    re.IGNORECASE,
+)
+
+
 _TITLE_VOLUME = re.compile(
     r"^\s*(?:[^\w\s]\s*)*vol(?:ume)?\.?\s*(\d{1,4})(?!\d)", re.IGNORECASE
 )
@@ -287,7 +296,17 @@ def _is_special_title(text: str) -> bool:
     # of an explicitly numbered chapter.  In that case the number is stronger
     # evidence; cross-source reconciliation can still leave it for review.
     return _title_number(text) is None and bool(
-        _SPECIAL_TITLE.search(text) or numbered_prologue(text) is not None
+        _SPECIAL_TITLE.search(text)
+        or _VOLUME_AFTERWORD.search(text)
+        or numbered_prologue(text) is not None
+    )
+
+
+def is_season_zero_episode(value: object) -> bool:
+    """Recognize a published season opener distinct from the prior finale."""
+
+    return bool(
+        re.search(r"\[Season\s+\d+\]\s*Ep\.\s*0\b", str(value or ""), re.IGNORECASE)
     )
 
 
@@ -314,6 +333,16 @@ def renumber_by_rank(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
     if not specials:
         return chapters
+    # A short source can retain explicit chapter numbers with gaps. An
+    # editorial item must not shift its chapter4 into the missing chapter3.
+    numbered_titles = [
+        (number, title_number(item.get("title")))
+        for number, item in ordered
+        if item not in specials
+    ]
+    preserve_explicit_numbers = bool(numbered_titles) and all(
+        source == titled for source, titled in numbered_titles
+    )
     rank = 0
     for number, item in ordered:
         if item in specials:
@@ -324,6 +353,8 @@ def renumber_by_rank(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 method="special_title",
                 confidence=1.0,
             )
+            continue
+        if preserve_explicit_numbers:
             continue
         if number != number.to_integral_value():
             continue  # a side story keeps its decimal: it is an extra already
@@ -400,6 +431,28 @@ def renumber_from_titles(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]
         for item in chapters
         if (number := _decimal(item.get("chapter"))) is not None
     ]
+    # A season-opening episode 0 can be a real, separately published part of
+    # the story while its title repeats the preceding season's last chapter
+    # number. WEBTOON's Tower of God lists both S1 Ep. 78 and S2 Ep. 0 as
+    # "ch. 78". Keep the latter between 78 and 79 rather than merging the two
+    # files or discarding one as a duplicate.
+    title_counts = Counter(
+        number for _source, number, _item in ordered if number is not None
+    )
+    ordered = [
+        (
+            source,
+            number + Decimal("0.5")
+            if number is not None
+            and number == number.to_integral_value()
+            and number + Decimal("0.5") not in title_counts
+            and is_season_zero_episode(item.get("title"))
+            and title_counts[number] > 1
+            else number,
+            item,
+        )
+        for source, number, item in ordered
+    ]
     titled = sorted(
         (entry for entry in ordered if entry[1] is not None),
         key=lambda entry: entry[0],
@@ -415,7 +468,7 @@ def renumber_from_titles(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]
     if len(whole) < _MIN_TITLED or len(run) < _MIN_RUN_SHARE * len(whole):
         return chapters
     numbered = [whole[index] for index in run]
-    if all(source == number for source, number, _item in numbered):
+    if not parts and all(source == number for source, number, _item in numbered):
         for _source_number, _number, item in ordered:
             if is_special_title(item.get("title")):
                 _set_canonical(
@@ -434,11 +487,16 @@ def renumber_from_titles(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]
         numbered.append((_source, number, item))
     renumbered = {id(item) for _source, _number, item in numbered}
     for _source_number, number, item in numbered:
+        season_opening = (
+            number != number.to_integral_value()
+            and is_season_zero_episode(item.get("title"))
+            and title_counts[title_number(item.get("title"))] > 1
+        )
         _set_canonical(
             item,
             number,
             status="mapped",
-            method="title_sequence",
+            method="title_season_opening" if season_opening else "title_sequence",
             confidence=0.95,
         )
     for _source_number, _number, item in ordered:
@@ -459,6 +517,7 @@ __all__ = [
     "LOCK_MARKERS",
     "is_locked_title",
     "is_side_story",
+    "is_season_zero_episode",
     "is_special_title",
     "renumber_by_rank",
     "renumber_from_titles",

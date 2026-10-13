@@ -13,7 +13,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from tankarr.chapter_mapping import canonical_number
-from tankarr.source_numbering import is_side_story, is_special_title, title_number
+from tankarr.source_numbering import (
+    is_season_zero_episode,
+    is_side_story,
+    is_special_title,
+    title_number,
+)
 from tankarr.source_ranking import source_role_for_release
 
 NUMBERING_VERSION = 6
@@ -269,14 +274,30 @@ def reconcile_numbering(
         for release in chapter_releases
         if source_role_for_release(release, source_roles) == "secondary_official"
     ]
+    official_title_counts = Counter(
+        number
+        for release in primary_official
+        if (number := title_number(release.get("title"))) is not None
+    )
     for release in primary_official:
         release_id = str(release["id"])
         current = decisions[release_id]
         if current["numbering_method"] == "special_title":
             continue
         written_number = title_number(release.get("title"))
+        season_opening = (
+            written_number is not None
+            and written_number == written_number.to_integral_value()
+            and official_title_counts[written_number] > 1
+            and written_number + Decimal("0.5") not in official_title_counts
+            and is_season_zero_episode(release.get("title"))
+        )
         canonical = (
-            written_number or current["canonical_chapter"] or current["source_chapter"]
+            written_number + Decimal("0.5")
+            if season_opening
+            else written_number
+            or current["canonical_chapter"]
+            or current["source_chapter"]
         )
         if canonical is None:
             continue
@@ -287,7 +308,13 @@ def reconcile_numbering(
             release,
             canonical,
             status="mapped",
-            method="official_title" if explicit else "official_source",
+            method=(
+                "official_season_opening"
+                if season_opening
+                else "official_title"
+                if explicit
+                else "official_source"
+            ),
             confidence=1.0 if explicit else 0.9,
             evidence={
                 "source_chapter": current["source_chapter"],
@@ -425,7 +452,7 @@ def reconcile_numbering(
             decision = decisions[release_id]
             if str(decision["numbering_method"]) == "special_title" or str(
                 decision["numbering_method"]
-            ).startswith(("official_title", "title_")):
+            ).startswith(("official_", "title_")):
                 continue
             source_number = _integer(decision["source_chapter"])
             pages = int(release.get("pages") or 0)
@@ -458,7 +485,7 @@ def reconcile_numbering(
                 current = decisions[release_id]
                 if str(current["numbering_method"]) == "special_title" or str(
                     current["numbering_method"]
-                ).startswith(("official_title", "title_")):
+                ).startswith(("official_", "title_")):
                     continue
                 source_number = _integer(current["source_chapter"])
                 if source_number is None or not start <= source_number <= end:
@@ -529,6 +556,7 @@ def reconcile_numbering(
             if method in {
                 "special_title",
                 "official_title",
+                "official_season_opening",
                 "title_sequence",
                 "catalogue_bounded_title",
                 "content_sequence_alignment",

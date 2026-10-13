@@ -148,10 +148,19 @@ together with Tesseract's script detection. For an automatic import:
 | --- | --- |
 | Text in a non-Latin alphabet on the sampled pages | Refused |
 | The release or a file name is tagged with another language, such as `[raw]` or `(French)` | Refused |
-| The OCR reads mostly short fragments rather than dialogue | Refused, for you to review |
-| An uncorroborated non-Latin script guess, with inconclusive OCR | Manual language confirmation required; an English tag alone cannot approve it |
+| The OCR reads mostly short fragments rather than dialogue | Requires review unless strong English OCR evidence from the same release corroborates it |
+| An uncorroborated non-Latin script guess, with inconclusive OCR | Requires manual confirmation or strong English OCR corroboration from the same release; an English tag alone cannot approve it |
 | The OCR confirms English dialogue | Imported |
 | The OCR cannot read the pages, and the release is tagged English and nothing contradicts it | Imported on the strength of the English tag |
+
+A pack can share an English verdict with an inconclusive file only when at
+least two files and 80% of the pack independently confirm English dialogue
+through OCR. The file must have readable samples, no foreign letters and no
+corroborated foreign script. A contradictory language marker anywhere in the
+pack prevents this shared decision. Evidence records the original file
+decision and how many files confirmed English. Dialogue confirmation needs
+distinct multi-letter English words, so repeated one-letter OCR fragments
+cannot count as dialogue. Prowlarr also checks explicit raw tags and flags.
 
 A script guess on pages the OCR could not read is not treated as evidence. A
 refused import stays in **Activity** with its reason and evidence and is not
@@ -198,9 +207,12 @@ instead. A book whose chapters are all on disk and exactly mapped is shown as
 **From chapters** and can be assembled into a single volume CBZ, see
 [Assemble books](operator-workflows.md#assemble-books).
 
-Specials that no book contains, such as a half chapter or an omake, are never
-counted as missing. **Show specials no book contains** (off by default) lists
-them on a shelf of books.
+Optional extras that no book contains, such as an omake, do not create shelf
+rows, missing-chapter counts or automatic download jobs. Pages bundled into
+a normal volume remain in that archive. An official season-opening episode
+or a decimal label established as a main chapter by an exact reading map
+still belongs to the main sequence; see
+[Chapter numbers and extras](operator-workflows.md#chapter-numbers-and-extras).
 
 ## Canonical chapter index and cross-source numbering
 
@@ -381,6 +393,8 @@ Nothing in the archive says so, so Tankarr looks at the geometry of the pages:
   chapter carrying less than 35% of the series' first quartile is a fragment,
   not a short chapter. If another source's copy of the same chapter measures
   about the same, within 20%, the chapter is simply short and is accepted.
+  A refused copy can support this comparison only when its own failure was
+  length alone; an unknown refusal cannot serve as evidence of a sound copy.
 - **Shape.** A page more than five times taller than it is wide cannot be read
   on a screen without panning, and a page narrower than 400 pixels is a
   thumbnail, whatever the series.
@@ -388,8 +402,10 @@ Nothing in the archive says so, so Tankarr looks at the geometry of the pages:
 Decimal chapters, such as a two-page extra, have no expected length and are not
 judged on it. New downloads are checked before they are packaged, so a refused
 chapter never reaches the library; **Download anyway** in **History** accepts a
-short chapter, but a page shape that cannot be read is never accepted. A
-background audit (`TANKARR_PAGE_QUALITY_RECOVERY_ENABLED`, on by default)
+short chapter. This accepts length shortfalls only: unreadable shape,
+thumbnail resolution and black-card refusals remain refused even when another
+source carries the same measured length. A background audit
+(`TANKARR_PAGE_QUALITY_RECOVERY_ENABLED`, on by default)
 measures the chapters already in the library and replaces the unreadable ones
 when another source has them. When no other source has the chapter, the file is
 kept: a verdict alone never deletes anything.

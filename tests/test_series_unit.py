@@ -4,11 +4,32 @@ import pytest
 
 from tankarr.series_unit import (
     coverage_for_units,
+    is_volume_release,
     normalize_chapter_releases,
     resolve_series_unit,
     select_releases,
     unit_coverage,
 )
+
+
+@pytest.mark.parametrize("source_chapter", ["0", "1", "2.5"])
+def test_unmapped_provider_chapter_is_not_a_whole_book(source_chapter):
+    fragment = {
+        "release_unit": "chapter",
+        "volume": "1",
+        "chapter": None,
+        "source_chapter": source_chapter,
+        "numbering_status": "unmapped",
+    }
+    assert not is_volume_release(fragment)
+    assert is_volume_release({**fragment, "release_unit": "volume"})
+
+
+def test_legacy_volume_without_source_chapter_keeps_volume_classification():
+    assert is_volume_release({"volume": "1", "chapter": None})
+    assert is_volume_release(
+        {"release_unit": "chapter", "volume": "1", "chapter": None}
+    )
 
 
 def test_uncorroborated_scan_frontier_cannot_complete_a_multivolume_work():
@@ -129,6 +150,25 @@ def test_duplicate_integers_in_one_source_keep_the_best_release():
     kept, dropped = normalize_chapter_releases(releases)
     assert sorted(r["id"] for r in kept) == ["a-32", "b-32"]
     assert dropped == {"duplicate_number": 1}
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_source_number_prefers_owned_chapter_over_stale_listing(reverse):
+    stale = ch("7", provider="manual", id="stale", pages=90, downloaded=False)
+    owned = ch("7", provider="manual", id="owned", pages=90, downloaded=True)
+    releases = [stale, owned]
+    if reverse:
+        releases.reverse()
+    kept, dropped = normalize_chapter_releases(releases)
+    assert [release["id"] for release in kept] == ["owned"]
+    assert dropped == {"duplicate_number": 1}
+
+
+def test_extra_title_cannot_hide_normal_chapter_in_same_source():
+    ordinary = ch("7", provider="manual", id="ordinary", downloaded=False)
+    extra = ch("7", provider="manual", id="extra", title="Bonus", downloaded=True)
+    kept, _ = normalize_chapter_releases([ordinary, extra])
+    assert [release["id"] for release in kept] == ["ordinary"]
 
 
 def test_split_parts_without_the_integer_are_kept_and_extras_are_dropped():

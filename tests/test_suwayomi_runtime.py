@@ -427,6 +427,42 @@ async def test_the_login_stays_in_an_owner_only_conf_and_out_of_the_jvm_environm
     assert conf.parent.stat().st_mode & 0o777 == 0o700
 
 
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="Linux locale fallback"
+)
+@pytest.mark.parametrize("host_locale", ["C", "en_US.UTF-8"])
+async def test_spawn_preserves_distinct_non_ascii_cache_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host_locale: str
+):
+    root = tmp_path / "suwayomi"
+    fake_installed(root)
+    monkeypatch.setenv("LC_ALL", host_locale)
+    monkeypatch.setenv("LC_CTYPE", "C")
+    # Disable Python's automatic UTF-8/coercion so this stand-in uses the OS
+    # locale for filenames, as Java does even when file.encoding is UTF-8.
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    monkeypatch.setenv("PYTHONCOERCECLOCALE", "0")
+    runtime = SuwayomiRuntime(
+        root,
+        java_executable=sys.executable,
+        command_builder=python_command(
+            r"from pathlib import Path; "
+            r"Path('\u7532').mkdir(); Path('\u4e59').mkdir(); "
+            r"Path('\u7532/001.txt').write_bytes(b'first'); "
+            r"Path('\u4e59/001.txt').write_bytes(b'second')"
+        ),
+    )
+    try:
+        await runtime._spawn()
+        assert runtime._process is not None
+        assert await asyncio.wait_for(runtime._process.wait(), timeout=10) == 0
+        assert (runtime.home / "甲" / "001.txt").read_bytes() == b"first"
+        assert (runtime.home / "乙" / "001.txt").read_bytes() == b"second"
+    finally:
+        await runtime.aclose()
+
+
 # --- The pinned release (issue #4) -----------------------------------------
 
 PIN = PinnedRelease(tag="v1.2.3", sha256=hashlib.sha256(JAR_BYTES).hexdigest())

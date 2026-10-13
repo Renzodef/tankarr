@@ -24,11 +24,20 @@ def clean_text(value: object) -> str:
 
 def normalized_title(value: object) -> str:
     text = unicodedata.normalize("NFKD", clean_text(value)).casefold()
-    text = "".join(
-        character for character in text if not unicodedata.combining(character)
-    )
+    characters: list[str] = []
+    latin_base = False
+    for character in text:
+        if unicodedata.combining(character):
+            # Latin accents are spelling variants. Native marks can identify
+            # different letters: Japanese カ/ガ and Cyrillic и/й must differ.
+            if not latin_base:
+                characters.append(character)
+        else:
+            characters.append(character)
+            latin_base = "LATIN" in unicodedata.name(character, "")
+    text = unicodedata.normalize("NFKC", "".join(characters))
     text = text.replace("&", " and ").replace("+", " plus ")
-    return " ".join(re.findall(r"[a-z0-9]+", text))
+    return " ".join(re.findall(r"[^\W_]+", text))
 
 
 _EDITION_LANGUAGE_TOKENS = frozenset(

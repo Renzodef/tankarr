@@ -55,9 +55,7 @@ class TranslationAcquisition:
     async def finish_sources(self):
         if self.torrents.completed_action != "remove_after_import":
             return
-        for job in self.database.list_torrent_downloads(
-            statuses=("imported",), limit=500
-        ):
+        for job in self.database.iter_torrent_cleanup():
             if (
                 (job.get("language_evidence") or {}).get("translation_request")
                 and job.get("qbit_state") != "removed"

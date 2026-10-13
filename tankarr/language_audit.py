@@ -112,6 +112,7 @@ def classify_english_text(texts: list[str]) -> dict[str, Any]:
         for word in re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", text)
     ]
     common = [word for word in words if word in COMMON_ENGLISH_WORDS]
+    dialogue_words = {word for word in common if len(word) >= 2}
     long_words = [word for word in words if len(word) >= 3]
     long_word_ratio = len(long_words) / len(words) if words else 0.0
     # OCR of Japanese panels can hallucinate hundreds of isolated Latin
@@ -120,7 +121,7 @@ def classify_english_text(texts: list[str]) -> dict[str, Any]:
     poor_english_signal = len(words) >= 50 and long_word_ratio < 0.30
     confirmed = (
         len(words) >= 15
-        and len(common) >= 3
+        and len(dialogue_words) >= 3
         and len(long_words) >= 6
         and not poor_english_signal
     )
@@ -134,6 +135,7 @@ def classify_english_text(texts: list[str]) -> dict[str, Any]:
         "foreign_letter_count": foreign_letters,
         "word_count": len(words),
         "common_word_count": len(common),
+        "dialogue_word_count": len(dialogue_words),
         "long_word_count": len(long_words),
         "long_word_ratio": round(long_word_ratio, 3),
         "poor_english_signal": poor_english_signal,
@@ -159,6 +161,21 @@ def _sample_indexes(page_count: int) -> list[int]:
     return sorted(candidates)
 
 
+def _english_dialogue_pages(texts: list[str]) -> int:
+    """Count pages with several distinct, multi-letter English function words."""
+    return sum(
+        len(
+            {
+                word.casefold()
+                for word in re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", text)
+                if len(word) >= 3 and word.casefold() in COMMON_ENGLISH_WORDS
+            }
+        )
+        >= 4
+        for text in texts
+    )
+
+
 def automatic_english_decision(
     audit: dict[str, Any],
     *,
@@ -177,12 +194,6 @@ def automatic_english_decision(
             "verdict": "refused",
             "basis": "foreign_script",
             "reason": "Sampled pages contain another alphabet",
-        }
-    if audit.get("poor_english_signal"):
-        return {
-            "verdict": "review",
-            "basis": "ocr_noise",
-            "reason": "OCR found mostly short fragments; confirm the page language manually",
         }
     if declared_language != expected_language or expected_language != "en":
         return {
@@ -203,6 +214,12 @@ def automatic_english_decision(
             "basis": "filename_language",
             "reason": "Release or file name declares another language",
         }
+    if audit.get("poor_english_signal"):
+        return {
+            "verdict": "review",
+            "basis": "ocr_noise",
+            "reason": "OCR found mostly short fragments; confirm the page language manually",
+        }
     if audit.get("verdict") == "confirmed":
         return {
             "verdict": "confirmed",
@@ -220,6 +237,48 @@ def automatic_english_decision(
         "basis": "metadata_fallback",
         "reason": "English release tag matches the series; OCR is inconclusive and names do not contradict it",
     }
+
+
+def corroborate_release_language(audits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Share strong English OCR evidence only with inconclusive files in one pack.
+
+    Contradictory files never inherit a verdict. At least two books and 80%
+    of the sampled pack must independently confirm English dialogue.
+    """
+    decisions = [item.get("automatic_decision") or {} for item in audits]
+    if any(decision.get("verdict") == "refused" for decision in decisions):
+        return audits
+    confirmed = sum(
+        decision.get("verdict") == "confirmed" and decision.get("basis") == "ocr"
+        for decision in decisions
+    )
+    if confirmed < 2 or confirmed * 5 < len(audits) * 4:
+        return audits
+    result = []
+    for audit, decision in zip(audits, decisions, strict=True):
+        if (
+            decision.get("verdict") == "review"
+            and decision.get("basis") in {"ocr_noise", "script_uncertain"}
+            and not audit.get("foreign_letter_count")
+            and not audit.get("foreign_script_detected")
+            and audit.get("successful_samples", 0) > 0
+        ):
+            result.append(
+                {
+                    **audit,
+                    "automatic_decision": {
+                        "verdict": "confirmed",
+                        "basis": "release_ocr",
+                        "reason": "English dialogue confirmed in at least 80% of this release",
+                        "confirmed_files": confirmed,
+                        "total_files": len(audits),
+                        "previous_decision": decision,
+                    },
+                }
+            )
+        else:
+            result.append(audit)
+    return result
 
 
 def audit_english_pages(
@@ -330,6 +389,11 @@ def audit_english_pages(
         evidence["reason"] = "OCR could not read any sampled page"
     if detect_scripts:
         evidence["script_samples"] = scripts
+        foreign_confidences = [
+            sample["confidence"]
+            for sample in scripts
+            if sample["script"] not in {"Latin", "Common", "Unknown"}
+        ]
         guesses = [
             sample["script"]
             for sample in scripts
@@ -361,6 +425,30 @@ def audit_english_pages(
         if foreign_script and not texts:
             evidence["script_note"] = (
                 "a script guess on pages the OCR could not read is not evidence"
+            )
+        elif (
+            foreign_script
+            and evidence.get("verdict") == "review"
+            and int(evidence.get("foreign_letter_count") or 0) == 0
+            and max(foreign_confidences) < 4
+            and _english_dialogue_pages(texts) >= 2
+        ):
+            evidence["script_note"] = (
+                "weak script guess conflicts with English dialogue on multiple pages"
+            )
+        elif (
+            foreign_script
+            and evidence.get("verdict") == "review"
+            and int(evidence.get("foreign_letter_count") or 0) == 0
+            and evidence.get("poor_english_signal")
+            and int(evidence.get("common_word_count") or 0) >= 15
+        ):
+            # Stylized English lettering can make OSD confidently guess a
+            # different script even when its OCR found no non-Latin letters.
+            # Keep noisy text at manual review; the script guess alone must
+            # not turn ambiguous OCR into a hard language rejection.
+            evidence["script_note"] = (
+                "script guess conflicts with OCR fragments; manual review required"
             )
         elif foreign_script and not (
             evidence.get("verdict") == "confirmed"

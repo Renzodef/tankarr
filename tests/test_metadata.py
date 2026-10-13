@@ -239,6 +239,28 @@ def fake_record(external_id: str = "source-1", **updates: Any) -> dict[str, Any]
     return result
 
 
+def test_independent_manhua_evidence_corrects_conflicting_manga_origin(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
+    database = Database(settings.database_path)
+    database.initialize()
+    seed(database)
+    service = MetadataService(settings, database, FakeKomga(), {}, [])  # type: ignore[arg-type]
+    manga = database.get_manga("manga-1")
+    catalogue = fake_record(source="mangabaka", tags=["Drama", "Manhua"])
+    independent = fake_record(
+        source="anilist", work_type="Manhua", original_language="zh"
+    )
+
+    canonical = service._merge_series(manga, [catalogue, independent])
+    assert canonical["original_language"] == "zh"
+    assert canonical["work_type"] == "Manhua"
+    assert canonical["reading_direction"] == "LEFT_TO_RIGHT"
+
+    without_corroboration = service._merge_series(manga, [catalogue])
+    assert without_corroboration["original_language"] == "ja"
+    assert without_corroboration["reading_direction"] == "RIGHT_TO_LEFT"
+
+
 def test_series_match_requires_corroboration_for_ambiguous_titles():
     target = {"title": "Example", "authors": ["Jane Doe"], "year": 2020}
     strong = {"title": "Example", "authors": ["Doe Jane"], "year": 2020}

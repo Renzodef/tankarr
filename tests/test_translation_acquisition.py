@@ -147,3 +147,29 @@ async def test_paused_fallback_preserves_completed_download(
     result = await acquisition.stage_torrent(job, tmp_path / "never-opened.cbz")
     assert result["status"] == "completed"
     assert manager.store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_source_cleanup_reaches_old_completed_translation_after_multiple_pages(
+    translation, monkeypatch
+):
+    from tests.test_torrent_lifecycle import imported_history
+
+    manager, database, _service, source = translation
+    acquisition = setup_acquisition(manager, monkeypatch)
+    acquisition.torrents.completed_action = "remove_after_import"
+    acquisition.torrents._remove_from_client = AsyncMock()
+    translated = manager.store.create("manga-1", source, "en")
+    manager.store.update(translated["id"], status="completed")
+    rows = imported_history(database, manga_id="manga-1", count=501)
+    old = rows[0]
+    database.update_torrent_download(
+        old["id"],
+        language_evidence={
+            "translation_request": {"target_language": "en"},
+            "translation_jobs": [translated["id"]],
+        },
+    )
+    await acquisition.finish_sources()
+    acquisition.torrents._remove_from_client.assert_awaited_once()
+    assert acquisition.torrents._remove_from_client.call_args.args[0]["id"] == old["id"]

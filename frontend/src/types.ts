@@ -31,9 +31,6 @@ export type LibraryCountSummary = {
   latest_chapter?: string | null;
   reference_unknown?: boolean;
   short_of_books?: boolean;
-  additional_content?: { prologues?: number; extras?: number };
-  special_count?: number;
-  special_downloaded_count?: number;
   source: string | null;
   metadata_field: string;
   count_conflict: boolean;
@@ -59,6 +56,7 @@ export type AuthStatus = {
   method: "forms" | "basic" | "external";
   authenticated: boolean;
   username: string | null;
+  oidc_login_url?: string;
 };
 
 export type CountConfidence = "agreed" | "lone" | "conflict" | "unconfirmed";
@@ -443,9 +441,6 @@ export type ChapterIndex = {
   covered_unmapped_count?: number;
   duplicate_count?: number;
   owned_volumes?: string[];
-  special_count?: number;
-  special_downloaded_count?: number;
-  special_monitored?: boolean;
   expected_volume_count?: number | null;
   owned_volume_count?: number;
   expected_available_count?: number;
@@ -597,6 +592,7 @@ export type AuthorCredit = {
 };
 
 export type Manga = MangaSummary & {
+  preferred_source_key?: string | null;
   translation_enabled?: boolean;
   translation_source_languages?: string;
   assemble_books_automatically?: boolean;

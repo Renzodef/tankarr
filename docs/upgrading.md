@@ -6,8 +6,8 @@ description: How Tankarr is released, which Docker image tag to run, how to upda
 
 ## Release channels
 
-Tankarr is published the same way as Sonarr, Radarr and the other *arr
-applications: a stable branch, a development branch and immutable builds.
+Tankarr publishes stable releases, temporary branch images for testing pull
+requests, and immutable builds. There is no permanent `develop` channel.
 
 | Image tag | Built from | Recommended for |
 | --- | --- | --- |
@@ -30,13 +30,33 @@ breaking changes, always listed in the notes.
 
 ## Updating
 
+### Upgrading from v0.9.0 to v0.10.0
+
+Create a configuration/database backup before upgrading. This release adds
+persisted source preferences, manual catalogue data, import assignments and
+verification metadata. Restore the pre-upgrade backup if you roll back to
+v0.9.0.
+
+The retired `TANKARR_SPECIAL_CHAPTERS_OUTSIDE_BOOKS` setting can be removed
+from existing configuration. Optional extras do not contribute to automatic
+acquisition or main-story completion; official season-opening episodes still
+count as main chapters.
+
+OpenID Connect is optional and disabled by default. Enabling it requires an
+HTTPS issuer and callback, client credentials and an explicit subject or group
+allowlist. Local login remains available. See
+[OpenID Connect](configuration.md#openid-connect) for configuration.
+
+### Update the image
+
 ```sh
 docker compose pull tankarr
 docker compose up -d tankarr
 ```
 
 Tankarr can be restarted at any time: interrupted chapter jobs are queued
-again and a torrent or Usenet import resumes where it stopped. It is still
+again and a torrent or Usenet import resumes with the saved file selection
+and manual volume/chapter assignments. It is still
 kinder to update while **Activity** shows no import in progress.
 
 After an update the web interface is available within seconds. The container

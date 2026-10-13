@@ -119,6 +119,55 @@ async def test_discovery_persists_verified_source_and_indexes_its_releases(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("localized_title", "required_query"),
+    [
+        ("Зверушки", "Зверушки"),
+        ("動物たち", "動物達"),
+        ("猫2", "犬2"),
+        ("カキ", "ガキ"),
+    ],
+)
+async def test_discovery_searches_localized_titles_and_distinct_native_aliases(
+    tmp_path: Path, localized_title: str, required_query: str
+):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    seed(database)
+    database.set_manga_metadata_title("origin-id", localized_title)
+    database.save_series_metadata(
+        "origin-id",
+        {"title": localized_title, "alternate_titles": [required_query]},
+        artwork_path=None,
+        artwork_sha256=None,
+        artwork_media_type=None,
+        source_status=[],
+    )
+
+    class LocalizedSearchProvider(FakeProvider):
+        async def search_with_diagnostics(
+            self, query: str, language: str, limit: int = 20
+        ):
+            return (
+                self.candidates[:limit] if query == required_query else [],
+                [],
+            )
+
+    provider = LocalizedSearchProvider(
+        [candidate("localized-source")],
+        {"localized-source": [chapter("localized-46", "46")]},
+    )
+    manager = ReleaseSourceManager(database, {"alternate": provider})
+
+    result = await manager.discover_and_refresh("origin-id", monitor_new=True)
+
+    assert result["matched_sources"] == 1
+    assert [item["id"] for item in database.list_chapters("origin-id", "en")] == [
+        "localized-46"
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("subtype", ["Novel", "Light Novel"])
 async def test_prose_novel_does_not_match_comic_adaptation_by_title(
     tmp_path: Path, subtype: str
@@ -651,6 +700,14 @@ def test_a_finished_or_small_work_refuses_a_list_twice_its_size():
     assert implausible_chapter_list(rows(76) * 3, finished) is None
     running = {"chapter_count": 76, "status": "ongoing", "title": "Something running"}
     assert implausible_chapter_list(rows(163), running) is None
+
+
+def test_normalized_titles_preserve_native_letters_and_latin_spelling_variants():
+    assert normalized_title("Зверушки") == "зверушки"
+    assert normalized_title("カキ") != normalized_title("ガキ")
+    assert normalized_title("и") != normalized_title("й")
+    assert normalized_title("猫2") != normalized_title("犬2")
+    assert normalized_title("Café") == normalized_title("Cafe")
 
 
 def test_plus_in_a_title_distinguishes_a_sequel():

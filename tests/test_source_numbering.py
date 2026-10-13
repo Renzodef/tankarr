@@ -129,6 +129,30 @@ def test_webtoon_titles_carry_the_chapter_at_the_end():
     assert title_number("Ep. 611: Gapryong Kim (2) (ch. 611) ♫") == 611
 
 
+def test_season_zero_episode_with_repeated_chapter_number_keeps_its_own_slot():
+    chapters = [
+        {"chapter": str(n), "title": f"[Season 1] Ep. {n} (ch. {n})"}
+        for n in range(75, 79)
+    ]
+    chapters += [
+        {"chapter": "78", "title": "[Season 2] Ep. 0 (ch. 78)"},
+        {"chapter": "79", "title": "[Season 2] Ep. 1 (ch. 79)"},
+    ]
+
+    renumbered = renumber_from_titles(chapters)
+
+    assert [item["chapter"] for item in renumbered] == [
+        "75",
+        "76",
+        "77",
+        "78",
+        "78.5",
+        "79",
+    ]
+    assert renumbered[4]["source_chapter"] == "78"
+    assert renumbered[4]["numbering_method"] == "title_season_opening"
+
+
 def test_unnumbered_episodes_are_ranked_without_the_announcements():
     """Tapas titles are names, not numbers, and the episode index counts
     recaps and notices; the real episodes are numbered in publication order
@@ -271,3 +295,48 @@ def test_a_chapter_zero_filed_under_a_later_book_is_a_side_story():
     assert not is_side_story("Vol.1 Chapter 0 : Prologue", "0")
     assert not is_side_story("Chapter 0", "0")
     assert not is_side_story("Vol.9 Chapter 1", "1")
+
+
+def test_an_afterword_volume_label_is_not_a_main_chapter_number():
+    assert is_special_title("Afterword to Volume 1")
+    assert is_special_title("Afterword to Example Vol. 2")
+    assert not is_special_title("Vol.1 Chapter 1: Afterword")
+    assert not is_special_title("Chapter 9: Epilogue")
+
+    rows = renumber_from_titles(
+        [
+            {"chapter": "1", "title": "Vol.1 Ch.1: Opening"},
+            {"chapter": "1", "title": "Afterword to Volume 1"},
+        ]
+    )
+    assert rows[0]["chapter"] == "1"
+    assert rows[1]["chapter"] is None
+    assert rows[1]["source_chapter"] == "1"
+    assert rows[1]["numbering_method"] == "special_title"
+
+
+@pytest.mark.parametrize("numbers", [[1, 2, 4], [1, 2, 4, 5, 6, 7]])
+def test_a_volume_afterword_preserves_explicit_chapter_gaps(numbers):
+    chapters = [
+        {"chapter": str(number), "title": f"Chapter {number}"} for number in numbers
+    ]
+    chapters.append({"chapter": "1", "title": "Afterword to Volume 1"})
+
+    renumbered = renumber_from_titles(chapters)
+
+    assert [item["chapter"] for item in renumbered[:-1]] == [
+        str(number) for number in numbers
+    ]
+    assert renumbered[-1]["chapter"] is None
+    assert renumbered[-1]["source_chapter"] == "1"
+
+
+def test_a_bare_afterword_title_keeps_source_chapter_evidence():
+    assert not is_special_title("Afterword")
+    assert not is_special_title("The Afterword of a Journey")
+    assert is_special_title("Vol. 2: Afterword")
+    rows = [
+        {"chapter": "11", "title": "Chapter 11"},
+        {"chapter": "12", "title": "Afterword"},
+    ]
+    assert [item["chapter"] for item in renumber_from_titles(rows)] == ["11", "12"]

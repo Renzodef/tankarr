@@ -74,6 +74,9 @@ a durable cancellation request to the processor, retried after connection failur
 even while fallback is disabled. Changing the destination language cancels old-language jobs.
 Already imported files remain available. Failed jobs need an explicit retry;
 temporary connection failures retry automatically with the same processor ID.
+An explicit retry starts a new attempt. Late responses, progress updates and
+results from the cancelled attempt cannot update or publish the new attempt;
+each attempt keeps its output in a separate staging directory.
 
 ## Optional external reference processor
 
@@ -127,6 +130,11 @@ leftover response markers and detected source/destination languages. These check
 can reject short or unusual text and cannot prove translation or lettering quality.
 Test your OCR/render configuration on representative pages before a large queue.
 Failed output stays outside the library for review.
+An unchanged provider answer is still refused unless a separate language check
+identifies the entire region as readable English and echoes it exactly. This
+preservation path rejects source-script text and records its evidence in the
+page checkpoint; it does not count preserved text as a translated region.
+Failed, ambiguous or malformed language checks do not release the page.
 
 ## Processor protocol, version 1
 
@@ -148,6 +156,11 @@ immutable and return cached results when the same job is submitted again.
    persists the request before acknowledging it, stops its owned work, and reports
    `cancelling` then `cancelled`. A cancelled ID cannot be submitted again; a retry
    uses the next attempt number. Cancellation must not stop unrelated work.
+
+An optional independent source reader can corroborate the book's language when
+the engine OCR lost diacritics. That evidence does not certify the translation
+of regions the second reading cannot confirm: a receipt listing unconfirmed
+source regions is refused at import until they have been corrected.
 
 Tankarr validates the receipt, archive limits and image geometry, rebuilds
 ComicInfo, and uses its existing atomic publication and recovery machinery.

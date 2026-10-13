@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 MonitorMode = Literal["all", "future", "existing", "none"]
 
@@ -21,6 +21,37 @@ class AddMangaRequest(BaseModel):
     # Sonarr-style options: one download unit per series, first search opt-out.
     series_unit: Literal["automatic", "chapters", "volumes"] = "automatic"
     search_now: bool = True
+
+
+ManualText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+
+
+class AddManualMangaRequest(BaseModel):
+    """An operator's work identity, with no implied external catalogue match."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: ManualText
+    authors: list[ManualText] = Field(default_factory=list, max_length=20)
+    original_title: ManualText | None = None
+    work_type: ManualText | None = None
+    alternate_titles: list[ManualText] = Field(default_factory=list, max_length=50)
+    original_language: str = Field(min_length=2, max_length=16)
+    language: str = Field(default="en", min_length=2, max_length=16)
+    year: int | None = Field(default=None, ge=1, le=9999, strict=True)
+    description: str = Field(default="", max_length=20000)
+    expected_book_count: int = Field(ge=1, le=100000, strict=True)
+    status: Literal["continuing", "hiatus", "ended"] | None = None
+    monitor_mode: MonitorMode = "all"
+
+    @field_validator("original_language", "language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        from tankarr.languages import normalize_language_code
+
+        return normalize_language_code(value)
 
 
 class UpdateMangaRequest(BaseModel):
@@ -71,6 +102,21 @@ class BookReadingRequest(BaseModel):
     books: list[BookReadingItem] = Field(min_length=1, max_length=500)
 
 
+class BookVerificationRequest(BaseModel):
+    """What a person checked in one imported book (see ``book_verification``).
+
+    The digest is the book's current content digest, which the listing shows: a
+    proof written against a book that has since changed is refused."""
+
+    model_config = ConfigDict(extra="forbid", coerce_numbers_to_str=True)
+
+    release_id: str | None = Field(default=None, min_length=1, max_length=512)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chapters: list[str] = Field(min_length=1, max_length=10_000)
+    source: str = Field(default="", max_length=1024)
+    note: str = Field(min_length=1, max_length=32_768)
+
+
 class ChapterMapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", coerce_numbers_to_str=True)
 
@@ -117,6 +163,7 @@ class DownloadRequest(BaseModel):
 class AddReleaseSourceRequest(BaseModel):
     provider: str = Field(min_length=2, max_length=32)
     provider_manga_id: str = Field(min_length=1, max_length=4_000)
+    prefer: bool = False
 
 
 class ChapterSearchRequest(BaseModel):

@@ -281,6 +281,21 @@ async def test_receipt_checked_and_machine_provenance_published(translation, tmp
         {"untranslated_regions": 2},
         {"translated_regions": 0},
         {"page_count": 5},
+        {
+            "source_language_reader": {
+                "unconfirmed_regions": [{"page": 1, "region": 0}],
+                "regions": [{"confirmed": False}],
+            }
+        },
+        {
+            "source_language_reader": {
+                "unconfirmed_regions": [],
+                "regions": [{"confirmed": False}],
+            }
+        },
+        {"source_language_reader": {"unconfirmed_regions": [], "regions": [None]}},
+        {"source_language_reader": {}},
+        {"source_language_reader": "invalid"},
     ],
 )
 async def test_bad_translation_never_enters_library(translation, tmp_path, receipt):
@@ -290,6 +305,25 @@ async def test_bad_translation_never_enters_library(translation, tmp_path, recei
     with pytest.raises(ValueError):
         await manager._publish(job, output, manager.directory(job) / "source.cbz")
     assert not any(item["downloaded"] for item in database.list_all_chapters("manga-1"))
+
+
+@pytest.mark.asyncio
+async def test_confirmed_independent_source_reading_can_be_published(
+    translation, tmp_path
+):
+    manager, database, _service, source = translation
+    job = stage(manager, source, tmp_path)
+    output = output_archive(
+        manager,
+        job,
+        tmp_path,
+        source_language_reader={
+            "unconfirmed_regions": [],
+            "regions": [{"page": 1, "region": 0, "confirmed": True}],
+        },
+    )
+    await manager._publish(job, output, manager.directory(job) / "source.cbz")
+    assert any(item["downloaded"] for item in database.list_all_chapters("manga-1"))
 
 
 @pytest.mark.asyncio
@@ -474,3 +508,76 @@ async def test_native_external_release_can_replace_machine_translation(
     assert result["chapter"]["provider"] == "manual"
     assert result["chapter"]["downloaded"]
     assert database.get_chapter(f"translated:{job['id']}")["provider"] == "manual"
+
+
+def retry_cancelled(manager, job):
+    manager.cancel_job(job)
+    return manager.store.update(
+        job["id"],
+        status="queued",
+        attempts=job["attempts"] + 1,
+        message="Retry requested",
+    )
+
+
+def test_cancel_retry_invalidates_old_attempt_and_its_progress(translation):
+    manager, _database, _service, source = translation
+    old = manager.store.create("manga-1", source, "en")
+    current = retry_cancelled(manager, old)
+    assert manager._current(old) is None
+    manager._update_attempt(old, status="failed", message="Late old failure")
+    manager.cancel_job(old)
+    assert manager.store.get(old["id"]) == current
+    assert manager._current(current) is not None
+    assert manager.attempt_directory(old) != manager.attempt_directory(current)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 404, 400, 500])
+async def test_late_processor_response_cannot_change_retried_job(
+    translation, tmp_path, status
+):
+    manager, _database, _service, source = translation
+    old = stage(manager, source, tmp_path)
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def delayed(_request):
+        entered.set()
+        await finish.wait()
+        return httpx.Response(status, json={"status": "completed"})
+
+    with respx.mock as mock:
+        mock.get(f"http://processor.local/jobs/{old['id']}-0").mock(side_effect=delayed)
+        task = asyncio.create_task(manager.tick())
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            current = retry_cancelled(manager, old)
+        finally:
+            finish.set()
+            await task
+        assert mock.calls.call_count == 1
+    assert manager.store.get(old["id"]) == current
+
+
+@pytest.mark.asyncio
+async def test_stale_translation_cannot_publish_after_waiting_for_mutation_lock(
+    translation, tmp_path
+):
+    manager, database, service, source = translation
+    old = stage(manager, source, tmp_path)
+    output = output_archive(manager, old, tmp_path)
+    published = manager.attempt_directory(old) / "published.cbz"
+    await service._mutation_lock.acquire()
+    task = asyncio.create_task(
+        manager._publish(old, output, manager.directory(old) / "source.cbz")
+    )
+    try:
+        async with asyncio.timeout(5):
+            while not published.exists():
+                await asyncio.sleep(0.01)
+        current = retry_cancelled(manager, old)
+    finally:
+        service._mutation_lock.release()
+        await task
+    assert manager.store.get(old["id"]) == current
+    assert not any(row["downloaded"] for row in database.list_all_chapters("manga-1"))

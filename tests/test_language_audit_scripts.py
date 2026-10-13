@@ -12,12 +12,12 @@ ENGLISH = (
 )
 
 
-def _fake_run(osd_script: str, text: str):
+def _fake_run(osd_script: str, text: str, *, confidence: float = 6.0):
     def run(command, **_kwargs):
         if "osd" in command:
             return SimpleNamespace(
                 returncode=0,
-                stdout=f"Script: {osd_script}\nScript confidence: 6.0\n",
+                stdout=f"Script: {osd_script}\nScript confidence: {confidence}\n",
                 stderr="",
             )
         return SimpleNamespace(returncode=0, stdout=text, stderr="")
@@ -66,6 +66,98 @@ def test_a_script_guess_still_refuses_when_the_text_gives_no_english_signal(
 
     assert evidence["verdict"] == "refused"
     assert evidence["reason"] == "Sampled pages use a non-Latin alphabet"
+
+
+def test_weak_script_guess_with_noisy_all_caps_english_requires_review(
+    tmp_path, monkeypatch
+):
+    dialogue = (
+        "WE WERE OUT THERE AND NOW WE CAN SEE THE WAY HOME. "
+        "YOU KNOW WHAT THEY WANT AND WHERE THEY WENT. "
+    )
+    noisy_artwork = " x y z " * 100
+
+    def run(command, **_kwargs):
+        if "osd" in command:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="Script: Cyrillic\nScript confidence: 3.33\n",
+                stderr="",
+            )
+        page = int(command[1].rsplit("sample-", 1)[1].split(".", 1)[0])
+        text = dialogue + noisy_artwork if page < 3 else noisy_artwork
+        return SimpleNamespace(returncode=0, stdout=text, stderr="")
+
+    monkeypatch.setattr(language_audit.shutil, "which", lambda _name: "tesseract")
+    monkeypatch.setattr(language_audit.subprocess, "run", run)
+
+    evidence = language_audit.audit_english_pages(_pages(tmp_path), detect_scripts=True)
+    decision = language_audit.automatic_english_decision(
+        evidence,
+        declared_language="en",
+        expected_language="en",
+        names=["Example [English]"],
+    )
+
+    assert evidence["poor_english_signal"] is True
+    assert evidence["foreign_letter_count"] == 0
+    assert evidence["foreign_script_detected"] is False
+    assert evidence["verdict"] == "review"
+    assert "weak script guess" in evidence["script_note"]
+    assert decision["verdict"] == "review"
+
+
+def test_confident_script_guess_without_foreign_letters_stays_manual_review(
+    tmp_path, monkeypatch
+):
+    # Stylized English lettering can produce a confident but wrong OSD script
+    # guess. OCR fragments remain inconclusive and must still require review.
+    noise = (
+        "CT Wet MD A i ta Be NM aD whim x al a a ko I HT Fe SS d oa al Ne "
+        "be ars RE wb ih hk held a BY hy zg be Ww i Ml VJ MI ial Xl bd Se "
+        "Ser Wo AS xe LD WA ERS yuan A AN ne w wk We age WAN te t AN "
+    ) * 3
+    monkeypatch.setattr(language_audit.shutil, "which", lambda _name: "tesseract")
+    monkeypatch.setattr(
+        language_audit.subprocess,
+        "run",
+        _fake_run("Cyrillic", noise, confidence=6.41),
+    )
+
+    evidence = language_audit.audit_english_pages(_pages(tmp_path), detect_scripts=True)
+    decision = language_audit.automatic_english_decision(
+        evidence,
+        declared_language="en",
+        expected_language="en",
+        names=["MangaDex English scanlation"],
+    )
+
+    assert evidence["foreign_letter_count"] == 0
+    assert evidence["poor_english_signal"] is True
+    assert evidence["foreign_script_detected"] is False
+    assert evidence["verdict"] == "review"
+    assert "manual review required" in evidence["script_note"]
+    assert decision["verdict"] == "review"
+    assert decision["basis"] == "ocr_noise"
+
+
+def test_weak_script_guess_still_refuses_detected_foreign_letters(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(language_audit.shutil, "which", lambda _name: "tesseract")
+    monkeypatch.setattr(
+        language_audit.subprocess,
+        "run",
+        _fake_run(
+            "Cyrillic", "WE WERE THERE AND WE CAN SEE. Привет мир", confidence=3.33
+        ),
+    )
+
+    evidence = language_audit.audit_english_pages(_pages(tmp_path), detect_scripts=True)
+
+    assert evidence["foreign_letter_count"] >= 3
+    assert evidence["foreign_script_detected"] is True
+    assert evidence["verdict"] == "refused"
 
 
 def test_a_script_guess_on_pages_the_ocr_could_not_read_refuses_nothing(
@@ -178,9 +270,11 @@ def test_the_same_script_on_two_pages_still_refuses_the_book(tmp_path, monkeypat
     monkeypatch.setattr(
         language_audit.shutil, "which", lambda _name: "/usr/bin/tesseract"
     )
+    # No English dialogue: noisy English fragments remain reviewable under
+    # the existing audit rules, covered by the dedicated test above.
     guesses = [("Japanese", 4.2), ("Arabic", 0.5), ("Japanese", 2.5)]
     monkeypatch.setattr(
-        language_audit.subprocess, "run", _guessing_run(guesses, NOISE * 3)
+        language_audit.subprocess, "run", _guessing_run(guesses, "ka ta na")
     )
 
     evidence = language_audit.audit_english_pages(_pages(tmp_path), detect_scripts=True)

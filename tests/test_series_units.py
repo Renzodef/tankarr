@@ -117,7 +117,7 @@ def test_exact_mixed_groups_keep_sources_and_compute_safe_duplicate_files():
     assert result["unassigned_chapters"][0]["volume"] is None
 
 
-def test_absent_optional_specials_do_not_enter_book_counts_but_owned_ones_do():
+def test_optional_specials_never_enter_book_rows_or_counts():
     work = manga(
         series_unit_override="chapters",
         expected_count_override=2,
@@ -137,9 +137,8 @@ def test_absent_optional_specials_do_not_enter_book_counts_but_owned_ones_do():
     owned = build_series_units(
         work, metadata, [*main, chapter("1.5", volume=None)], mapping
     )["books"][0]
-    assert [row["chapter"] for row in owned["chapters"]] == ["1", "1.5", "2"]
-    assert owned["chapter_count"] == owned["downloaded_chapter_count"] == 3
-    assert owned["chapters"][1]["special"] and owned["chapters"][1]["downloaded"]
+    assert [row["chapter"] for row in owned["chapters"]] == ["1", "2"]
+    assert owned["chapter_count"] == owned["downloaded_chapter_count"] == 2
 
 
 def test_hints_only_use_flat_books_and_chapters_without_covering_or_badges():
@@ -384,8 +383,8 @@ def test_unmapped_downloaded_files_are_preserved_but_pending_prologues_stay_hidd
     )
     assert {
         file["id"] for row in result["unassigned_chapters"] for file in row["files"]
-    } == {"unknown", "chapter-7.5"}
-    assert len(result["unassigned_chapters"]) == 2
+    } == {"unknown"}
+    assert len(result["unassigned_chapters"]) == 1
     assert all(not row["missing"] for row in result["unassigned_chapters"])
 
 
@@ -641,18 +640,16 @@ def test_mapped_side_stories_keep_their_books_without_inflating_chapter_count():
     index = build_chapter_index(item, metadata, rows, chapter_map=entries)
     assert index["read_chapter_count"] == 2
     assert index["expected_available_count"] == 2
-    assert index["additional_content"] == {"prologues": 0, "extras": 2}
+    assert "additional_content" not in index
     result = apply_series_form(
         build_series_units(item, metadata, rows, entries), item, metadata
     )
     assert result["expected_chapter_count"] == 2
-    assert result["map_confidence"]["level"] == "exact"
+    assert result["map_confidence"]["level"] == "partial"
     assert [[s["chapter"] for s in b["chapters"]] for b in result["books"]] == [
-        ["1", "2", "2.1"],
-        ["2.2"],
+        ["1", "2"],
+        [],
     ]
-    extras = [s for b in result["books"] for s in b["chapters"] if s["special"]]
-    assert len(extras) == 2 and all(not s["expected"] for s in extras)
     assert not result["unassigned_chapters"]
 
 
@@ -703,7 +700,7 @@ def test_mapped_parts_count_once_and_do_not_create_empty_unassigned_parents():
     index = build_chapter_index(item, metadata, rows, chapter_map=entries)
     assert index["read_chapter_count"] == 5
     assert index["expected_available_count"] == 5
-    assert index["additional_content"] == {"prologues": 0, "extras": 0}
+    assert "additional_content" not in index
     result = build_series_units(item, metadata, rows, entries)
     assert result["expected_chapter_count"] == 5
     assert result["unassigned_chapters"] == []
@@ -767,3 +764,107 @@ def test_a_file_on_disk_past_the_end_still_keeps_its_row():
     """The guard drops an aggregator's error, never a file you own."""
 
     assert "487" in _numbers(_units_with_end(owned_past=True))
+
+
+@pytest.mark.parametrize("owned", [False, True])
+def test_explicit_edition_end_cannot_reopen_an_excluded_chapter(owned):
+    result = build_series_units(
+        manga(
+            series_unit_override="chapters",
+            status="ended",
+            expected_count_override=5,
+            expected_count_unit_override="chapter",
+        ),
+        {"status": "ended", "chapter_count": 5},
+        [chapter(n) for n in range(1, 6)] + [chapter(487, downloaded=owned)],
+        [MapEntry(("1",), ("1", "2", "3", "4", "5", "487"), False, "catalogue")],
+    )
+
+    assert result["expected_chapter_count"] == 5
+    assert _numbers(result) == {"1", "2", "3", "4", "5"}
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://www.webtoons.com/",
+        "https://tapas.io/series/example",
+        "https://comic.naver.com/webtoon/list?titleId=1",
+    ],
+)
+def test_platform_link_preserves_owned_printed_edition_coverage(link):
+    from tankarr.series_form import apply_series_form
+
+    work = manga(series_unit_override="chapters")
+    metadata = {
+        "status": "ended",
+        "content_kind": "manga",
+        "volume_count": 13,
+        "chapter_count": 128,
+        "official_links": [{"url": link}],
+    }
+    releases = [
+        *[book(n) for n in range(1, 14)],
+        *[chapter(n, downloaded=False, volume=None) for n in range(1, 129)],
+    ]
+    built = build_series_units(work, metadata, releases, [])
+    slots = built["unassigned_chapters"]
+    assert len(slots) == 128
+    assert all(slot["covered_unmapped"] and not slot["missing"] for slot in slots)
+    assert not any(slot["coverage_exact"] for slot in slots)
+    result = apply_series_form(built, work, metadata)
+    assert result["form"] == "volumes"
+    assert sum(book["owned"] for book in result["books"]) == 13
+    assert not any(
+        slot["missing"]
+        for slot in [
+            *result["unassigned_chapters"],
+            *[slot for book in result["books"] for slot in book["chapters"]],
+        ]
+    )
+
+
+def test_printed_edition_with_platform_link_agrees_with_wanted_and_acquisition(
+    tmp_path,
+):
+    from tests.test_deletion import make_service
+
+    database, service, _reader = make_service(tmp_path)
+    work = manga(provider="catalogue", authors=[])
+    database.upsert_manga(work, "en", "all")
+    metadata = {
+        "status": "ended",
+        "content_kind": "manga",
+        "volume_count": 13,
+        "chapter_count": 128,
+        "official_links": [{"url": "https://www.webtoons.com/"}],
+    }
+    database.save_series_metadata(
+        "series",
+        metadata,
+        artwork_path=None,
+        artwork_sha256=None,
+        artwork_media_type=None,
+        source_status=[],
+    )
+    rows = [
+        *[book(n, downloaded=False) for n in range(1, 14)],
+        *[chapter(n, downloaded=False, volume=None) for n in range(1, 129)],
+    ]
+    database.upsert_chapters("series", rows)
+    for number in range(1, 14):
+        database.mark_chapter_downloaded(
+            f"book-{number}", tmp_path / f"book-{number}.cbz"
+        )
+    units = load_series_units(database, "series")
+    assert units["form"] == "volumes"
+    assert not any(
+        slot["missing"]
+        for slot in [
+            *units["unassigned_chapters"],
+            *[slot for book in units["books"] for slot in book["chapters"]],
+        ]
+    )
+    assert database.preferred_download_candidates("series") == []
+    assert service.list_wanted() == []
+    database.close()

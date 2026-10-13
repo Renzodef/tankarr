@@ -54,7 +54,6 @@ from tankarr.comicinfo import build_comic_info
 from tankarr.config import Settings
 from tankarr.database import (
     Database,
-    ReleaseBlocked,
     local_release_identity,
     local_series_identity,
 )
@@ -87,6 +86,7 @@ from tankarr.official_numbering import (
     surplus_downloads,
 )
 from tankarr.providers.base import (
+    RETRYABLE_STATUS_CODES,
     Provider,
     ProviderRequestError,
     ProviderUnavailableError,
@@ -96,7 +96,6 @@ from tankarr.redaction import redact_secrets
 from tankarr.series_summary import publication_summary
 from tankarr.series_unit import normalize_series_unit, resolve_series_unit
 from tankarr.source_circuit import source_gate_key
-from tankarr.source_numbering import is_special_title, is_unpublished
 from tankarr.source_ranking import (
     beyond_frontier,
     official_frontier,
@@ -317,8 +316,8 @@ class LibraryRelocation:
 def catalogue_future_monitoring(manga: dict[str, Any]) -> tuple[bool, str]:
     """Catalogue works are always monitorable, like Sonarr series.
 
-    An ended work is not frozen: a late special, an extra volume or a new
-    edition still appears on the sources, and monitoring is what catches
+    An ended work is not frozen: a new chapter, volume or edition can still
+    appear on the sources, and monitoring is what catches
     it. The status only lowers how often the work is refreshed.
     """
 
@@ -581,6 +580,62 @@ class TankarrService:
             self.database.record_monitor_result(saved["id"])
             return self.database.get_manga(saved["id"])
 
+    async def add_manual_series(
+        self, record: dict[str, Any], language: str, monitor_mode: str
+    ) -> dict[str, Any]:
+        """Create an empty local work; expected books are slots, never files."""
+        from tankarr.models import AddManualMangaRequest
+
+        request = AddManualMangaRequest.model_validate(
+            {**record, "language": language, "monitor_mode": monitor_mode}
+        )
+        identity = local_series_identity(request.title, request.authors)
+        async with self._mutation_lock:
+            self.assert_mutations_allowed()
+            for existing in self.database.list_manga():
+                if (
+                    local_series_identity(
+                        existing.get("source_title") or existing["title"],
+                        existing.get("source_authors") or existing.get("authors", []),
+                    )
+                    == identity
+                ):
+                    raise ValueError(f"{existing['title']} is already in the library")
+            manga_id = f"local-{identity[:32]}"
+            try:
+                self.database.get_manga(manga_id)
+            except KeyError:
+                pass
+            else:
+                raise ValueError("Local series identity is already in use")
+            manga = {
+                "id": manga_id,
+                "provider": "local",
+                "title": request.title,
+                "authors": request.authors,
+                "description": request.description,
+                "original_language": request.original_language,
+                "year": request.year,
+                "status": request.status,
+                "last_volume": str(request.expected_book_count),
+                "available_languages": [request.language],
+            }
+            self.database.upsert_manga(manga, request.language, request.monitor_mode)
+            self.database.set_manual_metadata(manga_id, request.model_dump())
+            self.database.update_manga(
+                manga_id,
+                {
+                    "series_unit_override": "volumes",
+                    "expected_count_override": request.expected_book_count,
+                    "expected_count_unit_override": "volume",
+                },
+            )
+            self.database.set_future_monitoring_capability(
+                manga_id, allowed=False, reason="No download source linked yet"
+            )
+            self.database.record_monitor_result(manga_id)
+            return self.database.get_manga(manga_id)
+
     ADOPTION_MIN_CONFIDENCE = 0.85
 
     def adopt_catalogue_identities(self) -> dict[str, Any]:
@@ -594,7 +649,7 @@ class TankarrService:
         adopted: list[str] = []
         skipped: list[str] = []
         for manga in self.database.list_manga():
-            if manga.get("provider") != "local":
+            if manga.get("provider") != "local" or manga.get("manual_metadata"):
                 continue
             manga_id = str(manga["id"])
             metadata_row = self.database.get_series_metadata(manga_id)
@@ -698,10 +753,12 @@ class TankarrService:
             resolved = dict(manga)
             if matches:
                 current = matches[0]
-                if current.get("provider") == "catalogue":
-                    # This exact work began as, or is now the unique canonical
-                    # target for, the local identity. Do not reset its catalogue
-                    # monitor settings while preparing another local book.
+                if current.get("provider") == "catalogue" or current.get(
+                    "manual_metadata"
+                ):
+                    # Preserve an established catalogue or manual identity,
+                    # including its monitoring and expected counts, while
+                    # preparing another local book.
                     current["_local_import_target"] = True
                     return current
                 resolved["id"] = current["id"]
@@ -1180,7 +1237,10 @@ class TankarrService:
         volume = canonical_number(existing.get("volume"))
         if volume is None:
             return False
-        reasons = suspect_volume_reasons(self.database.list_all_chapters(manga_id))
+        reasons = suspect_volume_reasons(
+            self.database.list_all_chapters(manga_id),
+            chapter_map=self.database.chapter_map(manga_id),
+        )
         return "another edition or a wrong split" in str(reasons.get(str(volume)) or "")
 
     def _replace_assembled_import_locked(
@@ -2171,8 +2231,9 @@ class TankarrService:
     ) -> dict[str, Any] | None:
         """Decide a length refusal: waived, corroborated, or recorded and kept.
 
-        Shape (un-sliced strips) is never waived: nobody can read them. A
-        length shortfall is waived when the operator said "download anyway",
+        Shape, black-card and resolution refusals are never waived. An
+        unknown refusal is also kept: only a measured length shortfall is
+        waived when the operator said "download anyway",
         or when another source's copy of the same chapter measures the same
         - two sources agreeing is the chapter being short, not two fragments.
         A refusal that stands is recorded with its measurement, so the next
@@ -2181,8 +2242,7 @@ class TankarrService:
 
         manga_id = str(manga["id"])
         chapter_id = str(chapter["id"])
-        shape_refusal = "taller than they are wide" in str(quality.get("reason") or "")
-        if shape_refusal:
+        if quality.get("refusal_kind") != "length":
             self.database.record_page_quality(
                 manga_id, chapter_id, verdict=page_quality.REFUSED, assessment=quality
             )
@@ -2210,6 +2270,8 @@ class TankarrService:
     ) -> str | None:
         """The other source whose copy of this chapter has the same length."""
 
+        if quality.get("refusal_kind") != "length":
+            return None
         height = float(quality.get("normalized_height") or 0)
         if height <= 0:
             return None
@@ -2230,6 +2292,13 @@ class TankarrService:
                 continue
             record = measured.get(sibling_id)
             if not record:
+                continue
+            # A matching height alone does not prove a sound copy. Unknown
+            # historical refusals and non-length failures cannot corroborate.
+            if record.get("verdict") != page_quality.OK and not (
+                record.get("verdict") in (page_quality.DEGRADED, page_quality.REFUSED)
+                and record.get("refusal_kind") == "length"
+            ):
                 continue
             try:
                 sibling = self.database.get_chapter(sibling_id)
@@ -2817,6 +2886,7 @@ class TankarrService:
         )
         return self.database.source_ranking.best(
             candidates,
+            preferred_source=manga.get("preferred_source_key"),
             official_hosts=hosts,
             demoted_sources=demoted,
             health=self.database.source_health_components(),
@@ -2864,6 +2934,7 @@ class TankarrService:
             return None
         return self.database.source_ranking.best(
             siblings,
+            preferred_source=manga.get("preferred_source_key"),
             official_hosts=hosts,
             demoted_sources=demoted,
             health=self.database.source_health_components(),
@@ -2922,139 +2993,7 @@ class TankarrService:
                     logger.warning(
                         "Skipped release %s of %s: %s", chapter["id"], manga_id, exc
                     )
-            jobs.extend(self._observed_special_download_jobs_locked(manga, chapter_ids))
             return jobs
-
-    def _observed_special_download_jobs_locked(
-        self, manga: dict[str, Any], chapter_ids: list[str] | None
-    ) -> list[dict[str, Any]]:
-        mode = str(manga.get("monitor_mode") or "none")
-        if mode not in BACKLOG_MONITOR_MODES and not (mode == "future" and chapter_ids):
-            return []
-        manga_id = str(manga["id"])
-        language = str(manga["preferred_language"])
-        candidates = self._offered_optional_special_candidates_locked(
-            manga, chapter_ids
-        )
-        if not candidates:
-            return []
-        releases = self.database.list_chapters(manga_id, language)
-        scoped = volume_scoped_numbering(releases)
-        by_id = {str(release["id"]): release for release in releases}
-        active = {
-            logical_release_key(by_id[str(job["chapter_id"])], volume_scoped=scoped)
-            for job in self.database.list_jobs(
-                limit=500,
-                statuses=("queued", "running", "downloading", "packaging", "importing"),
-                manga_id=manga_id,
-            )
-            if str(job["chapter_id"]) in by_id
-        }
-        jobs: list[dict[str, Any]] = []
-        for key, chosen in candidates.items():
-            if key in active:
-                continue
-            try:
-                jobs.append(
-                    self.database.create_job(
-                        manga_id, str(chosen["id"]), language, origin="monitor"
-                    )
-                )
-            except (ValueError, ReleaseBlocked) as exc:
-                logger.info("Skipped optional special %s: %s", chosen["id"], exc)
-        return jobs
-
-    def _offered_optional_special_candidates_locked(
-        self,
-        manga: dict[str, Any],
-        chapter_ids: list[str] | None = None,
-        *,
-        include_queued_future: bool = False,
-    ) -> dict[tuple[str, str], dict[str, Any]]:
-        """Rank real extra offers; absence never creates a catalogue slot."""
-
-        if manga.get("library_status_override") == "up_to_date":
-            return {}
-        mode = str(manga.get("monitor_mode") or "none")
-        if mode not in BACKLOG_MONITOR_MODES and mode != "future":
-            return {}
-        manga_id = str(manga["id"])
-        language = str(manga["preferred_language"])
-        releases = self.database.list_chapters(manga_id, language)
-
-        def is_optional_offer(release: dict[str, Any]) -> bool:
-            label = canonical_number(release.get("chapter"))
-            if is_special_title(str(release.get("title") or "")):
-                return True
-            if label is None:
-                return False
-            try:
-                return Decimal(label) % 1 == Decimal("0.5")
-            except InvalidOperation:
-                return False
-
-        if not any(is_optional_offer(release) for release in releases):
-            return {}
-        metadata_row = self.database.get_series_metadata(manga_id)
-        metadata = (metadata_row or {}).get("data") or {}
-        index = build_chapter_index(
-            manga,
-            metadata,
-            releases,
-            chapter_map=self.database.chapter_map(manga_id),
-        )
-        # Whole books already include their side pages.
-        if index["unit"] != "chapter":
-            return {}
-        canonical_ids = {
-            str(release["id"])
-            for slot in index["slots"]
-            if slot["expected"]
-            for release in slot.get("releases") or []
-        }
-        scoped = volume_scoped_numbering(releases)
-        owned = {
-            logical_release_key(release, volume_scoped=scoped)
-            for release in releases
-            if release.get("downloaded") and is_optional_offer(release)
-        }
-        requested = set(chapter_ids or [])
-        blocked = self.database.blocked_releases(manga_id)
-        grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-        for release in releases:
-            identifier = str(release["id"])
-            if (
-                identifier in canonical_ids
-                or release.get("downloaded")
-                or not is_optional_offer(release)
-                or not release.get("monitored")
-                or is_unpublished(release)
-                or identifier in blocked
-                or not self.can_download_release(release)
-                or (
-                    mode == "future"
-                    and not include_queued_future
-                    and identifier not in requested
-                )
-            ):
-                continue
-            key = logical_release_key(release, volume_scoped=scoped)
-            if key not in owned:
-                grouped[key].append(release)
-        hosts = official_hosts(metadata.get("official_links"), language=language)
-        demoted = self.database.demoted_sources(manga_id)
-        health = self.database.source_health_components()
-        chosen_releases: dict[tuple[str, str], dict[str, Any]] = {}
-        for key, candidates in grouped.items():
-            chosen = self.database.source_ranking.best(
-                candidates,
-                official_hosts=hosts,
-                demoted_sources=demoted,
-                health=health,
-            )
-            if chosen is not None:
-                chosen_releases[key] = chosen
-        return chosen_releases
 
     def _chapters_covered_by_books(self, manga: dict[str, Any]) -> set[int]:
         """Integer chapters that owned books cover (map or declared edition).
@@ -3109,26 +3048,6 @@ class TankarrService:
             selected_id = str(candidate["id"])
             if queued.get(int(job_id)) != selected_id:
                 replacements[int(job_id)] = selected_id
-        manga = self.database.get_manga(manga_id)
-        optional = self._offered_optional_special_candidates_locked(
-            manga, include_queued_future=True
-        )
-        if optional:
-            releases = self.database.list_chapters(
-                manga_id, str(manga["preferred_language"])
-            )
-            scoped = volume_scoped_numbering(releases)
-            by_id = {str(release["id"]): release for release in releases}
-            for job_id, release_id in queued.items():
-                release = by_id.get(release_id)
-                if release is None or job_id in manual_job_ids:
-                    continue
-                key = logical_release_key(release, volume_scoped=scoped)
-                if chosen := optional.get(key):
-                    eligible_job_ids.add(job_id)
-                    selected_id = str(chosen["id"])
-                    if release_id != selected_id:
-                        replacements[job_id] = selected_id
         changed = self.database.retarget_queued_jobs(manga_id, replacements)
         for job_id in sorted(set(queued) - eligible_job_ids):
             try:
@@ -3157,13 +3076,7 @@ class TankarrService:
             )
         ):
             return True
-        manga = self.database.get_manga(manga_id)
-        return any(
-            str(candidate["id"]) == chapter_id
-            for candidate in self._offered_optional_special_candidates_locked(
-                manga, include_queued_future=True
-            ).values()
-        )
+        return False
 
     async def rerank_queued_jobs(self, manga_id: str) -> int:
         """Refresh queued release choices without interrupting active work."""
@@ -3711,13 +3624,17 @@ class TankarrService:
                     if unblocked:
                         chosen = self.database.source_ranking.best(
                             unblocked,
+                            preferred_source=manga.get("preferred_source_key"),
                             official_hosts=hosts,
                             demoted_sources=demoted,
                             health=health,
                         )
                     else:
                         chosen = self.database.source_ranking.best(
-                            monitored_releases, official_hosts=hosts, health=health
+                            monitored_releases,
+                            official_hosts=hosts,
+                            health=health,
+                            preferred_source=manga.get("preferred_source_key"),
                         )
                     if chosen is None:
                         unit = (
@@ -6759,6 +6676,40 @@ class TankarrService:
     ) -> dict[str, Any] | None:
         """The download that keeps a contested library name, or None."""
 
+        volume_claims = all(
+            str(chapter.get("release_unit") or "chapter") == "volume"
+            for chapter, _source in claims
+        )
+        if volume_claims:
+            identities = {
+                (
+                    str(chapter.get("manga_id") or ""),
+                    str(chapter.get("language") or ""),
+                    str(chapter.get("volume") or ""),
+                )
+                for chapter, _source in claims
+            }
+            if len(identities) != 1 or not all(next(iter(identities))):
+                return None
+            # A volume number alone cannot prove two editions interchangeable.
+            # Compare every ordered image, ignoring only container metadata.
+            fingerprints = set()
+            try:
+                for chapter, source in claims:
+                    expected = self._expected_library_digest(chapter)
+                    if (
+                        source.is_symlink()
+                        or not source.is_file()
+                        or not expected
+                        or sha256(source) != expected
+                    ):
+                        return None
+                    fingerprints.add(self._local_cbz_content_sha256(source))
+            except (OSError, ValueError, zipfile.BadZipFile, LocalImportConflict):
+                return None
+            if len(fingerprints) != 1:
+                return None
+
         # Only copies of one chapter can be duplicates of each other. When the
         # claims name different chapters the filename collapsed instead, and
         # deleting the loser would destroy content nothing else holds: report
@@ -6768,7 +6719,7 @@ class TankarrService:
             str(chapter.get("canonical_chapter") or chapter.get("chapter") or "")
             for chapter, _source in claims
         }
-        if len(numbers) > 1 or "" in numbers:
+        if not volume_claims and (len(numbers) > 1 or "" in numbers):
             return None
 
         settled = [
@@ -8409,8 +8360,14 @@ class TankarrService:
             return None
         return replacement_path
 
+    async def discard_download_staging(self, job_id: int) -> None:
+        """Discard private partial pages after a job has stopped or been removed."""
+        work_dir = self.settings.staging_dir / f"job-{job_id}"
+        await asyncio.to_thread(shutil.rmtree, work_dir, ignore_errors=True)
+
     async def process_download_job(self, job_id: int) -> None:
         work_dir: Path | None = None
+        retain_download_pages = False
         destination: Path | None = None
         # Read the retry ledger while the job is still queued. Claiming the job
         # replaces its operator-facing message with "Preparing download".
@@ -8639,7 +8596,7 @@ class TankarrService:
             superseded = str(job.get("supersedes_chapter_id") or "")
             async with self._mutation_lock:
                 self.assert_mutations_allowed()
-                destination = await asyncio.to_thread(
+                destination = await self._finish_import_thread(
                     self._publish_download_import_locked,
                     str(chapter["id"]),
                     cbz_path,
@@ -8735,10 +8692,21 @@ class TankarrService:
                         isinstance(exc, ProviderUnavailableError)
                         or getattr(exc, "transient", False) is True
                         or type(exc).__name__ in self.TRANSIENT_FAILURE_NAMES
+                        or (
+                            isinstance(exc, ProviderRequestError)
+                            and (
+                                exc.status_code in RETRYABLE_STATUS_CODES
+                                or (
+                                    exc.status_code is None
+                                    and isinstance(
+                                        exc.__cause__, ProviderUnavailableError
+                                    )
+                                )
+                            )
+                        )
                     ) and transient_attempt <= self.TRANSIENT_RETRIES:
-                        # The source engine was unreachable (a restart, a
-                        # timeout): the release is fine. Give it a moment and
-                        # queue the job again instead of failing it.
+                        # Retry a temporary engine or page-transfer failure
+                        # within the existing bound, retaining verified pages.
                         self.database.update_job(
                             job_id,
                             status="queued",
@@ -8757,6 +8725,7 @@ class TankarrService:
                                 f"retrying: {failure_detail}"
                             )[:500],
                         )
+                        retain_download_pages = True
                     else:
                         self.database.update_job(
                             job_id,
@@ -8780,7 +8749,7 @@ class TankarrService:
             if failed_detail is not None:
                 await self.notifier.job_failed(manga["title"], failed_detail)
         finally:
-            if work_dir and work_dir.exists():
+            if work_dir and work_dir.exists() and not retain_download_pages:
                 await asyncio.to_thread(shutil.rmtree, work_dir, ignore_errors=True)
 
     async def _complete_recovered_import(
@@ -8826,7 +8795,7 @@ class TankarrService:
             ) from exc
         async with self._mutation_lock:
             self.assert_mutations_allowed()
-            destination = await asyncio.to_thread(
+            destination = await self._finish_import_thread(
                 self._recover_download_import_locked,
                 job_id,
                 str(chapter["id"]),

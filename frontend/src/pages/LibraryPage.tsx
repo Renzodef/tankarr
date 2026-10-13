@@ -16,7 +16,7 @@ import {
   useApp,
   useAppActions,
 } from "../components";
-import { additionalContentLabel, libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
+import { libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
 import type { Manga } from "../types";
 import { workYears } from "../workYears";
 import { t, tn } from "../i18n";
@@ -359,27 +359,22 @@ export default function LibraryPage() {
             const publication = publicationStatus(manga);
             const availability = libraryStatus(manga);
             const counts = seriesCounts(manga);
-            // The series is followed in one unit and counted in it; the other
-            // unit still says how large the work is, and a card that shows
-            // only one of the two hides half the answer.
-            //
-            // Books first, then chapters, whichever unit the series is
-            // followed in. Ordering them by the followed unit makes the shelf
-            // unreadable - the eye cannot compare cards whose fields move -
-            // and it put Moonlight Mile's two counts side by side as
-            // "24 / ? chapters · 24 books", which reads as 24 of 24.
-            // "141 / 147 chapters": the noun follows the total, the count on
-            // the shelf comes first.
+            // A continuing work followed by chapters shows only its current
+            // chapter run. Bound volumes are an alternate edition, not a
+            // second completion target while the story is still publishing.
+            // Other works retain both extents, with books first for scanning.
             const books = (count: number) => tn(count, "book", "books");
             const chapters = (count: number) => tn(count, "chapter", "chapters");
             const extent = counts.reference_unknown ? "?" : counts.total_count;
             const tracked = `${counts.downloaded_count} / ${extent}`;
             const other =
               counts.unit === "volume" ? counts.chapter_progress : counts.volume_progress;
+            const continuingChapterRun = counts.unit === "chapter"
+              && (publication.key === "continuing" || publication.key === "hiatus");
             const booksPart =
               counts.unit === "volume"
                 ? `${tracked} ${books(counts.total_count)}`
-                : other
+                : other && !continuingChapterRun
                   ? `${other.expected} ${books(other.expected)}`
                   : "";
             const chaptersPart =
@@ -413,7 +408,6 @@ export default function LibraryPage() {
                     title={availability.title}
                   >
                     {chapterLabel}
-                    {additionalContentLabel(counts) ? ` + ${additionalContentLabel(counts)}` : ""}
                   </span>
                 </div>
                 <div className="poster-byline">

@@ -89,6 +89,7 @@ class TorrentManager:
         # Direct downloads Tankarr performs itself, by job id.
         self._direct_tasks: dict[int, asyncio.Task[None]] = {}
         self.task: asyncio.Task[None] | None = None
+        self._stopping = False
         self.last_poll_at: str | None = None
         self.last_error: str | None = None
         self.last_orphan_sweep: dict[str, Any] | None = None
@@ -123,15 +124,23 @@ class TorrentManager:
     async def start(self) -> None:
         if self.task is not None and not self.task.done():
             return
+        self._stopping = False
         self.task = asyncio.create_task(self._run(), name="tankarr-torrent-monitor")
 
     async def stop(self) -> None:
-        if self.task is None:
-            return
-        self.task.cancel()
-        with suppress(asyncio.CancelledError):
-            await self.task
-        self.task = None
+        self._stopping = True
+        try:
+            if self.task is not None:
+                self.task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self.task
+                self.task = None
+        finally:
+            tasks = list(self._direct_tasks.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._direct_tasks.clear()
 
     async def _run(self) -> None:
         while True:
@@ -181,9 +190,7 @@ class TorrentManager:
         if self.completed_action != "remove_when_seeded":
             return 0
         removed = 0
-        for job in self.database.list_torrent_downloads(
-            statuses=("imported",), limit=200
-        ):
+        for job in self.database.iter_torrent_cleanup():
             if str(job.get("qbit_state") or "").casefold() == "removed":
                 continue
             if (job.get("language_evidence") or {}).get("translation_request"):
@@ -192,15 +199,23 @@ class TorrentManager:
                     continue
             if str(job.get("protocol") or "torrent") in {"usenet", DIRECT_PROTOCOL}:
                 continue
-            current = await self.qbittorrent.torrent_info(job["info_hash"])
-            if current is None:
-                self.database.update_torrent_download(job["id"], qbit_state="removed")
-                continue
-            if str(current.get("state") or "").casefold() in SEEDED_QBIT_STATES:
-                await self._remove_from_client(
-                    job, "seeding finished, removed from qBittorrent"
+            try:
+                current = await self.qbittorrent.torrent_info(job["info_hash"])
+                if current is None:
+                    self.database.update_torrent_download(
+                        job["id"], qbit_state="removed"
+                    )
+                    continue
+                self._assert_managed_category(job, current)
+                if str(current.get("state") or "").casefold() in SEEDED_QBIT_STATES:
+                    await self._remove_from_client(
+                        job, "seeding finished, removed from qBittorrent"
+                    )
+                    removed += 1
+            except QBitTorrentError as exc:
+                self.database.update_torrent_download(
+                    job["id"], message=redact_secrets(str(exc))[:500]
                 )
-                removed += 1
         return removed
 
     async def _recycle_rejected_payload(self, job: dict[str, Any]) -> dict[str, Any]:
@@ -828,56 +843,67 @@ class TorrentManager:
                 statuses=POLLABLE_STATUSES, limit=500
             ):
                 checked += 1
-                if self._is_direct(job):
-                    updated = await self._poll_direct(job)
-                    if (
-                        updated is not None
-                        and updated["status"] == "completed"
-                        and self.settings.torrent_auto_import
+                try:
+                    if self._is_direct(job):
+                        updated = await self._poll_direct(job)
+                        if (
+                            updated is not None
+                            and updated["status"] == "completed"
+                            and self.settings.torrent_auto_import
+                        ):
+                            result = await self._import(
+                                updated, {}, confirm_language=False
+                            )
+                            imported += int(result["status"] == "imported")
+                        continue
+                    if str(job.get("protocol") or "torrent") == "usenet":
+                        updated = await self._poll_usenet(job)
+                        if (
+                            updated is not None
+                            and updated["status"] == "completed"
+                            and self.settings.torrent_auto_import
+                            and self.sabnzbd is not None
+                            and self.sabnzbd.import_ready
+                        ):
+                            result = await self._import(
+                                updated,
+                                updated.get("_state") or {},
+                                confirm_language=False,
+                            )
+                            imported += int(result["status"] == "imported")
+                        continue
+                    current = await self.qbittorrent.torrent_info(job["info_hash"])
+                    if current is None:
+                        # Deleted by hand in qBittorrent: the job fails and is not
+                        # re-grabbed automatically; Retry re-adds the same release.
+                        self.database.update_torrent_download(
+                            job["id"],
+                            status="failed",
+                            qbit_state="removed",
+                            message=REMOVED_EXTERNALLY,
+                        )
+                        continue
+                    updated = self._record_qbit_state(job, current)
+                    if updated["status"] == "queued" and self._metadata_timed_out(
+                        job, current
                     ):
-                        result = await self._import(updated, {}, confirm_language=False)
-                        imported += int(result["status"] == "imported")
-                    continue
-                if str(job.get("protocol") or "torrent") == "usenet":
-                    updated = await self._poll_usenet(job)
+                        await self._abandon_metadata_stall(job)
+                        continue
                     if (
-                        updated is not None
-                        and updated["status"] == "completed"
+                        updated["status"] == "completed"
                         and self.settings.torrent_auto_import
-                        and self.sabnzbd is not None
-                        and self.sabnzbd.import_ready
+                        and self.qbittorrent.import_ready
                     ):
                         result = await self._import(
-                            updated, updated.get("_state") or {}, confirm_language=False
+                            updated, current, confirm_language=False
                         )
                         imported += int(result["status"] == "imported")
-                    continue
-                current = await self.qbittorrent.torrent_info(job["info_hash"])
-                if current is None:
-                    # Deleted by hand in qBittorrent: the job fails and is not
-                    # re-grabbed automatically; Retry re-adds the same release.
+                except (QBitTorrentError, SABnzbdError) as exc:
+                    # One client's ownership/error state must not starve other jobs.
+                    # Category guards durably fail only the affected download.
                     self.database.update_torrent_download(
-                        job["id"],
-                        status="failed",
-                        qbit_state="removed",
-                        message=REMOVED_EXTERNALLY,
+                        job["id"], message=redact_secrets(str(exc))[:500]
                     )
-                    continue
-                updated = self._record_qbit_state(job, current)
-                if updated["status"] == "queued" and self._metadata_timed_out(
-                    job, current
-                ):
-                    await self._abandon_metadata_stall(job)
-                    continue
-                if (
-                    updated["status"] == "completed"
-                    and self.settings.torrent_auto_import
-                    and self.qbittorrent.import_ready
-                ):
-                    result = await self._import(
-                        updated, current, confirm_language=False
-                    )
-                    imported += int(result["status"] == "imported")
             seeded = await self._finish_seeded()
             self.last_poll_at = datetime.now(UTC).isoformat()
             result = {"checked": checked, "imported": imported}
@@ -888,6 +914,8 @@ class TorrentManager:
     # -- direct downloads (archive.org) ----------------------------------
 
     def _start_direct_download(self, job: dict[str, Any]) -> None:
+        if self._stopping:
+            return
         job_id = int(job["id"])
         current = self._direct_tasks.get(job_id)
         if current is not None and not current.done():
@@ -1011,15 +1039,34 @@ class TorrentManager:
             )
         return self._record_sab_state(job, state)
 
+    def _assert_managed_category(self, job, state, *, usenet=False):
+        category = (
+            self.settings.sabnzbd_category
+            if usenet
+            else self.settings.qbittorrent_category
+        )
+        actual = (
+            state.get("cat") or state.get("category")
+            if usenet
+            else state.get("category")
+        )
+        if str(actual or "") == category:
+            return
+        client = "SABnzbd" if usenet else "qBittorrent"
+        message = f"Download moved outside Tankarr's {client} category; restore the category before retrying"
+        self.database.update_torrent_download(
+            job["id"],
+            status="failed" if job["status"] in POLLABLE_STATUSES else None,
+            qbit_state="outside_category",
+            message=message,
+        )
+        error = SABnzbdError if usenet else QBitTorrentError
+        raise error(message)
+
     def _record_sab_state(
         self, job: dict[str, Any], state: dict[str, Any]
     ) -> dict[str, Any]:
-        # Queue slots say "cat", history slots say "category".
-        if (
-            str(state.get("cat") or state.get("category") or "")
-            != self.settings.sabnzbd_category
-        ):
-            raise SABnzbdError("Download moved outside Tankarr's SABnzbd category")
+        self._assert_managed_category(job, state, usenet=True)
         raw_status = str(state.get("status") or "").strip()
         normalized = raw_status.casefold()
         if state.get("where") == "queue":
@@ -1069,10 +1116,7 @@ class TorrentManager:
     def _record_qbit_state(
         self, job: dict[str, Any], current: dict[str, Any]
     ) -> dict[str, Any]:
-        if str(current.get("category") or "") != self.settings.qbittorrent_category:
-            raise QBitTorrentError(
-                "Torrent moved outside Tankarr's qBittorrent category"
-            )
+        self._assert_managed_category(job, current)
         qbit_state = str(current.get("state") or "unknown")
         normalized = qbit_state.casefold()
         progress = max(0.0, min(1.0, float(current.get("progress") or 0)))
@@ -1174,12 +1218,6 @@ class TorrentManager:
         assigned: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         self.service.assert_mutations_allowed()
-        if selected_paths is not None:
-            # Remember it: a restart mid-import, or the automatic retry that
-            # follows, must take the same books rather than the whole pack.
-            self.database.update_torrent_download(
-                download_id, selected_paths=sorted(selected_paths)
-            )
         async with self._operation_lock:
             job = self.database.get_torrent_download(download_id)
             if job["status"] not in {"completed", "review", "failed"}:
@@ -1303,17 +1341,25 @@ class TorrentManager:
                     message="Waiting for translation fallback",
                 )
             return await translations.stage_torrent(job, content)
-        self.database.update_torrent_download(
+        # Persist the operator's complete plan before any import I/O. A
+        # resumed import must keep both the chosen files and their numbering.
+        job = self.database.update_torrent_download(
             job["id"],
             status="importing",
             content_path=content,
             message="Normalizing archive and auditing English with OCR",
+            selected_paths=sorted(selected_paths)
+            if selected_paths is not None
+            else None,
+            assigned=assigned,
         )
         # An automatic retry (a restart mid-import, the poller picking the job
         # back up) carries no selection of its own: fall back to the one the
         # operator already made rather than taking the whole release.
-        if selected_paths is None and job.get("selected_paths"):
+        if selected_paths is None and job.get("selected_paths") is not None:
             selected_paths = set(job["selected_paths"])
+        if assigned is None:
+            assigned = job.get("assigned")
         if selected_paths is None and assigned is None:
             conflict = self._edition_conflict(job)
             if conflict:
@@ -1462,13 +1508,24 @@ class TorrentManager:
                 if self.sabnzbd is None or not self.sabnzbd.configured:
                     raise SABnzbdError("SABnzbd is not configured")
                 state = await self.sabnzbd.job_state(str(job.get("client_id") or ""))
-                if state is None:
+                if state is not None:
+                    self._assert_managed_category(job, state, usenet=True)
+                if state is None or (
+                    state.get("where") == "history"
+                    and str(state.get("status") or "").casefold() == "failed"
+                ):
                     nzo_id = await self.sabnzbd.add_nzb_url(
                         str(job["torrent_url"]), name=str(job["title"])
                     )
                     self.database.update_torrent_download(job["id"], client_id=nzo_id)
                     job = self.database.get_torrent_download(download_id)
-                    state = await self.sabnzbd.job_state(nzo_id)
+                    # SAB may not expose the new queue entry immediately. Do not
+                    # read the previous failed history entry back into this retry.
+                    state = {
+                        "where": "queue",
+                        "status": "Queued",
+                        "cat": self.settings.sabnzbd_category,
+                    }
                 self.database.retry_torrent_download(download_id)
                 return self._record_sab_state(
                     job, state or {"where": "queue", "status": "Queued"}

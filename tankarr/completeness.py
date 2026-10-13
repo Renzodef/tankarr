@@ -263,10 +263,7 @@ def assess_chapter_completeness(
     logical_coverage = logical_chapter_coverage(
         {"chapter": str(number), "downloaded": True} for number in distinct_numbers
     )
-    logical_entry_count = (
-        logical_coverage["logical_chapter_count"]
-        + logical_coverage["special_chapter_count"]
-    )
+    logical_entry_count = logical_coverage["logical_chapter_count"]
     unexpected_high = {
         value for value in integer_numbers if value > max(expected_numbers)
     }
@@ -344,11 +341,21 @@ def assess_chapter_completeness(
         }
 
     if verification_basis == "metadata_total":
-        # A catalogue chapter_count is a cardinality, not a promise that the
-        # provider must use the integral sequence 1..N. Numbered specials such
-        # as 90.5 can be part of that count, while .1/.2 split releases count
-        # once through logical_chapter_coverage().
+        # A catalogue total may include extras. Only logical main chapters
+        # satisfy it; a decimal extra cannot prove the story is complete.
         if logical_entry_count < expected:
+            if available_chapter_count >= expected:
+                return {
+                    **assessed,
+                    "status": "unknown",
+                    "covered_chapter_count": logical_entry_count,
+                    "message": (
+                        f"{evidence} reports {expected} chapters, but the "
+                        f"{language_code} feed has only {logical_entry_count} "
+                        "main chapters. The difference may be extras; it "
+                        "cannot establish complete story coverage."
+                    ),
+                }
             missing_count = expected - logical_entry_count
             return {
                 **assessed,
@@ -358,8 +365,8 @@ def assess_chapter_completeness(
                 "missing_chapter_ranges": [],
                 "message": (
                     f"{evidence} expects {expected} chapters; the {language_code} "
-                    f"feed exposes {logical_entry_count} distinct chapters or "
-                    "numbered specials. The catalogue total does not identify the "
+                    f"feed exposes {logical_entry_count} main chapters. "
+                    "The catalogue total does not identify the "
                     "missing chapter numbers."
                 ),
             }
@@ -371,8 +378,7 @@ def assess_chapter_completeness(
             "missing_chapter_ranges": [],
             "message": (
                 f"All {expected} expected chapters are represented in the "
-                f"{language_code} feed, including numbered specials where the "
-                f"provider segmentation differs. Verified against {evidence}."
+                f"{language_code} feed. Verified against {evidence}."
             ),
         }
 

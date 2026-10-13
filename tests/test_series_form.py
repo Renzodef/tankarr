@@ -399,13 +399,13 @@ def test_layout_estimate_skips_owned_books_specials_and_in_range_strays():
     ]
     special = slot("3.5", downloaded=True)
     special["special"] = True
+    special["expected"] = False
     stray = slot("2", downloaded=True)  # inside book 1's range but not in its map
     loose = [stray, special, slot("4", downloaded=True), slot("5", downloaded=False)]
     result = apply_series_form(
         units(books, loose, expected_chapters=5),
         {"status": "ended"},
         None,
-        specials_outside_books=True,
     )
     by_volume = {b["volume"]: b for b in result["books"]}
     # An owned book with unknown contents takes its share too, and a chapter
@@ -416,7 +416,7 @@ def test_layout_estimate_skips_owned_books_specials_and_in_range_strays():
     assert by_volume["2"]["plan_state"] == "book"
     assert [s["chapter"] for s in by_volume["3"]["chapters"]] == ["5"]
     assert by_volume["3"]["status"] == "missing"
-    assert {s["chapter"] for s in result["unassigned_chapters"]} == {"2", "3.5"}
+    assert {s["chapter"] for s in result["unassigned_chapters"]} == {"2"}
 
 
 def test_books_owned_without_any_chapter_file_share_the_counted_chapters():
@@ -633,7 +633,7 @@ def test_a_whole_chapter_whose_parts_the_books_hold_is_not_hunted():
         units(books, [ghost, real], expected_chapters=4), {"status": "hiatus"}, None
     )
     assert [s["chapter"] for s in result["unassigned_chapters"]] == ["4"]
-    assert result["hidden_specials"] == 1
+    assert "hidden_specials" not in result
 
 
 def test_finished_books_do_not_extend_operator_boundaries_to_absorb_a_tail():
@@ -953,3 +953,30 @@ def test_estimated_layout_does_not_claim_edition_files_are_present():
     assert summary["indexed_chapters_on_disk"] == 1
     assert summary["owned_books"] == 0
     assert summary["edition_files_complete"] is False
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"content_kind": "manga"},
+        {"classification": {"kind": "comic"}},
+    ],
+)
+def test_explicit_printed_kind_overrides_platform_link(metadata):
+    linked = {**metadata, "official_links": [{"url": "https://www.webtoons.com/"}]}
+    assert series_form({"status": "ended"}, linked, 13)[0] == "volumes"
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        {"format": "webtoon"},
+        {"reading_direction": "WEBTOON"},
+        {"classification": {"subtype": "webtoon"}},
+    ],
+)
+def test_specific_scrolling_format_still_overrides_broad_manga_kind(signal):
+    assert (
+        series_form({"status": "ended"}, {"content_kind": "manga", **signal}, 13)[0]
+        == "chapters"
+    )

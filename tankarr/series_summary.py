@@ -86,6 +86,16 @@ def publication_summary(
     else:
         status = "unknown"
     pause_sources = [key for key, value in signals.items() if value in PAUSED_STATUSES]
+    if (
+        signals.get("official_resume") == "published"
+        and signals.get("official") not in PAUSED_STATUSES
+        and status == "continuing"
+    ):
+        # A new chapter on the managed publisher platform is stronger evidence
+        # of a return than a catalogue's older hiatus record. A later
+        # catalogue refresh can declare a new pause again.
+        pause_sources = []
+        raw_status, source = "ongoing", "official release"
     # The merged catalogue status is one of those signals restated; name the
     # generic "metadata"/"provider" only when no specific reporter is known.
     if raw_status in PAUSED_STATUSES and source and not pause_sources:
@@ -159,18 +169,6 @@ def library_count_summary(
         if has_logical_counts
         else raw_downloaded
     )
-    special_available = (
-        max(0, int(manga.get("special_chapter_count") or 0))
-        if has_logical_counts
-        else 0
-    )
-    special_downloaded = (
-        max(0, int(manga.get("special_downloaded_count") or 0))
-        if has_logical_counts
-        else 0
-    )
-    combined_available = main_available + special_available
-    combined_downloaded = main_downloaded + special_downloaded
     catalogue_expected = _positive_integer(metadata.get(metadata_field))
     provenance = metadata.get("provenance") or {}
     catalogue_source = str(provenance.get(metadata_field) or "").strip() or None
@@ -189,12 +187,8 @@ def library_count_summary(
         if expected is not None:
             source = str(manga.get("provider") or "provider")
 
-    # An integral final chapter defines an exact sequence (1..N), so decimal
-    # specials cannot replace a missing main chapter.  A metadata-only chapter
-    # total is instead a cardinality: catalogues often include selected extras
-    # even when provider numbering ends at values such as 90.5.  In that case
-    # main chapters plus distinct specials may satisfy the total, while split
-    # releases have already been collapsed by logical_chapter_coverage().
+    # An integral final chapter defines an exact sequence (1..N). Decimal
+    # extras never replace a missing main chapter or increase progress.
     provider_final = (
         _positive_integer(manga.get("last_chapter"))
         if publication["status"] == "ended"
@@ -240,12 +234,12 @@ def library_count_summary(
         and main_available < expected
     )
     if cardinality_mode:
-        known_missing = max(0, combined_available - combined_downloaded)
-        unindexed_missing = max(0, expected - combined_available)
+        known_missing = max(0, main_available - main_downloaded)
+        unindexed_missing = max(0, expected - main_available)
         missing = min(expected, known_missing + unindexed_missing)
         return {
             "unit": unit,
-            "available_count": min(expected, combined_available),
+            "available_count": min(expected, main_available),
             "downloaded_count": max(0, expected - missing),
             "expected_count": expected,
             "total_count": expected,
@@ -265,9 +259,8 @@ def library_count_summary(
         }
 
     if unit == "chapter":
-        numbered_reference = expected is not None or continuing_chapters
-        available = main_available if numbered_reference else combined_available
-        downloaded = main_downloaded if numbered_reference else combined_downloaded
+        available = main_available
+        downloaded = main_downloaded
     else:
         available = raw_available
         downloaded = raw_downloaded
@@ -339,8 +332,6 @@ def decorate_series_summary(
             ),
         }
     counts = library_count_summary(count_input, metadata)
-    if chapter_index is not None:
-        counts["additional_content"] = chapter_index.get("additional_content", {})
     if (
         chapter_index is not None
         and str(chapter_index.get("unit") or "chapter") == "chapter"
@@ -386,22 +377,13 @@ def decorate_series_summary(
         counts["total_count"] = max(total, satisfied)
         counts["available_count"] = observed
         counts["downloaded_count"] = satisfied
-        counts["missing_count"] = int(chapter_index.get("raw_missing_count") or 0)
+        counts["missing_count"] = int(
+            chapter_index.get("raw_missing_count") or 0
+        ) + int(chapter_index.get("unresolved_expected_count") or 0)
         counts["indexed_missing_count"] = max(0, observed - satisfied)
         counts["unindexed_missing_count"] = max(
             0, counts["missing_count"] - counts["indexed_missing_count"]
         )
-        counts["special_count"] = int(chapter_index.get("special_count") or 0)
-        counts["special_downloaded_count"] = int(
-            chapter_index.get("special_downloaded_count") or 0
-        )
-        if extra_coverage := chapter_index.get("catalogue_extra_coverage"):
-            counts["catalogue_extra_coverage"] = extra_coverage
-            counts["count_note"] = (
-                f"The catalogue total includes {extra_coverage['expected']} extra "
-                f"chapters; {extra_coverage['owned']} distinct volume extras "
-                "are imported."
-            )
         expected_volumes = chapter_index.get("expected_volume_count")
         counts["volume_progress"] = (
             {

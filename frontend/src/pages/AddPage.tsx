@@ -304,7 +304,7 @@ export function AddModal({
           {preview.status ? <span>{humanize(preview.status)}</span> : null}
           {ended ? (
             <span className="muted small">
-              {t("Ended works are refreshed less often; late specials or extra volumes are still picked up while monitored.")}
+              {t("Ended works are refreshed less often; newly published chapters or volumes are still picked up while monitored.")}
             </span>
           ) : null}
         </div>

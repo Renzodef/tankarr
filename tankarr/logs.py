@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from tankarr.config import Settings
+from tankarr.redaction import redact_secrets
 
 LEVELS = ("debug", "info", "warning", "error")
 _ALIASES = {"warn": "warning", "critical": "error", "fatal": "error", "trace": "debug"}
@@ -71,6 +72,19 @@ class _AccessLogFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            # Uvicorn formats (client, method, path+query, HTTP version, status).
+            # OIDC callbacks carry a one-use authorization code in the query;
+            # retain only the path and status, even when debug logs are enabled.
+            arguments = list(record.args)
+            path = str(arguments[2])
+            route = path.split("?", 1)[0]
+            arguments[2] = (
+                route
+                if route.rstrip("/").endswith("/api/auth/oidc/callback")
+                else redact_secrets(path)
+            )
+            record.args = tuple(arguments)
         return logging.getLogger().getEffectiveLevel() <= logging.DEBUG
 
 

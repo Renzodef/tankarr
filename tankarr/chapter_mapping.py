@@ -7,6 +7,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Any
 
+from tankarr.book_verification import verified_book
 from tankarr.catalogue_consensus import managed_volume_count
 from tankarr.chapter_map import (
     Coverage,
@@ -22,53 +23,13 @@ from tankarr.series_unit import (
     is_volume_release,
     select_releases,
 )
-from tankarr.source_numbering import is_special_title, is_unpublished, numbered_prologue
+from tankarr.source_numbering import is_unpublished, numbered_prologue
 from tankarr.source_ranking import (
     beyond_frontier,
     official_frontier,
     official_hosts,
     release_host,
 )
-
-
-def owned_additional_content(releases, slots) -> dict[str, int]:
-    """Describe owned side content without changing the reference numbering.
-
-    Catalogue-counted prologues/decimals already in expected slots must not
-    be counted twice. Deduplicate alternate releases of the same prologue.
-    """
-    counted = {
-        str(release.get("id"))
-        for slot in slots
-        if slot.get("expected")
-        for release in slot.get("releases", [])
-    }
-    specials = {
-        str(release.get("id")): slot["key"]
-        for slot in slots
-        if slot.get("special") and not slot.get("expected")
-        for release in slot.get("releases", [])
-    }
-    prologues, extras = set(), set()
-    for release in releases:
-        identifier = str(release.get("id"))
-        if (
-            not release.get("downloaded")
-            or is_volume_release(release)
-            or identifier in counted
-        ):
-            continue
-        title = " ".join(str(release.get("title") or "").casefold().split())
-        prologue = numbered_prologue(title)
-        label = canonical_number(release.get("chapter"))
-        if prologue is not None:
-            prologues.add(prologue)
-        elif identifier in specials:
-            extras.add(("slot", specials[identifier]))
-        elif is_special_title(title) or (label is not None and "." in label):
-            extras.add((str(release.get("volume") or ""), label or title))
-    return {"prologues": len(prologues), "extras": len(extras)}
-
 
 _DOCUMENTED_EXTRAS = re.compile(
     r"\b(?:includes?|contains?)\s+"
@@ -99,12 +60,6 @@ _DOCUMENTED_NUMBERED_EXTRAS = re.compile(
     r"chapters?\s+(\d+\.\d+(?:\s*(?:,|&|and)\s*\d+\.\d+)*)\b",
     re.IGNORECASE,
 )
-_VOLUME_TITLE = re.compile(r"\bvol(?:ume)?\.?\s*\d+\b", re.IGNORECASE)
-_NON_CHAPTER_TITLE = re.compile(
-    r"\b(?:hiatus|notice|biography|preview|announcement)\b", re.IGNORECASE
-)
-_NAMED_EXTRA = re.compile(r"(?:extra|special)\s*(?:no\.?\s*)?\d+\Z", re.IGNORECASE)
-_NAMED_EXTRA_TITLE = re.compile(r"\b(?:extra|special|bonus)\b", re.IGNORECASE)
 
 
 def documented_extra_count(
@@ -145,46 +100,15 @@ def documented_extra_labels(
     return next(iter(lists)) if len(lists) == 1 else None
 
 
-def owned_documented_extras(
-    releases: list[dict[str, Any]],
-    counted_ids: set[str],
-    documented_labels: frozenset[str] | None = None,
-) -> int:
-    """Count distinct imported book extras with explicit volume identity.
-
-    A decimal alone may be a split main chapter, a notice, or a source's
-    numbering artefact. Only a separately imported volume-labelled chapter
-    that the canonical slots did not consume can satisfy an extra count.
-    """
-
-    owned: set[tuple[str, str]] = set()
-    for release in releases:
-        if not release.get("downloaded") or is_volume_release(release):
-            continue
-        chapter = canonical_number(release.get("chapter"))
-        named_extra = bool(chapter and _NAMED_EXTRA.fullmatch(chapter))
-        if (
-            str(release.get("id")) in counted_ids
-            and chapter not in (documented_labels or ())
-            and not named_extra
-        ):
-            continue
-        volume = canonical_number(release.get("volume"))
-        title = str(release.get("title") or "")
-        if not chapter or not volume or ("." not in chapter and not named_extra):
-            continue
-        if (
-            not _VOLUME_TITLE.search(title)
-            or _NON_CHAPTER_TITLE.search(title)
-            or (named_extra and not _NAMED_EXTRA_TITLE.search(title))
-        ):
-            continue
-        owned.add((volume, chapter))
-    return len(owned)
-
-
 MAX_CANONICAL_SEQUENCE = 10_000
 SUSPECT_BOOK_PAGES = 600
+IMPORTED_BY_HAND = "Imported by hand"
+MACHINE_TRANSLATION = "Machine translation does not retire human chapters"
+VERIFIED_BOOK = "Verified book"
+VERIFIED_TRANSLATION = "Verified machine translation"
+# Books whose explicit chapter boundaries may satisfy Wanted. They stay in the
+# suspect set on purpose: none of them may retire a chapter file.
+COVERS_WANTED_ONLY = frozenset({IMPORTED_BY_HAND, VERIFIED_BOOK, VERIFIED_TRANSLATION})
 
 
 def canonical_number(value: object) -> str | None:
@@ -251,21 +175,36 @@ def suspect_volume_reasons(
     """Owned books that cannot prove coverage of separately acquired chapters.
 
     Read only release metadata, so every index consumer has the same protection
-    without a service call or filesystem scan. Assembly provenance will need
-    its own verified exception when assembled releases are supported.
+    without a service call or filesystem scan. A proof (see ``book_verification``)
+    only lifts a doubt: a book it rescues from the size checks or from machine
+    translation keeps a reason of its own, which may satisfy Wanted through the
+    chapter map but never retires a chapter file. It never adds suspicion to a
+    book that had none, nor takes anything from a book that already covered.
     """
     from tankarr.assembly_provenance import proven_assembly
 
     current_map = chapters_by_volume(chapter_map) if chapter_map is not None else None
     suspects = {}
+    verified: dict[str, str] = {}
     for release in releases:
         if not release.get("downloaded") or not is_volume_release(release):
             continue
         volume = canonical_number(release.get("volume"))
         if volume is None:
             continue
+        proof = verified_book(release)
+        if (
+            proof is not None
+            and current_map is not None
+            and current_map.get(volume, set()) == set(proof["chapters"])
+        ):
+            verified[volume] = (
+                VERIFIED_TRANSLATION
+                if release.get("provider") == "translated"
+                else VERIFIED_BOOK
+            )
         if release.get("provider") == "translated":
-            suspects[volume] = "Machine translation does not retire human chapters"
+            suspects[volume] = verified.get(volume, MACHINE_TRANSLATION)
             continue
         proof = proven_assembly(release)
         if proof is not None:
@@ -282,9 +221,11 @@ def suspect_volume_reasons(
         except (TypeError, ValueError, OverflowError):
             pages = 0
         if pages > page_limit:
-            suspects[volume] = f"{pages} pages: not verified as one book"
+            suspects[volume] = verified.get(
+                volume, f"{pages} pages: not verified as one book"
+            )
         elif str(release.get("provider") or "").casefold() == "manual":
-            suspects.setdefault(volume, "Imported by hand")
+            suspects.setdefault(volume, IMPORTED_BY_HAND)
     # Books of one edition are cut to a size: VIZ's Master Keaton runs 300-360
     # pages a book. A book far off that size (434 and 218 pages built by hand
     # from raws) is another edition or a wrong split, and says so, whatever
@@ -322,9 +263,13 @@ def suspect_volume_reasons(
                 and off
                 or (not by_hand and (pages < 0.7 * median or pages > 1.6 * median))
             ):
-                suspects[volume] = (
+                # A book a person proved is what it says, whatever its size:
+                # it still covers no chapter file, but it is not another
+                # edition and nothing asks for a replacement of it.
+                suspects[volume] = verified.get(
+                    volume,
                     f"{pages} pages against an edition of about {median}: "
-                    "another edition or a wrong split"
+                    "another edition or a wrong split",
                 )
     return suspects
 
@@ -366,6 +311,13 @@ def logical_release_key(
 ) -> tuple[str, str]:
     """Return the canonical identity shared by alternative provider releases."""
 
+    prologue = numbered_prologue(release.get("title"))
+    if (
+        prologue is not None
+        and release.get("canonical_chapter") is None
+        and release.get("numbering_method") == "special_title"
+    ):
+        return ("prologue", str(prologue))
     chapter = canonical_number(release.get("chapter"))
     if chapter is None:
         return ("id", str(release.get("id") or ""))
@@ -521,12 +473,10 @@ def canonical_decimal_labels(
 ) -> frozenset[str]:
     """Decimal chapters that are chapters of the work: the ones the map
     places inside a volume, and the ones a source's complete list ends with
-    (see count_aligned_tail_labels). Nothing else - aggregators mirror one
-    another, so several of them listing "167.5" is one upload seen many
-    times, not agreement, and specials stay opt-in (measured live: twelve
-    series of ".5" side episodes flooded Wanted). One rule, used by the
-    index, the download candidate selection and the numbering
-    reconciliation alike."""
+    (see count_aligned_tail_labels). Infix decimal releases are never promoted
+    merely because catalogue cardinality includes them; that total may count
+    extras. One rule is used by the index, download candidate selection and
+    numbering reconciliation alike."""
 
     releases = list(releases)
     entries = effective_entries(chapter_map or [])
@@ -540,20 +490,16 @@ def canonical_decimal_labels(
         and number != number.to_integral_value()
         and number > 0
     )
-    inferred = (
-        frozenset(
-            label
-            for entry in entries
-            if getattr(entry, "exact", False)
-            and getattr(entry, "source", "") not in {"ocr", "operator"}
-            for label in getattr(entry, "chapters", ())
-            if (number := _decimal(label)) is not None
-            and number != number.to_integral_value()
-            and number > 0
-        )
-        | count_aligned_tail_labels(releases, chapter_total)
-        | count_aligned_extra_labels(releases, chapter_total)
-    )
+    inferred = frozenset(
+        label
+        for entry in entries
+        if getattr(entry, "exact", False)
+        and getattr(entry, "source", "") not in {"ocr", "operator"}
+        for label in getattr(entry, "chapters", ())
+        if (number := _decimal(label)) is not None
+        and number != number.to_integral_value()
+        and number > 0
+    ) | count_aligned_tail_labels(releases, chapter_total)
     observed_wholes = {
         int(number)
         for release in releases
@@ -635,47 +581,19 @@ def canonical_decimal_labels(
                 # 1..213 manual sequence and remains an extra.  A complete
                 # read map whose own cardinality matches the total still wins.
                 authoritative = frozenset()
-    return authoritative | inferred
-
-
-def count_aligned_extra_labels(
-    releases: Iterable[dict[str, Any]], chapter_total: int | None
-) -> frozenset[str]:
-    """Include numbered extras when complete source lists explain the total.
-
-    Repeated extras alone are insufficient. Two sources must agree on the
-    complete contiguous run and its half-chapters, and their cardinality must
-    equal the finished work's catalogue count. This does not invent chapters
-    after the last integer or treat split parts as separate chapters.
-    """
-    if not chapter_total:
-        return frozenset()
-    sources: dict[str, set[str]] = defaultdict(set)
-    for release in releases:
-        if is_volume_release(release):
-            continue
-        label = canonical_number(release.get("chapter"))
-        value = _decimal(label)
-        if label is not None and value is not None and value > 0:
-            sources[_release_source(release)].add(label)
-    candidates: dict[frozenset[str], int] = defaultdict(int)
-    for labels in sources.values():
-        if len(labels) != chapter_total:
-            continue
-        integers = {int(Decimal(n)) for n in labels if Decimal(n) % 1 == 0}
-        extras = frozenset(n for n in labels if Decimal(n) % 1 != 0)
-        if not integers or not extras or integers != set(range(1, max(integers) + 1)):
-            continue
-        if any(
-            Decimal(n) % 1 != Decimal("0.5") or Decimal(n) > max(integers)
-            for n in extras
-        ):
-            continue
-        candidates[extras] += 1
-    if len(candidates) != 1:
-        return frozenset()
-    extras, agreeing = next(iter(candidates.items()))
-    return extras if agreeing >= 2 else frozenset()
+    # A second season opener numbered 0 on the official platform is a
+    # published episode even when its reconciled number is fractional.
+    season_openers = frozenset(
+        label
+        for release in releases
+        if release.get("numbering_method")
+        in {"official_season_opening", "title_season_opening"}
+        and (label := canonical_number(release.get("chapter"))) is not None
+        and (number := _decimal(label)) is not None
+        and number > 0
+        and number != number.to_integral_value()
+    )
+    return authoritative | inferred | season_openers
 
 
 def _complete_parts_on_disk(
@@ -748,9 +666,7 @@ def _slot(
         else monitor_mode in {"all", "existing"}
     )
     if special:
-        # Specials (extras, omakes, side stories, "chapter 0") are opt-in:
-        # they are monitored only when the work's map makes them canonical
-        # or the series monitors specials explicitly. Never by default.
+        # An extra is never a monitored story chapter.
         monitored = False
     queue_status = next(
         (
@@ -909,7 +825,6 @@ def build_chapter_index(
         for volume, chapters in exact_map.items()
         for chapter in chapters
     }
-    monitor_specials = False
     # A running work is tracked by chapter only: its volume split is not
     # final until the work ends, so chapters are never grouped into volumes
     # before then. Whole-volume files that are owned still cover chapters.
@@ -970,7 +885,6 @@ def build_chapter_index(
         elif number != number.to_integral_value():
             fractional_by_scope[(scope, base)].append((number, label))
 
-    special_slots: list[dict[str, Any]] = []
     canonical_slots: list[dict[str, Any]] = []
     for (scope, base), parts in fractional_by_scope.items():
         labels = sorted({label for _number, label in parts}, key=Decimal)
@@ -1058,26 +972,7 @@ def build_chapter_index(
                 split_parts=labels,
             )
             continue
-        for label in labels:
-            grouped = numeric_groups[(scope, label)]
-            volume = scope or volume_from_map(label)
-            continue  # extras never reach the index (see series_unit)
-            special_slots.append(
-                _slot(
-                    key=(
-                        f"volume:{volume}:special:{label}"
-                        if volume_scoped
-                        else f"special:{label}"
-                    ),
-                    chapter=label,
-                    volume=volume,
-                    releases=grouped,
-                    expected=False,
-                    special=True,
-                    evidence="observed_special",
-                    monitor_mode=monitor_mode,
-                )
-            )
+        # A lone fractional release is side content, never a mapped chapter.
 
     # A volumes series never materialises chapter slots: no chapter total,
     # no final sequence, no gaps. Only books count.
@@ -1329,16 +1224,14 @@ def build_chapter_index(
                 if number is None:
                     continue
                 if number != number.to_integral_value():
-                    if not any(slot["chapter"] == label for slot in canonical_slots):
+                    if label in canonical_decimals and not any(
+                        slot["chapter"] == label for slot in canonical_slots
+                    ):
                         canonical_slots.append(
                             _slot(
                                 key=f"chapter:{label}",
                                 chapter=label,
                                 volume=volume,
-                                # A mapped omake may be excluded from the
-                                # catalogue's chapter count. Keep an owned
-                                # copy visible without inventing a missing
-                                # canonical chapter after normalization.
                                 releases=[
                                     release
                                     for release in all_releases
@@ -1347,8 +1240,8 @@ def build_chapter_index(
                                     and canonical_number(release.get("chapter"))
                                     == label
                                 ],
-                                expected=label in canonical_decimals,
-                                special=label not in canonical_decimals,
+                                expected=True,
+                                special=False,
                                 evidence="operator_map"
                                 if volume in operator_map
                                 else "map_canonical",
@@ -1395,12 +1288,9 @@ def build_chapter_index(
         )
 
     volume_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    loose_unnumbered: list[dict[str, Any]] = []
     for release in unnumbered:
         volume = canonical_number(release.get("volume"))
-        if volume is None:
-            loose_unnumbered.append(release)
-        else:
+        if volume is not None:
             volume_groups[volume].append(release)
     volume_slots = [
         _slot(
@@ -1492,30 +1382,10 @@ def build_chapter_index(
                         monitor_mode=monitor_mode,
                     )
                 )
-    loose_slots: list[dict[str, Any]] = []
-    _unused_loose = [
-        _slot(
-            key=f"release:{release.get('id')}",
-            chapter=None,
-            volume=None,
-            releases=[release],
-            expected=False,
-            special=True,
-            evidence="observed_unnumbered",
-            monitor_mode=monitor_mode,
-        )
-        for release in loose_unnumbered
-    ]
-
-    for slot in special_slots:
-        slot["canonical"] = slot.get("volume") is not None
-        slot["monitored"] = bool(slot["canonical"] or monitor_specials)
     slots = [
         *main_slots.values(),
         *canonical_slots,
-        *special_slots,
         *volume_slots,
-        *loose_slots,
     ]
     mapped_chapter_slots: list[dict[str, Any]] = []
     if not chapters_unit:
@@ -1537,6 +1407,12 @@ def build_chapter_index(
                     part_labels_by_base[str(int(number))].add(part)
         for volume, labels in exact_map.items():
             for label in sorted(labels, key=Decimal):
+                if (
+                    (number := _decimal(label)) is not None
+                    and number != number.to_integral_value()
+                    and label not in canonical_decimals
+                ):
+                    continue
                 grouped = [
                     release
                     for release in all_numeric[("", label)]
@@ -1611,11 +1487,32 @@ def build_chapter_index(
         {
             volume
             for volume, reason in inferred_suspects.items()
-            if reason == "Imported by hand"
+            if reason in COVERS_WANTED_ONLY
         },
     )
     mapped_labels = {label for labels in exact_map.values() for label in labels}
     mapped_span = _mapped_whole_span(mapped_labels)
+    # If a downloaded chapter is explicitly numbered in a later volume than
+    # every owned book, those books cannot contain subsequent chapters. This
+    # matters when an edition has a known final chapter but no book boundaries:
+    # treating every unindexed tail chapter as covered would hide real Wanted.
+    numeric_owned_volumes = [_decimal(volume) for volume in covering_volumes]
+    uncovered_tail_frontier = None
+    if numeric_owned_volumes and all(
+        volume is not None for volume in numeric_owned_volumes
+    ):
+        latest_owned_volume = max(numeric_owned_volumes)
+        later_downloaded = [
+            chapter
+            for release in all_releases
+            if release.get("downloaded")
+            and not is_volume_release(release)
+            and (chapter := _decimal(release.get("chapter"))) is not None
+            and (volume := _decimal(release.get("volume"))) is not None
+            and volume > latest_owned_volume
+        ]
+        if later_downloaded:
+            uncovered_tail_frontier = max(later_downloaded)
     for slot in [*slots, *mapped_chapter_slots]:
         slot["covered_by_volume"] = None
         slot["covered_by_chapters"] = False
@@ -1641,7 +1538,13 @@ def build_chapter_index(
             slot["covered_unmapped"] = True
         elif not continuing and not exact_map and slot["expected"]:
             # Volumes are owned but nothing maps them: stay conservative.
-            slot["covered_unmapped"] = True
+            chapter = _decimal(slot["chapter"])
+            if not (
+                uncovered_tail_frontier is not None
+                and chapter is not None
+                and chapter > uncovered_tail_frontier
+            ):
+                slot["covered_unmapped"] = True
         elif (
             not continuing
             and slot["expected"]
@@ -1808,13 +1711,39 @@ def build_chapter_index(
         )
         expected_chapter_source = "available sources"
 
+    if reference_kind == "official" and not volume_sequence_mode:
+        # The largest written number is a position, not a cardinality. An
+        # official chapter 0 and a second season opener are published episodes.
+        hosts = official_hosts(
+            metadata.get("official_links"),
+            language=str(manga.get("preferred_language") or ""),
+        )
+        expected_chapter_total = max(
+            expected_chapter_total or 0,
+            len(
+                {
+                    label
+                    for release in all_releases
+                    if release_host(release) in hosts
+                    and not is_unpublished(release)
+                    and not is_volume_release(release)
+                    and (label := canonical_number(release.get("chapter"))) is not None
+                    and (number := _decimal(label)) is not None
+                    and number >= 0
+                    and (
+                        number == number.to_integral_value()
+                        or label in canonical_decimals
+                    )
+                }
+            ),
+        )
+
     expected_total = (
         expected_volume_total if volume_sequence_mode else expected_chapter_total
     )
     expected_source = (
         expected_volume_source if volume_sequence_mode else expected_chapter_source
     )
-    catalogue_extra_coverage: dict[str, int] | None = None
     if (
         chapters_unit
         and not volume_scoped
@@ -1825,17 +1754,6 @@ def build_chapter_index(
         and expected_total is not None
         and (extra_count := documented_extra_count(manga, metadata)) is not None
         and 0 < extra_count < expected_total
-        # An exact chapter map may already account for the documented extras
-        # as canonical decimal slots. In that case adding their cardinality
-        # again would double-count owned chapters and invent missing extras.
-        and sum(
-            1
-            for slot in slots
-            if slot["expected"]
-            and slot.get("chapter") is not None
-            and (slot.get("releases") or slot.get("covered_by_volume"))
-        )
-        < expected_total
     ):
         core_end = expected_total - extra_count
         raw_whole = {
@@ -1861,6 +1779,13 @@ def build_chapter_index(
             and (number := _decimal(slot.get("chapter"))) is not None
             and number > core_end
         ]
+        mapped_decimals = [
+            slot
+            for slot in slots
+            if slot["expected"]
+            and (number := _decimal(slot.get("chapter"))) is not None
+            and number != number.to_integral_value()
+        ]
         # A source's actual integer sequence corroborates the catalogue's
         # main/extra split. Beyond it, only inferred split parts or empty
         # placeholders generated from the unsplit catalogue total may remain;
@@ -1868,6 +1793,7 @@ def build_chapter_index(
         if (
             raw_whole == set(range(1, core_end + 1))
             and core_slots == raw_whole
+            and len(mapped_decimals) in {0, extra_count}
             and all(
                 slot.get("split_parts")
                 or (
@@ -1879,41 +1805,31 @@ def build_chapter_index(
                 for slot in beyond
             )
         ):
-            counted_ids = {
-                str(release.get("id"))
-                for slot in slots
-                if slot["expected"]
-                for release in slot.get("releases") or []
-            }
-            owned_extras = min(
-                extra_count,
-                owned_documented_extras(
-                    raw_release_list,
-                    counted_ids,
-                    documented_extra_labels(manga, metadata),
-                ),
-            )
             for slot in beyond:
                 if slot.get("releases"):
                     slot["expected"] = False
                     slot["special"] = True
                 else:
                     slots.remove(slot)
+            for slot in mapped_decimals:
+                slot["expected"] = False
+                slot["special"] = True
             sequence_end = core_end
             sequence_basis = "catalogue_count_minus_documented_extras"
-            catalogue_extra_coverage = {"expected": extra_count, "owned": owned_extras}
-    mapped_cardinality = sum(1 for slot in slots if slot["expected"] or slot["special"])
+            # The catalogue cardinality includes side content. The managed
+            # story ends at the verified integer run, so neither the absent
+            # extras nor owned copies become chapter requirements.
+            expected_total = core_end
+            expected_chapter_total = core_end
+            expected_chapter_source = "catalogue main chapters"
+    mapped_cardinality = sum(1 for slot in slots if slot["expected"])
     unresolved_expected_count = (
         0
-        if volume_sequence_mode or sequence_end is not None or expected_total is None
+        if volume_sequence_mode or expected_total is None
         else max(0, expected_total - mapped_cardinality)
     )
     if series_marked_up_to_date:
         unresolved_expected_count = 0
-    elif catalogue_extra_coverage is not None:
-        unresolved_expected_count = (
-            catalogue_extra_coverage["expected"] - catalogue_extra_coverage["owned"]
-        )
 
     def _satisfied(slot: dict[str, Any]) -> bool:
         return bool(
@@ -1927,10 +1843,6 @@ def build_chapter_index(
         for slot in slots
         if slot["expected"] and not _satisfied(slot) and not slot["covered_unmapped"]
     )
-    if catalogue_extra_coverage is not None:
-        raw_missing_count += (
-            catalogue_extra_coverage["expected"] - catalogue_extra_coverage["owned"]
-        )
     ignored_missing_count = sum(
         1
         for slot in slots
@@ -1956,12 +1868,14 @@ def build_chapter_index(
     }:
         read_labels = [label for labels in read_books.values() for label in labels]
         if len(read_labels) == len(set(read_labels)):
-            # Membership also includes optional extras; a book assignment
-            # does not make those extras numbered chapters.
+            # A read map may include a bonus page as a fractional label;
+            # that label is not a story chapter even without a slot for it.
             optional = {
-                slot["chapter"]
-                for slot in slots
-                if slot.get("special") and not slot.get("expected")
+                label
+                for label in read_labels
+                if (number := _decimal(label)) is not None
+                and number != number.to_integral_value()
+                and label not in canonical_decimals
             }
             counted_labels = set(read_labels) - optional
             counted_labels.update(
@@ -1972,23 +1886,27 @@ def build_chapter_index(
                 and set(slot["split_parts"]).issubset(read_labels)
             )
             read_chapter_count = len(counted_labels)
-    additional_content = owned_additional_content(raw_release_list, slots)
-    owned_specials = sum(additional_content.values())
     return {
-        "additional_content": additional_content,
         "read_chapter_count": read_chapter_count,
-        "slots": slots,
+        # Downstream views also read raw releases and book assignments. Keep
+        # the exclusions so those paths cannot recreate a filtered slot.
+        "excluded_chapter_labels": [
+            slot["chapter"]
+            for slot in slots
+            if slot["chapter"] is not None and slot["special"] and not slot["expected"]
+        ],
+        "slots": [
+            slot for slot in slots if not (slot["special"] and not slot["expected"])
+        ],
         "mapped_chapter_slots": mapped_chapter_slots,
         # The official head this index counted against, so a later builder
         # working from raw releases cannot reopen what it closed here. A
         # label, not a Decimal: this index is serialised into the payload.
         "official_frontier": canonical_number(applied_frontier),
-        "expected_available_count": sum(1 for s in expected_slots if s["available"])
-        + (catalogue_extra_coverage or {}).get("owned", 0),
+        "expected_available_count": sum(1 for s in expected_slots if s["available"]),
         "expected_satisfied_count": sum(
             1 for s in expected_slots if s["downloaded"] or s["covered_by_volume"]
-        )
-        + (catalogue_extra_coverage or {}).get("owned", 0),
+        ),
         "latest_chapter": canonical_number(max(official_numbers))
         if reference_kind == "official"
         else max(
@@ -2000,12 +1918,6 @@ def build_chapter_index(
             key=_number_sort_key,
             default=None,
         ),
-        # Optional content enters the public count only after its pages are
-        # owned. An offered .5 or omake is never a missing chapter.
-        "special_count": owned_specials,
-        "special_downloaded_count": owned_specials,
-        "catalogue_extra_coverage": catalogue_extra_coverage,
-        "special_monitored": monitor_specials,
         "series_unit": unit_info["unit"],
         "series_unit_reason": unit_info["reason"],
         "series_unit_override": unit_info["override"],

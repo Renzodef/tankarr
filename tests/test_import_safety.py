@@ -221,11 +221,25 @@ async def test_sabnzbd_never_deletes_outside_its_category(
 
 
 def test_sabnzbd_monitor_rejects_category_change_before_import(tmp_path: Path):
+    from tankarr.database import Database
+    from tests.test_torrents import release, seed
+
     manager = make_manager(tmp_path)
-    with pytest.raises(SABnzbdError, match="outside Tankarr's"):
-        manager._record_sab_state(
-            {"id": 1}, {"where": "history", "cat": "other-app", "status": "Completed"}
-        )
+    database = Database(tmp_path / "category-safety.sqlite3")
+    database.initialize()
+    manager.database = database
+    try:
+        seed(database)
+        job = database.create_torrent_download("kamui", release())
+        with pytest.raises(SABnzbdError, match="outside Tankarr's"):
+            manager._record_sab_state(
+                job, {"where": "history", "cat": "other-app", "status": "Completed"}
+            )
+        stored = database.get_torrent_download(job["id"])
+        assert stored["status"] == "failed"
+        assert stored["qbit_state"] == "outside_category"
+    finally:
+        database.close()
 
 
 def test_sabnzbd_rejects_storage_alias_to_entire_mount(tmp_path: Path):

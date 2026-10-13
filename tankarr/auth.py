@@ -32,7 +32,15 @@ logger = logging.getLogger(__name__)
 
 PUBLIC_HEALTHCHECK_PATHS = frozenset({"/api/health", "/api/ready"})
 LOGIN_PATH = "/api/auth/login"
-PUBLIC_AUTH_PATHS = frozenset({"/api/auth/status", LOGIN_PATH, "/api/auth/logout"})
+PUBLIC_AUTH_PATHS = frozenset(
+    {
+        "/api/auth/status",
+        LOGIN_PATH,
+        "/api/auth/logout",
+        "/api/auth/oidc/login",
+        "/api/auth/oidc/callback",
+    }
+)
 SESSION_COOKIE = "tankarr_session"
 GENERATED_USERNAME = "admin"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -613,6 +621,13 @@ class AuthenticationManager:
         return hmac.new(
             self._signing_secret, b"tankarr-session-v2\0" + password, hashlib.sha256
         ).digest()
+
+    def oidc_state_signing_key(self) -> str:
+        return _urlsafe_encode(
+            hmac.new(
+                self._signing_key(), b"tankarr-oidc-state", hashlib.sha256
+            ).digest()
+        )
 
     @staticmethod
     def _session_cookie(raw_cookie: str | None) -> str | None:

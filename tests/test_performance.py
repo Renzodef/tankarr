@@ -430,6 +430,9 @@ def test_status_reuses_the_orphan_summary_and_the_series_rows(
         library_dir=tmp_path / "library",
         monitor_enabled=False,
         auth_required=False,
+        # Count request-cache reads only. Background startup also lists the
+        # library and can outlive the lifespan timeout on a busy host.
+        restored_safe_mode=True,
     )
     provision_library_identity(settings)
     (settings.library_dir / "Stray").mkdir()

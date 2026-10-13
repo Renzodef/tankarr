@@ -118,7 +118,10 @@ CHAPTER_SUMMARY_COLUMNS = """
          THEN c.canonical_chapter ELSE NULL END AS chapter,
     c.title, c.language, c.provider, c.source_name, c.source_key,
     c.release_unit, c.publish_at, c.source_url, c.pages, c.version,
-    c.downloaded, c.monitored, c.assembled_from, c.library_sha256
+    c.downloaded, c.monitored, c.assembled_from, c.library_sha256,
+    c.verified_book,
+    CASE WHEN c.verified_book IS NOT NULL THEN c.local_import_sha256 END
+        AS local_import_sha256
 """
 
 

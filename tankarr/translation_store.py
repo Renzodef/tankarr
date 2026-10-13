@@ -114,16 +114,30 @@ class TranslationStore:
                 )
             }
 
-    def update(self, job_id: str, **changes) -> dict:
+    def update(
+        self,
+        job_id: str,
+        *,
+        expected_attempt: int | None = None,
+        active_only: bool = False,
+        **changes,
+    ) -> dict:
         allowed = {"status", "message", "attempts", "result_chapter_id"}
         if changes.keys() - allowed:
             raise ValueError("Unsupported translation job update")
         changes["updated_at"] = utc_now()
+        where = " WHERE id=?"
+        parameters = [*changes.values(), job_id]
+        if expected_attempt is not None:
+            where += " AND attempts=?"
+            parameters.append(expected_attempt)
+        if active_only:
+            where += " AND status NOT IN ('cancelled', 'failed', 'completed')"
         with self.database.connect() as connection:
             connection.execute(
                 "UPDATE translation_job SET "
                 + ",".join(f"{key}=?" for key in changes)
-                + " WHERE id=?",
-                [*changes.values(), job_id],
+                + where,
+                parameters,
             )
         return self.get(job_id)

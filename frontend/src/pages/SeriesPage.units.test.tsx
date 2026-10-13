@@ -8,6 +8,22 @@ import SeriesPage, { FileDeleteModal } from "./SeriesPage";
 const release = { id: "chapter-file-one", chapter: "1", volume: "1", language: "en", title: "Example chapter", library_path: "/srv/library/example/chapter-1.cbz" } as Chapter;
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+it("does not show a second book count for a continuing chapter series", async () => {
+  vi.spyOn(api, "seriesUnits").mockResolvedValue({ manga_id: "example", mode: "flat", series_unit: "chapters", form: "chapters", edition_book_count: null, expected_book_count: 4, warning: null, hints: [], books: [], unassigned_chapters: [] });
+  vi.spyOn(api, "manga").mockResolvedValue({
+    id: "example", title: "Example", status: "ongoing", authors: [], description: "", preferred_language: "en", provider: "local", chapter_count: 2, downloaded_count: 1, chapters: [], monitored: true, monitor_mode: "all", available_languages: ["en"], book_total_count: 4,
+    library_count: { unit: "chapter", available_count: 2, downloaded_count: 1, expected_count: 2, total_count: 2, missing_count: 1, reference_kind: "available", latest_chapter: "2" },
+  } as unknown as Manga);
+  vi.spyOn(api, "jobs").mockResolvedValue([]);
+  vi.spyOn(api, "seriesCalendar").mockRejectedValue(new Error("Unavailable"));
+  vi.spyOn(api, "readerLink").mockRejectedValue(new Error("Unavailable"));
+  const context = { health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) };
+  render(<AppContext.Provider value={context}><SeriesPage id="example" /></AppContext.Provider>);
+  await screen.findByRole("heading", { name: "Example" });
+  expect(screen.getByText("1 / 2 chapters")).toBeTruthy();
+  expect(screen.queryByText("4 books")).toBeNull();
+});
+
 it("shows the scoped files and requires confirmation before retiring duplicates", () => {
   const confirm = vi.fn();
   render(<FileDeleteModal target={{ kind: "duplicates", volume: "1", chapters: [release] }} busy={false} onClose={vi.fn()} onConfirm={confirm} />);

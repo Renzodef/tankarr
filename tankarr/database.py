@@ -8,7 +8,7 @@ import re
 import sqlite3
 import unicodedata
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS manga (
     metadata_title TEXT,
     title_override TEXT,
     authors_override_json TEXT,
+    manual_metadata_json TEXT,
     description TEXT NOT NULL DEFAULT '',
     cover_url TEXT,
     authors_json TEXT NOT NULL DEFAULT '[]',
@@ -303,6 +304,7 @@ CREATE TABLE IF NOT EXISTS page_quality (
     pages INTEGER NOT NULL DEFAULT 0,
     measured_pages INTEGER NOT NULL DEFAULT 0,
     median_aspect REAL NOT NULL DEFAULT 0,
+    refusal_kind TEXT NOT NULL DEFAULT '',
     max_width INTEGER NOT NULL DEFAULT 0,
     median_width INTEGER NOT NULL DEFAULT 0,
     library_sha256 TEXT NOT NULL DEFAULT '',
@@ -859,7 +861,7 @@ def logical_chapter_coverage(releases: Iterable[dict[str, Any]]) -> dict[str, in
     """
 
     numbered: dict[Decimal, bool] = {}
-    unnumbered: dict[str, bool] = {}
+    season_openings: set[Decimal] = set()
     for release in releases:
         raw = str(release.get("chapter") or "").strip()
         if not raw:
@@ -868,14 +870,15 @@ def logical_chapter_coverage(releases: Iterable[dict[str, Any]]) -> dict[str, in
         try:
             number = Decimal(raw)
         except (InvalidOperation, ValueError):
-            key = _canonical_local_text(raw)
-            unnumbered[key] = bool(unnumbered.get(key) or downloaded)
             continue
         if not number.is_finite() or number < 0:
-            key = _canonical_local_text(raw)
-            unnumbered[key] = bool(unnumbered.get(key) or downloaded)
             continue
         numbered[number] = bool(numbered.get(number) or downloaded)
+        if str(release.get("numbering_method") or "") in {
+            "title_season_opening",
+            "official_season_opening",
+        }:
+            season_openings.add(number)
 
     integers = {
         int(number): downloaded
@@ -890,21 +893,24 @@ def logical_chapter_coverage(releases: Iterable[dict[str, Any]]) -> dict[str, in
 
     canonical_available = len(integers)
     canonical_downloaded = sum(int(downloaded) for downloaded in integers.values())
-    special_available = len(unnumbered)
-    special_downloaded = sum(int(downloaded) for downloaded in unnumbered.values())
     for chapter_base, parts in fractional.items():
+        for number in parts.keys() & season_openings:
+            canonical_available += 1
+            canonical_downloaded += int(parts[number])
+        parts = {
+            number: downloaded
+            for number, downloaded in parts.items()
+            if number not in season_openings
+        }
+        if not parts:
+            continue
         if chapter_base not in integers and len(parts) >= 2:
             canonical_available += 1
             canonical_downloaded += int(all(parts.values()))
-        else:
-            special_available += len(parts)
-            special_downloaded += sum(int(downloaded) for downloaded in parts.values())
 
     return {
         "logical_chapter_count": canonical_available,
         "logical_downloaded_count": canonical_downloaded,
-        "special_chapter_count": special_available,
-        "special_downloaded_count": special_downloaded,
     }
 
 
@@ -1120,6 +1126,7 @@ class Database:
                 "INTEGER NOT NULL DEFAULT 0",
             )
             self._ensure_column(connection, "chapter_release", "assembled_from", "TEXT")
+            self._ensure_column(connection, "chapter_release", "verified_book", "TEXT")
             self._ensure_column(
                 connection,
                 "manga",
@@ -1137,6 +1144,7 @@ class Database:
                 connection, "manga", "monitor_specials", "INTEGER NOT NULL DEFAULT 0"
             )
             self._ensure_column(connection, "manga", "series_unit_override", "TEXT")
+            self._ensure_column(connection, "manga", "preferred_source_key", "TEXT")
             # A part of a split chapter remembers the chapter it belongs to,
             # so the parts are replaced by the whole and retired together.
             self._ensure_column(
@@ -1167,6 +1175,9 @@ class Database:
             self._ensure_column(
                 connection, "page_quality", "median_aspect", "REAL NOT NULL DEFAULT 0"
             )
+            self._ensure_column(
+                connection, "page_quality", "refusal_kind", "TEXT NOT NULL DEFAULT ''"
+            )
             self._repair_year_fraction_labels(connection)
             self._remeasure_page_quality_if_needed(connection)
             self._ensure_column(
@@ -1181,6 +1192,7 @@ class Database:
             self._ensure_column(
                 connection, "torrent_download", "selected_paths_json", "TEXT"
             )
+            self._ensure_column(connection, "torrent_download", "assigned_json", "TEXT")
             self._ensure_column(connection, "chapter_release", "source_key", "TEXT")
             self._ensure_column(connection, "chapter_release", "source_name", "TEXT")
             self._ensure_column(connection, "chapter_release", "source_chapter", "TEXT")
@@ -1295,6 +1307,7 @@ class Database:
                 "transient_failures",
                 "INTEGER NOT NULL DEFAULT 0",
             )
+            self._ensure_column(connection, "manga", "manual_metadata_json", "TEXT")
             self._ensure_column(connection, "manga", "status", "TEXT")
             self._ensure_column(connection, "manga", "status_override", "TEXT")
             self._ensure_column(connection, "manga", "library_status_override", "TEXT")
@@ -1905,13 +1918,22 @@ class Database:
             result["metadata"] = metadata["data"]
         return result
 
+    def set_manual_metadata(self, manga_id: str, metadata: dict[str, Any]) -> None:
+        """Persist the operator's identity independently of catalogue refreshes."""
+        with self.connect() as connection:
+            self._require_manga(connection, manga_id)
+            connection.execute(
+                "UPDATE manga SET manual_metadata_json=?, updated_at=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), utc_now(), manga_id),
+            )
+
     def update_manga(self, manga_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         allowed = {
             "preferred_language",
             "monitor_mode",
             "monitored",
-            "monitor_specials",
             "series_unit_override",
+            "preferred_source_key",
             "reader_mode_override",
             "reader_direction_override",
             "auto_download",
@@ -3626,6 +3648,31 @@ class Database:
 
     PAUSE_SIGNAL_SOURCES = ("mangabaka", "myanimelist", "mangaupdates")
 
+    @staticmethod
+    def _official_published_after(
+        connection: sqlite3.Connection, manga_id: str, pause_reported_at: str
+    ) -> bool:
+        """A new primary-platform chapter outranks an older catalogue pause."""
+
+        return (
+            connection.execute(
+                """
+            SELECT 1 FROM chapter_release AS c
+            JOIN manga_release_source AS r
+              ON r.manga_id=c.manga_id AND r.provider=c.provider
+             AND r.source_name=c.source_name AND r.language=c.language
+            WHERE c.manga_id=? AND r.enabled=1
+              AND r.source_role='primary_official'
+              AND c.numbering_status='mapped' AND c.chapter IS NOT NULL
+              AND julianday(c.publish_at)>julianday(?)
+              AND julianday(c.publish_at)<=julianday('now')
+            LIMIT 1
+            """,
+                (manga_id, pause_reported_at),
+            ).fetchone()
+            is not None
+        )
+
     def publication_signals(self, manga_id: str) -> dict[str, str]:
         """What each catalogue and the official platform last said about the
         work's publication: ``{"mangabaka": "hiatus", "official": "ongoing"}``.
@@ -3642,13 +3689,20 @@ class Database:
                 """,
                 (manga_id,),
             ).fetchall()
+        paused_at: list[str] = []
         for row in rows:
             status = str(row["status"] or "").strip().casefold()
             if status:
                 signals[str(row["source"])] = status
+                if status in {"hiatus", "on_hiatus", "paused"}:
+                    paused_at.append(str(row["fetched_at"]))
         official = self.official_publication_status(manga_id)
         if official:
             signals["official"] = official
+        if paused_at and official and official not in {"hiatus", "on_hiatus", "paused"}:
+            with self.connect() as connection:
+                if self._official_published_after(connection, manga_id, max(paused_at)):
+                    signals["official_resume"] = "published"
         return signals
 
     def record_publication_pause(
@@ -4443,6 +4497,7 @@ class Database:
             if unblocked:
                 chosen = self.source_ranking.best(
                     unblocked,
+                    preferred_source=manga.get("preferred_source_key"),
                     official_hosts=hosts,
                     demoted_sources=demoted,
                     health=health,
@@ -4462,7 +4517,10 @@ class Database:
                 # visible in Wanted without letting automation re-grab a
                 # blocked release; History retry unblocks it explicitly.
                 chosen = self.source_ranking.best(
-                    monitored_releases, official_hosts=hosts, health=health
+                    monitored_releases,
+                    official_hosts=hosts,
+                    health=health,
+                    preferred_source=manga.get("preferred_source_key"),
                 )
                 if chosen is None:
                     continue
@@ -4634,6 +4692,7 @@ class Database:
 
     def _list_calendar_inputs_snapshot(self) -> list[dict[str, Any]]:
         signals: dict[str, dict[str, str]] = defaultdict(dict)
+        paused_at: dict[str, str] = {}
         with self.connect() as connection:
             manga_rows = connection.execute(
                 """
@@ -4657,14 +4716,19 @@ class Database:
                 """
             ).fetchall()
             for row in connection.execute(
-                "SELECT manga_id, source, json_extract(data_json, '$.status') AS status "
+                "SELECT manga_id, source, json_extract(data_json, '$.status') AS status, fetched_at "
                 "FROM metadata_source_record "
                 "WHERE source IN ('mangabaka','myanimelist','mangaupdates') "
                 "ORDER BY fetched_at"
             ):
                 status = str(row["status"] or "").strip().casefold()
                 if status:
-                    signals[str(row["manga_id"])][str(row["source"])] = status
+                    manga_id = str(row["manga_id"])
+                    signals[manga_id][str(row["source"])] = status
+                    if status in {"hiatus", "on_hiatus", "paused"}:
+                        paused_at[manga_id] = max(
+                            paused_at.get(manga_id, ""), str(row["fetched_at"])
+                        )
             for row in connection.execute(
                 "SELECT manga_id, publication_status FROM manga_release_source "
                 "WHERE enabled=1 AND source_role IN ('primary_official','secondary_official') "
@@ -4675,6 +4739,13 @@ class Database:
                 signals[str(row["manga_id"])].setdefault(
                     "official", str(row["publication_status"])
                 )
+            for manga_id, reported_at in paused_at.items():
+                official = signals[manga_id].get("official", "").casefold()
+                if official and official not in {"hiatus", "on_hiatus", "paused"}:
+                    if self._official_published_after(
+                        connection, manga_id, reported_at
+                    ):
+                        signals[manga_id]["official_resume"] = "published"
             # The unit context of every series, loaded once: resolving the
             # unit per series used to open three connections for each of
             # them, a third of a cold Calendar render.
@@ -7013,6 +7084,44 @@ class Database:
             )
         return self.get_chapter(str(chapter["id"]))
 
+    def set_book_verification(
+        self, manga_id: str, release_id: str, proof: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Store, or with None clear, the operator proof of one imported book.
+
+        The proof lives on the release row, so it goes with the release and is
+        untouched by a re-import of the same id: what the proof binds is the
+        content digest, and a different content simply stops it applying.
+        """
+
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT manga_id FROM chapter_release WHERE id=?", (release_id,)
+            ).fetchone()
+            if row is None or str(row["manga_id"]) != manga_id:
+                raise KeyError(release_id)
+            connection.execute(
+                "UPDATE chapter_release SET verified_book=?, updated_at=? WHERE id=?",
+                (
+                    json.dumps(proof, ensure_ascii=False) if proof else None,
+                    utc_now(),
+                    release_id,
+                ),
+            )
+        return self.get_chapter(release_id)
+
+    def list_book_verifications(self, manga_id: str) -> list[dict[str, Any]]:
+        """Releases of one series that carry a stored proof, valid or not."""
+
+        with self.connect() as connection:
+            self._require_manga(connection, manga_id)
+            rows = connection.execute(
+                "SELECT * FROM chapter_release WHERE manga_id=? "
+                "AND verified_book IS NOT NULL ORDER BY CAST(volume AS REAL), id",
+                (manga_id,),
+            ).fetchall()
+        return [self._decode_chapter(row) for row in rows]
+
     def chapter_archive_sha256(self, chapter_id: str) -> str | None:
         """Return the newest valid hash persisted by a completed import job."""
 
@@ -7969,9 +8078,9 @@ class Database:
                 INSERT INTO page_quality (
                     chapter_id, manga_id, verdict, normalized_height, pages,
                     measured_pages, median_aspect, max_width, median_width,
-                    library_sha256, reason, measured_at, whole_chapter
+                    library_sha256, reason, measured_at, whole_chapter, refusal_kind
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chapter_id) DO UPDATE SET
                     manga_id=excluded.manga_id,
                     verdict=excluded.verdict,
@@ -7984,7 +8093,8 @@ class Database:
                     library_sha256=excluded.library_sha256,
                     reason=excluded.reason,
                     measured_at=excluded.measured_at,
-                    whole_chapter=excluded.whole_chapter
+                    whole_chapter=excluded.whole_chapter,
+                    refusal_kind=excluded.refusal_kind
                 """,
                 (
                     str(chapter_id),
@@ -8000,6 +8110,7 @@ class Database:
                     str(assessment.get("reason") or "")[:500],
                     utc_now(),
                     str(assessment.get("whole_chapter") or ""),
+                    str(assessment.get("refusal_kind") or ""),
                 ),
             )
 
@@ -8748,7 +8859,7 @@ class Database:
         target_key = self._download_job_slot_key(target_data)
         rows = connection.execute(
             """
-            SELECT id, volume, chapter
+            SELECT id, volume, chapter, canonical_chapter, title, numbering_method
             FROM chapter_release
             WHERE manga_id=? AND language=?
             """,
@@ -8796,7 +8907,8 @@ class Database:
         with self.connect() as connection:
             releases = connection.execute(
                 """
-                SELECT id, manga_id, language, volume, chapter, downloaded
+                SELECT id, manga_id, language, volume, chapter,
+                       canonical_chapter, title, numbering_method, downloaded
                 FROM chapter_release
                 """
             ).fetchall()
@@ -9345,9 +9457,16 @@ class Database:
         manga_id: str | None = None,
         statuses: Iterable[str] | None = None,
         limit: int = 200,
+        before_id: int | None = None,
+        exclude_removed: bool = False,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         parameters: list[Any] = []
+        if before_id is not None:
+            clauses.append("torrent.id < ?")
+            parameters.append(before_id)
+        if exclude_removed:
+            clauses.append("LOWER(COALESCE(torrent.qbit_state, '')) <> 'removed'")
         if manga_id is not None:
             clauses.append("torrent.manga_id=?")
             parameters.append(manga_id)
@@ -9365,6 +9484,18 @@ class Database:
             rows = connection.execute(query, parameters).fetchall()
         return [self._decode_torrent_download(row) for row in rows]
 
+    def iter_torrent_cleanup(self) -> Iterator[dict[str, Any]]:
+        """Walk retained imports in bounded pages, even while rows are removed."""
+        before_id = None
+        while batch := self.list_torrent_downloads(
+            statuses=("imported",),
+            limit=200,
+            before_id=before_id,
+            exclude_removed=True,
+        ):
+            yield from batch
+            before_id = int(batch[-1]["id"])
+
     def update_torrent_download(
         self,
         download_id: int,
@@ -9380,10 +9511,13 @@ class Database:
         volume_hint: str | None = None,
         chapter_hint: str | None = None,
         selected_paths: list[str] | None = None,
+        assigned: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         updates: dict[str, Any] = {"updated_at": utc_now()}
         if selected_paths is not None:
             updates["selected_paths_json"] = json.dumps(sorted(set(selected_paths)))
+        if assigned is not None:
+            updates["assigned_json"] = json.dumps(assigned, ensure_ascii=False)
         if status is not None:
             if status not in TORRENT_STATUSES:
                 raise ValueError(f"Unsupported torrent status: {status}")
@@ -9546,7 +9680,7 @@ class Database:
         placeholders = ",".join("?" for _item in manga_by_id)
         rows = connection.execute(
             f"""
-            SELECT c.manga_id, c.chapter, c.downloaded
+            SELECT c.manga_id, c.chapter, c.downloaded, c.numbering_method
             FROM chapter_release c
             JOIN manga m ON m.id = c.manga_id
             WHERE c.manga_id IN ({placeholders})
@@ -9638,6 +9772,9 @@ class Database:
     @staticmethod
     def _decode_manga(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
+        result["manual_metadata"] = json.loads(
+            result.pop("manual_metadata_json", None) or "null"
+        )
         result["translation_enabled"] = bool(result.get("translation_enabled", False))
         source_title = str(result.get("title") or "")
         metadata_title = str(result.get("metadata_title") or "").strip() or None
@@ -9665,7 +9802,7 @@ class Database:
             result.pop("external_correlations_json", "[]")
         )
         result["monitored"] = bool(result["monitored"])
-        result["monitor_specials"] = bool(result.get("monitor_specials") or 0)
+        result.pop("monitor_specials", None)
         result["auto_download"] = bool(result["auto_download"])
         result["assemble_books_automatically"] = bool(
             result.get("assemble_books_automatically", False)
@@ -9757,6 +9894,7 @@ class Database:
             )
         except json.JSONDecodeError:
             result["selected_paths"] = None
+        result["assigned"] = json.loads(result.pop("assigned_json", None) or "null")
         try:
             result["language_evidence"] = json.loads(
                 result.pop("language_evidence_json", "{}")
@@ -9775,6 +9913,13 @@ class Database:
     def _download_job_slot_key(release: dict[str, Any]) -> tuple[str, str]:
         """Stable queue identity shared by alternative provider releases."""
 
+        prologue = numbered_prologue(release.get("title"))
+        if (
+            prologue is not None
+            and release.get("canonical_chapter") is None
+            and release.get("numbering_method") == "special_title"
+        ):
+            return ("prologue", str(prologue))
         chapter = canonical_number(release.get("chapter"))
         if chapter is not None:
             return ("chapter", chapter)
@@ -9947,6 +10092,9 @@ class Database:
         result["groups"] = (
             [] if groups_json in ("[]", "", None) else json.loads(groups_json)
         )
+        from tankarr.book_verification import book_verification
+
+        result["verified_book"] = book_verification(result.get("verified_book"))
         result["assembled_from"] = assembly_provenance(result.get("assembled_from"))
         evidence_json = result.pop("numbering_evidence_json", "{}")
         result["numbering_evidence"] = (

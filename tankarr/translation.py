@@ -51,6 +51,16 @@ class TranslationManager:
     def directory(self, job: dict) -> Path:
         return self.settings.staging_dir / "translations" / job["id"]
 
+    def attempt_directory(self, job: dict) -> Path:
+        path = self.directory(job) / f"attempt-{job['attempts']}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _update_attempt(self, job: dict, **changes):
+        return self.store.update(
+            job["id"], expected_attempt=job["attempts"], active_only=True, **changes
+        )
+
     def configured(self) -> bool:
         return bool(
             self.settings.translation_enabled
@@ -198,30 +208,30 @@ class TranslationManager:
                 try:
                     await self.process(job)
                 except LocalTranslationError as exc:
-                    self.store.update(job["id"], status="failed", message=str(exc))
+                    self._update_attempt(job, status="failed", message=str(exc))
                 except httpx.HTTPStatusError as exc:
                     if (
                         400 <= exc.response.status_code < 500
                         and exc.response.status_code != 429
                     ):
-                        self.store.update(
-                            job["id"],
+                        self._update_attempt(
+                            job,
                             status="failed",
                             message=f"{endpoint} rejected the request (HTTP {exc.response.status_code}); check its settings before retrying",
                         )
                     else:
-                        self.store.update(
-                            job["id"],
+                        self._update_attempt(
+                            job,
                             message=f"Waiting for {endpoint.lower()}; retrying automatically",
                         )
                 except (httpx.HTTPError, OSError):
-                    self.store.update(
-                        job["id"],
+                    self._update_attempt(
+                        job,
                         message=f"Waiting for {endpoint.lower()}; retrying automatically",
                     )
                 except (ValueError, KeyError, zipfile.BadZipFile, ProviderRequestError):
-                    self.store.update(
-                        job["id"],
+                    self._update_attempt(
+                        job,
                         status="failed",
                         message="Translation or archive validation failed; retry after checking the processor",
                     )
@@ -229,13 +239,21 @@ class TranslationManager:
                 await self.acquisition.finish_sources()
 
     def cancel_job(self, job, message=None):
+        current = self.store.get(job["id"])
+        if current["attempts"] != job["attempts"] or current["status"] == "completed":
+            return current
         if message is None:
             message = (
                 "Cancelled; remote cancellation requested"
                 if self.settings.translation_processor_url
                 else "Cancelled; stopping local processing"
             )
-        result = self.store.update(job["id"], status="cancelled", message=message)
+        result = self.store.update(
+            job["id"],
+            expected_attempt=job["attempts"],
+            status="cancelled",
+            message=message,
+        )
         if self.settings.translation_processor_url:
             base = validate_translation_url(self.settings.translation_processor_url)
             remote_id = f"{job['id']}-{job['attempts']}"
@@ -277,11 +295,15 @@ class TranslationManager:
                 path.unlink(missing_ok=True)
 
     def _current(self, job: dict) -> dict | None:
-        manga = self.database.get_manga(job["manga_id"])
-        if not self.enabled(manga) or self.store.get(job["id"])["status"] in {
+        current = self.store.get(job["id"])
+        if current["attempts"] != job["attempts"] or current["status"] in {
             "cancelled",
             "failed",
+            "completed",
         }:
+            return None
+        manga = self.database.get_manga(job["manga_id"])
+        if not self.enabled(manga):
             return None
         if manga["preferred_language"] != job["target_language"]:
             self.cancel_job(job, "Series language changed")
@@ -298,8 +320,8 @@ class TranslationManager:
         for owned in releases:
             if owned.get("downloaded") and matches_slot(owned, job["slot_key"]):
                 own_result = owned["id"] == f"translated:{job['id']}"
-                self.store.update(
-                    job["id"],
+                self._update_attempt(
+                    job,
                     status="completed" if own_result else "cancelled",
                     result_chapter_id=owned["id"] if own_result else None,
                     message="Imported"
@@ -318,15 +340,15 @@ class TranslationManager:
             and matches_slot(release, job["slot_key"])
             for release in releases
         ):
-            self.store.update(
-                job["id"],
+            self._update_attempt(
+                job,
                 status="waiting_native",
                 message="Waiting for the available release in the requested language",
             )
             return None
         return manga
 
-    async def _prepare(self, job: dict, manga: dict) -> Path:
+    async def _prepare(self, job: dict, manga: dict) -> Path | None:
         directory = self.directory(job)
         source_file = directory / "source.cbz"
         if source_file.exists():
@@ -340,8 +362,8 @@ class TranslationManager:
             or slot_key(source) != job["slot_key"]
         ):
             raise ValueError("Source identity changed")
-        self.store.update(
-            job["id"],
+        self._update_attempt(
+            job,
             status="preparing",
             message="Downloading the source edition for translation",
         )
@@ -349,8 +371,8 @@ class TranslationManager:
         pages_dir.mkdir(parents=True, exist_ok=True)
 
         async def progress(done, total):
-            self.store.update(
-                job["id"], message=f"Downloading source: {done}/{total} pages"
+            self._update_attempt(
+                job, message=f"Downloading source: {done}/{total} pages"
             )
 
         if source.get("downloaded") and source.get("library_path"):
@@ -367,10 +389,14 @@ class TranslationManager:
                 progress,
                 concurrency=self.settings.download_concurrency,
             )
+        if self._current(job) is None:
+            return None
         # Reuse import limits and image geometry checks for downloaded pages too.
         checked = await asyncio.to_thread(
             self.importer._extract_pages, pages_dir, directory / "checked-input"
         )
+        if self._current(job) is None:
+            return None
         if len(checked) != len(pages):
             raise ValueError("Source page count changed")
         await asyncio.to_thread(
@@ -383,7 +409,7 @@ class TranslationManager:
         if manga is None:
             return
         source = await self._prepare(job, manga)
-        if self._current(job) is None:
+        if source is None or self._current(job) is None:
             return
         if not self.settings.translation_processor_url:
             await self._process_local(job, source)
@@ -400,6 +426,8 @@ class TranslationManager:
             headers=headers, timeout=60, follow_redirects=False
         ) as client:
             response = await client.get(url)
+            if self._current(job) is None:
+                return
             if response.status_code == 404:
                 response = await client.put(
                     url + "/source",
@@ -410,10 +438,15 @@ class TranslationManager:
                     },
                 )
                 response.raise_for_status()
+                if self._current(job) is None:
+                    return
+                source_hash = await asyncio.to_thread(sha256, source)
+                if self._current(job) is None:
+                    return
                 response = await client.post(
                     url,
                     json={
-                        "source_sha256": await asyncio.to_thread(sha256, source),
+                        "source_sha256": source_hash,
                         "source_language": job["source"]["language"],
                         "target_language": job["target_language"],
                         "ai": {
@@ -435,8 +468,8 @@ class TranslationManager:
                 raise ValueError("Invalid processor status")
             if self._current(job) is None:
                 return
-            self.store.update(
-                job["id"],
+            self._update_attempt(
+                job,
                 status="processing",
                 message="OCR and translation in progress"
                 if result["status"] == "running"
@@ -444,7 +477,7 @@ class TranslationManager:
             )
             if result.get("status") != "completed":
                 return
-            output = self.directory(job) / "result.cbz"
+            output = self.attempt_directory(job) / "result.cbz"
             partial = output.with_suffix(".partial")
             try:
                 async with client.stream("GET", url + "/result") as stream:
@@ -452,19 +485,23 @@ class TranslationManager:
                     total = 0
                     with partial.open("wb") as handle:
                         async for chunk in stream.aiter_bytes(1024 * 1024):
+                            if self._current(job) is None:
+                                return
                             total += len(chunk)
                             if total > self.settings.import_max_expanded_bytes:
                                 raise ValueError(
                                     "Translation result exceeds import limit"
                                 )
                             await asyncio.to_thread(handle.write, chunk)
+                if self._current(job) is None:
+                    return
                 partial.replace(output)
             finally:
                 partial.unlink(missing_ok=True)
         await self._publish(job, output, source)
 
     async def _process_local(self, job: dict, source: Path):
-        output = self.directory(job) / "result.cbz"
+        output = self.attempt_directory(job) / "result.cbz"
         request = {
             "source_sha256": await asyncio.to_thread(sha256, source),
             "source_language": job["source"]["language"],
@@ -479,8 +516,8 @@ class TranslationManager:
         def progress(done, total):
             if self._current(job) is None:
                 return
-            self.store.update(
-                job["id"],
+            self._update_attempt(
+                job,
                 status="processing",
                 message=f"Local OCR and translation: {done}/{total} pages",
             )
@@ -516,7 +553,9 @@ class TranslationManager:
         if manga is None:
             return
         pages = await asyncio.to_thread(
-            self.importer._extract_pages, output, self.directory(job) / "output-pages"
+            self.importer._extract_pages,
+            output,
+            self.attempt_directory(job) / "output-pages",
         )
         source_info = await asyncio.to_thread(validate_cbz, source)
         if len(pages) != source_info["page_count"]:
@@ -526,6 +565,17 @@ class TranslationManager:
             if info.file_size > 64 * 1024:
                 raise ValueError("Translation receipt too large")
             receipt = json.loads(archive.read(info))
+        reader_check = receipt.get("source_language_reader")
+        if reader_check is not None and (
+            not isinstance(reader_check, dict)
+            or reader_check.get("unconfirmed_regions") != []
+            or not isinstance(reader_check.get("regions"), list)
+            or any(
+                not isinstance(region, dict) or region.get("confirmed") is not True
+                for region in reader_check["regions"]
+            )
+        ):
+            raise ValueError("Translation source regions still require review")
         if (
             receipt.get("source_sha256") != source_info["sha256"]
             or receipt.get("source_language") != job["source"]["language"]
@@ -548,7 +598,7 @@ class TranslationManager:
             "groups": ["Machine translation"],
             "notes": f"Machine translation {job['source']['language']} → {job['target_language']}; model {str(receipt.get('model') or 'unknown')[:200]}; source SHA-256 {source_info['sha256']}; job {job['id']}",
         }
-        published = self.directory(job) / "published.cbz"
+        published = self.attempt_directory(job) / "published.cbz"
         _, archive_info = await asyncio.to_thread(
             package_cbz_validated, published, pages, manga, chapter
         )
@@ -557,8 +607,8 @@ class TranslationManager:
             self.service.assert_mutations_allowed()
             if self._current(job) is None:
                 return
-            self.store.update(
-                job["id"],
+            self._update_attempt(
+                job,
                 status="importing",
                 message="Importing the translated archive",
             )
@@ -570,8 +620,8 @@ class TranslationManager:
                 archive_info["sha256"],
                 content_hash,
             )
-            self.store.update(
-                job["id"],
+            self._update_attempt(
+                job,
                 status="completed",
                 message="Imported machine translation",
                 result_chapter_id=imported["chapter"]["id"],

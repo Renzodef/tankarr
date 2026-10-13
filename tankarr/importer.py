@@ -13,6 +13,7 @@ import tempfile
 import time
 import zipfile
 from collections.abc import AsyncIterable
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 from urllib.parse import urlsplit
@@ -33,7 +34,11 @@ from tankarr.import_limits import (
     check_page_geometry,
     run_decoder,
 )
-from tankarr.language_audit import audit_english_pages, automatic_english_decision
+from tankarr.language_audit import (
+    audit_english_pages,
+    automatic_english_decision,
+    corroborate_release_language,
+)
 from tankarr.page_order import restore_cover_first
 from tankarr.service import (
     LOCAL_CONTENT_FINGERPRINT_VERSION,
@@ -107,6 +112,22 @@ def natural_key(text: str) -> tuple:
     return tuple(
         int(token) if token.isdigit() else token.lower()
         for token in re.split(r"(\d+)", text)
+    )
+
+
+def archive_page_key(text: str) -> tuple:
+    """Sort decimal chapter folders numerically, keeping page-name ordering.
+
+    Splitting a whole path on integer digits puts ``ch4.1/`` before
+    ``ch004/`` because the decimal point sorts before the path separator.
+    Only directory numbers are decimals here: flat page names such as
+    ``page1.10.jpg`` retain their ordinary natural ordering.
+    """
+
+    tokens = re.split(r"(\d+(?:\.\d+)?(?=[^/\\]*[/\\])|\d+)", text)
+    return tuple(
+        (Decimal(token) if "." in token else int(token)) if index % 2 else token.lower()
+        for index, token in enumerate(tokens)
     )
 
 
@@ -1344,7 +1365,7 @@ class LibraryImporter:
                     and not entry.filename.startswith("__MACOSX")
                     and not Path(entry.filename).name.startswith(".")
                 ),
-                key=lambda entry: natural_key(entry.filename),
+                key=lambda entry: archive_page_key(entry.filename),
             )
             if not entries:
                 return None
@@ -1411,7 +1432,7 @@ class LibraryImporter:
             if not isinstance(size, int) or not isinstance(crc, int):
                 continue
             entries.append((name, size, crc))
-        entries.sort(key=lambda item: natural_key(item[0]))
+        entries.sort(key=lambda item: archive_page_key(item[0]))
         return tuple((size, crc) for _name, size, crc in entries)
 
     @staticmethod
@@ -1428,7 +1449,7 @@ class LibraryImporter:
                     and not entry.filename.startswith("__MACOSX")
                     and not Path(entry.filename).name.startswith(".")
                 ),
-                key=lambda entry: natural_key(entry.filename),
+                key=lambda entry: archive_page_key(entry.filename),
             )
             return tuple((entry.file_size, entry.CRC) for entry in entries)
 
@@ -1737,11 +1758,23 @@ class LibraryImporter:
             }
             hard_refusal = any(
                 audit["confirmation_decision"].get("verdict") == "refused"
+                and audit["confirmation_decision"].get("basis") != "foreign_script"
                 for audit in audits
             )
-            if hard_refusal or (
-                not confirm_language
-                and any(audit.get("verdict") != "confirmed" for audit in audits)
+            metadata_decision = automatic_english_decision(
+                {"verdict": "review"},
+                declared_language=language,
+                expected_language=str(manga["preferred_language"]),
+                names=[normalized_source_name, relative_path],
+            )
+            needs_manual_review = any(
+                audit["confirmation_decision"].get("verdict") != "confirmed"
+                for audit in audits
+            )
+            if (
+                hard_refusal
+                or metadata_decision.get("verdict") == "refused"
+                or (needs_manual_review and not confirm_language)
             ):
                 evidence["verdict"] = "review"
                 raise LanguageReviewRequired(evidence)
@@ -2093,6 +2126,8 @@ class LibraryImporter:
                     }
                 )
 
+            if automatic_decision:
+                audits = corroborate_release_language(audits)
             language_evidence["ocr"] = audits
             hard_refusal = manual_language and any(
                 audit.get("automatic_decision", {}).get("verdict") == "refused"
@@ -2220,6 +2255,22 @@ class LibraryImporter:
             for record in self.database.list_volume_metadata(str(manga["id"])):
                 if str(record.get("volume_key")) != str(chapter["volume"]):
                     continue
+                # A thumbnail selected from this library book is circular
+                # evidence: a bonus jacket or final illustration must not
+                # cause its entire narrative sequence to be reversed.
+                artwork = record.get("data") or {}
+                if not isinstance(artwork, dict):
+                    break
+                try:
+                    origin = urlsplit(str(artwork.get("artwork_source_url") or ""))
+                except ValueError:
+                    break
+                if (
+                    artwork.get("artwork_source") == "local"
+                    or origin.scheme not in {"http", "https"}
+                    or not origin.netloc
+                ):
+                    break
                 relative = str(record.get("artwork_path") or "")
                 if not relative:
                     break
@@ -2272,7 +2323,7 @@ class LibraryImporter:
                     for entry in extracted.rglob("*")
                     if entry.is_file() and entry.suffix.lower() in IMAGE_SUFFIXES
                 ),
-                key=lambda entry: natural_key(str(entry.relative_to(extracted))),
+                key=lambda entry: archive_page_key(str(entry.relative_to(extracted))),
             )
             return self._number_pages(entries, target, copy=False)
         with zipfile.ZipFile(source) as archive:
@@ -2285,7 +2336,7 @@ class LibraryImporter:
                     and not item.filename.startswith("__MACOSX")
                     and not Path(item.filename).name.startswith(".")
                 ),
-                key=lambda item: natural_key(item.filename),
+                key=lambda item: archive_page_key(item.filename),
             )
             limits.check(sum(item.file_size for item in entries), len(entries), target)
             pages: list[Path] = []

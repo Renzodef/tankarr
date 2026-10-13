@@ -28,6 +28,7 @@ def pending_decimal(tmp_path):
             {
                 **chapter("book", "", volume="12"),
                 "chapter": None,
+                "provider": "manual",
                 "release_unit": "volume",
             },
         ],
