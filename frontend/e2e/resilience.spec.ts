@@ -40,21 +40,41 @@ test("a real series 404 retains the explicit missing-series state", async ({ pag
 });
 
 test("series polling failure preserves the snapshot and recovers with retry", async ({ page }) => {
-  await page.goto("/#/series/browser-041");
-  await expect(seriesTitle(page, "Browser Series 041")).toBeVisible();
-  await page.route(seriesRequest("browser-041"), route => route.fulfill({
-    status: 503, json: { detail: "Refresh unavailable" },
-  }));
-  await triggerSeriesPoll(page);
-  const retry = page.getByRole("button", { name: "Retry series", exact: true });
-  await expect(retry).toBeVisible();
-  await expect(page.getByRole("alert")).toContainText("Showing the last loaded data.");
-  await expect(seriesTitle(page, "Browser Series 041")).toBeVisible();
-  await expect(page.getByText("Series not found", { exact: false })).toHaveCount(0);
-  await page.unroute(seriesRequest("browser-041"));
-  await retry.click();
-  await expect(retry).toHaveCount(0);
-  await expect(seriesTitle(page, "Browser Series 041")).toBeVisible();
+  let releaseUnits!: () => void;
+  const unitsGate = new Promise<void>(resolve => { releaseUnits = resolve; });
+  await page.route("**/api/manga/browser-041/units", async route => {
+    await unitsGate;
+    await route.continue();
+  });
+  try {
+    await page.goto("/#/series/browser-041");
+    await expect(seriesTitle(page, "Browser Series 041")).toBeVisible();
+    let requests = 0;
+    await page.route(seriesRequest("browser-041"), route => {
+      requests += 1;
+      return route.fulfill({ status: 503, json: { detail: "Refresh unavailable" } });
+    });
+    // A painted heading does not mean the parallel units request has settled.
+    // Exercise that window: the first focus correctly joins the initial load.
+    await triggerSeriesPoll(page);
+    expect(requests).toBe(0);
+    releaseUnits();
+    await expect.poll(async () => {
+      await triggerSeriesPoll(page);
+      return requests;
+    }).toBeGreaterThan(0);
+    const retry = page.getByRole("button", { name: "Retry series", exact: true });
+    await expect(retry).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText("Showing the last loaded data.");
+    await expect(seriesTitle(page, "Browser Series 041")).toBeVisible();
+    await expect(page.getByText("Series not found", { exact: false })).toHaveCount(0);
+    await page.unroute(seriesRequest("browser-041"));
+    await retry.click();
+    await expect(retry).toHaveCount(0);
+    await expect(seriesTitle(page, "Browser Series 041")).toBeVisible();
+  } finally {
+    releaseUnits();
+  }
 });
 
 test("a saved series rename supersedes a coalesced, still-pending poll", async ({ page }) => {
