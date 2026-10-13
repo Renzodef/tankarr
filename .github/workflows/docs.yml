@@ -1,7 +1,7 @@
 name: Docs
 
 # The site carries the online demo at /demo/: the interface in front of a
-# recording of the fictional library (build-demo.sh), so a change to the
+# recording of the real-catalogue demo library (build-demo.sh), so a change to the
 # interface or to the API republishes it too.
 on:
   push:
@@ -18,7 +18,12 @@ on:
       - "build-demo.sh"
       - "pyproject.toml"
   pull_request:
-    paths: ["docs/**", "mkdocs.yml", ".github/workflows/docs.yml"]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+      - "tests/demo_real.py"
+      - "build-demo.sh"
   workflow_dispatch:
 
 permissions:
@@ -46,16 +51,14 @@ jobs:
             pyproject.toml
       - run: python -m pip install -r docs/requirements.txt
       - run: python -m mkdocs build --strict
-      # Pull requests only check that the pages build; the demo is checked by
-      # the Browser job of CI and published from main.
-      - if: github.event_name != 'pull_request'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Verify the published dataset on PRs too; Browser CI covers the offline
+      # fictional dataset, which cannot catch catalogue-build regressions.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Build the online demo
-        if: github.event_name != 'pull_request'
         env:
           TANKARR_PYTHON: python
           TANKARR_DEMO_DATASET: real

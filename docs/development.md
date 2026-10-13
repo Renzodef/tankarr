@@ -306,9 +306,12 @@ npm run demo:test --prefix frontend             # opens the built demo in a brow
 
 The published demo uses `tests/demo_real.py`: it adds well-known manga,
 manhwa and manhua by their MangaBaka identity through Tankarr's own code
-path ("Add New", then the metadata enrichment that fetches covers and
-catalogue data), so the demo shows exactly what an installation shows. Only
-the release history is invented. The one series with real pages is
+path ("Add New", then MangaBaka metadata enrichment and cover downloads).
+The demo builder omits enrichment from additional catalogues, so an outage
+of those services cannot delay the site deployment. Each work has a 30-second
+budget including its initial lookup, retries and cover download; the reader
+sample has a separate three-minute budget. Progress is logged as it happens.
+Only the release history is invented. The one series with real pages is
 [Pepper&Carrot](https://www.peppercarrot.com) by David Revoy, published under
 CC BY 4.0; no page of a licensed work is distributed. The fictional library of
 `tests/demo_snapshot.py` is the offline default, used by CI.
