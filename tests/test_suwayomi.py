@@ -595,6 +595,57 @@ async def test_search_reports_a_stalled_source_when_another_source_succeeds(
     ]
 
 
+@pytest.mark.asyncio
+async def test_queued_source_gets_timeout_budget_after_waiting_for_capacity(
+    monkeypatch,
+):
+    client = SuwayomiProvider(BASE_URL, search_timeout_seconds=0.02)
+    sources = [
+        {"id": str(index), "displayName": f"Source {index} (EN)"}
+        for index in range(1, 6)
+    ]
+    called = []
+    active = 0
+    peak_active = 0
+
+    async def installed_sources(language):
+        assert language == "en"
+        return sources
+
+    async def graphql(_query, variables):
+        nonlocal active, peak_active
+        source_id = variables["input"]["source"]
+        called.append(source_id)
+        active += 1
+        peak_active = max(peak_active, active)
+        try:
+            if source_id != "5":
+                await asyncio.Event().wait()
+            return {
+                "fetchSourceManga": {
+                    "mangas": [{"id": 7, "sourceId": "5", "title": "Available Manga"}]
+                }
+            }
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(client, "_sources", installed_sources)
+    monkeypatch.setattr(client, "_graphql", graphql)
+    try:
+        results, diagnostics = await client.search_with_diagnostics("Example", "en")
+    finally:
+        await client.aclose()
+
+    assert [item["title"] for item in results] == ["Available Manga"]
+    assert called == ["1", "2", "3", "4", "5"]
+    assert peak_active == 4
+    assert active == 0
+    assert diagnostics == [
+        {"provider": f"Source {index} (EN)", "error": "Search exceeded 0.02s"}
+        for index in range(1, 5)
+    ]
+
+
 def test_graphql_error_summary_strips_backend_stack_trace():
     summary = SuwayomiProvider._graphql_error_summary(
         {

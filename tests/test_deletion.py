@@ -1407,6 +1407,81 @@ class NeverDownloadProvider:
         raise AssertionError("provider must not run for an imported-file recovery")
 
 
+@pytest.mark.asyncio
+async def test_download_cancellation_waits_for_publication_and_preserves_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from PIL import Image
+
+    from tankarr.page_quality import OK
+
+    database, service, _ = make_service(tmp_path)
+    database.upsert_manga(manga(), "en", "all")
+    database.upsert_chapters("manga-1", [chapter("chapter-1", "1")])
+    job = database.create_job("manga-1", "chapter-1", "en")
+
+    class ValidPageProvider:
+        async def download_pages(self, _, destination, progress, **kwargs):
+            destination.mkdir(parents=True, exist_ok=True)
+            page = destination / "0001.png"
+            Image.new("RGB", (600, 900), "white").save(page)
+            return [page]
+
+    service.providers = {"mangadex": ValidPageProvider()}
+    monkeypatch.setattr(
+        service, "_assess_downloaded_pages", lambda *args: {"verdict": OK}
+    )
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    staged = []
+    original = service._publish_download_import_locked
+
+    def blocked_publish(chapter_id, source, *args):
+        staged.append(source)
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        try:
+            return original(chapter_id, source, *args)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(service, "_publish_download_import_locked", blocked_publish)
+    task = asyncio.create_task(service.process_download_job(job["id"]))
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not finished.is_set()
+        assert service._mutation_lock.locked()
+        assert staged[0].exists()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), 3)
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.to_thread(finished.wait, 3)
+
+    assert finished.is_set()
+    assert not service._mutation_lock.locked()
+    published = database.get_chapter("chapter-1")
+    assert published["downloaded"] is True
+    assert Path(published["library_path"]).exists()
+    assert not staged[0].parent.exists()
+
+    database.initialize()
+    provider = NeverDownloadProvider()
+    service.providers = {"mangadex": provider}
+    await service.process_download_job(job["id"])
+    assert database.get_job(job["id"])["status"] == "completed"
+    assert provider.calls == 0
+
+
 class BlockingScanKomga(RecordingKomga):
     def __init__(self):
         super().__init__()

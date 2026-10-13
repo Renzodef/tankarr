@@ -13,13 +13,13 @@ function book(volume: string, chapters: SeriesUnitChapter[], values: Partial<Ser
 function data(books: SeriesBookGroup[], values: Partial<SeriesUnits> = {}): SeriesUnits {
   return { manga_id: "example-series", mode: "grouped", series_unit: "chapters", edition_book_count: null, expected_book_count: books.length, warning: null, hints: [], books, unassigned_chapters: [], form: "volumes", uniform: "mixed", preference: "volumes", ...values };
 }
-function view(groups: SeriesUnits, bookmark?: import("../types").ReaderLink["bookmark"]) {
+function view(groups: SeriesUnits, bookmark?: import("../types").ReaderLink["bookmark"], ongoing = false) {
   const actions = {
     bookmark, busy: false, readerLabel: "Stump", readerUrl: (id: string) => id === "owned-book" ? "https://reader.example/book/owned-book" : undefined,
     onSetBookMonitoring: vi.fn(), onAutomaticSearchBook: vi.fn(), onSearchBook: vi.fn(), onDeleteBookFiles: vi.fn(), onRetireDuplicates: vi.fn(), onSetBoundaries: vi.fn(),
     renderChapterRows: (chapters: SeriesUnitChapter[]) => chapters.map((item) => <tr key={item.key}><td>{`Chapter ${item.chapter}`}</td></tr>),
   };
-  return { ...render(<SeriesUnitGroups data={groups} {...actions} />), actions };
+  return { ...render(<SeriesUnitGroups data={groups} ongoing={ongoing} {...actions} />), actions };
 }
 afterEach(cleanup);
 
@@ -48,6 +48,15 @@ it("does not label unmapped chapters as absent when the edition files are owned"
   expect(screen.getByText(/All expected book files present/)).toBeTruthy();
 });
 
+it("does not present guessed chapter contents for an owned book", () => {
+  const guessed = book("5", [chapter("131", { releases: [{ id: "bad-source" } as SeriesUnitChapter["releases"][number]] })], {
+    owned: true, estimated: true, chapter_range: { first: "14", last: "131" },
+  });
+  view(data([guessed], { uniform: "books" }));
+  expect(screen.queryByText(/ch\. 14–131/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Show separate chapter releases for book 5" })).toBeNull();
+});
+
 it("counts chapters mapped into owned books as covered without separate chapter files", () => {
   const owned = book("1", [chapter("1", { missing: false, covered_by_volume: "1" }), chapter("2", { missing: false, covered_by_volume: "1" })], {
     owned: true, status: "owned", open_release_id: "owned-book", plan_state: "book",
@@ -69,6 +78,31 @@ it("keeps a readable volume visible when a webtoon is presented as chapters", ()
   expect(screen.getByRole("region", { name: "Chapters" })).toBeTruthy();
 });
 
+it("shows only chapters when every chapter file is already on disk", () => {
+  const chapters = [chapter("1", { downloaded: true, missing: false }), chapter("2", { downloaded: true, missing: false })];
+  const owned = book("1", chapters, { owned: true, status: "owned", pages: 200, open_release_id: "owned-book" });
+  view(data([owned], { form: "chapters", uniform: "chapters", form_reason: "running series: chapters until it ends" }));
+
+  expect(screen.getByText(/2 of 2 chapters on disk/)).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Readable books" })).toBeNull();
+  expect(screen.queryByText(/Edition files:/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit book boundaries" })).toBeNull();
+  expect(within(screen.getByRole("region", { name: "Chapters" })).getAllByText(/^Chapter \d+$/)).toHaveLength(2);
+});
+
+it("shows only chapter progress for an ongoing series with a missing chapter", () => {
+  const owned = book("1", [chapter("1", { downloaded: true, missing: false }), chapter("2")], {
+    owned: true, status: "owned", open_release_id: "owned-book",
+  });
+  view(data([owned], { form: "chapters", uniform: "chapters" }), undefined, true);
+
+  expect(screen.getByText(/1 of 2 chapters on disk/)).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Readable books" })).toBeNull();
+  expect(screen.queryByLabelText("Library completeness")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit book boundaries" })).toBeNull();
+  expect(within(screen.getByRole("region", { name: "Chapters" })).getAllByText(/^Chapter \d+$/)).toHaveLength(2);
+});
+
 it("shows one row per book with its plan, keeps owned books closed and opens the rest", () => {
   const owned = book("1", [chapter("1", { downloaded: true, missing: false })], { owned: true, status: "owned", pages: 208, plan_state: "book", plan_text: "208 pages" });
   const partial = book("2", [chapter("2", { downloaded: true, missing: false }), chapter("3")], { plan_state: "partial", plan_text: "1 of 2 chapters · search the book, then the missing chapters" });
@@ -86,7 +120,7 @@ it("shows one row per book with its plan, keeps owned books closed and opens the
 it("keeps inferred boundaries quiet and offers the map editor", () => {
   const { actions } = view(data([book("37", [chapter("171"), chapter("174")], { estimated: true, plan_state: "missing" })], { map_confidence: { level: "partial", estimated_books: 1, sources: ["operator"], hint_sources: [] } }));
   expect(screen.queryByText(/estimated/i)).toBeNull();
-  expect(screen.getByText(/1 book laid out between known neighbours/)).toBeTruthy();
+  expect(screen.getByText(/1 book has no verified chapter assignment/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Correct the map" }));
   expect(actions.onSetBoundaries).toHaveBeenCalledOnce();
 });
@@ -100,9 +134,8 @@ it("shows a complete book collection with its inferred layout, never as a proble
   expect(screen.getByText(/All expected book files present/).textContent).toBe("10 books on disk · All expected book files present");
   expect(screen.getByText(/Book boundaries:/)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Correct the map" })).toBeNull();
-  // Every book shows where its chapters fall; the nine laid out between
-  // known neighbours say so and stay books on a complete shelf.
-  expect(screen.getAllByText(/ch\. /)).toHaveLength(10);
+  // The nine inferred ranges are hidden because no source maps their pages.
+  expect(screen.getAllByText(/ch\. /)).toHaveLength(1);
   expect(screen.queryByText(/estimated/i)).toBeNull();
   expect(screen.getByRole("button", { name: "Edit book boundaries" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Expand book/ })).toBeNull();
@@ -213,7 +246,7 @@ it("shows an owned book's range without repeating how it was laid out", () => {
     book("2", [chapter("8"), chapter("15")], { owned: true, pages: 200, estimated: true, plan_state: "book" }),
   ]));
   expect(screen.getByText(/ch\. 1–7 · 200 pages/)).toBeTruthy();
-  expect(screen.getByText(/ch\. 8–15 · 200 pages/)).toBeTruthy();
+  expect(screen.queryByText(/ch\. 8–15/)).toBeNull();
   expect(screen.queryByText(/estimated/i)).toBeNull();
 });
 

@@ -176,6 +176,31 @@ def test_explicit_non_english_release_evidence_is_filtered_before_download(
     assert ProwlarrClient._clearly_non_english_release(title, categories) is expected
 
 
+@pytest.mark.parametrize(
+    "markers",
+    [
+        {"tags": ["raw"]},
+        {"tags": [{"name": "Raw"}]},
+        {"indexerFlags": ["raw"]},
+        {"tags": ["trusted"]},
+    ],
+)
+def test_indexer_raw_tags_are_used_as_language_evidence(markers):
+    client = ProwlarrClient(Settings())
+    raw = {
+        "protocol": "torrent",
+        "title": "Fixture v01 [Digital]",
+        "indexerId": 10,
+        "indexer": "Fixture indexer",
+        "infoHash": INFO_HASH,
+        "magnetUrl": MAGNET,
+        "categories": [{"id": 7030, "name": "Books/Comics"}],
+        **markers,
+    }
+    result = client._normalize_release(raw, "Fixture", "en")
+    assert (result is None) == (markers != {"tags": ["trusted"]})
+
+
 @respx.mock
 def test_settings_endpoint_probes_unsaved_prowlarr_configuration(tmp_path):
     internal_url = "http://prowlarr"

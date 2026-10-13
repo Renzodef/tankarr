@@ -69,8 +69,11 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
   const collapsed = collapsedOverride ?? (book.owned || (filter === "all" && plan === "book"));
   // Owned volumes have the same presentation regardless of source chapter indexing.
   // Separate releases remain an explicit secondary view, never an implied contents list.
+  const inferred = Boolean(book.estimated && !book.map_sources?.some((source) => ["operator", "ocr", "content", "source_tags"].includes(source)));
   const visibleChapters = book.owned
-    ? chapters.filter((chapter) => chapter.releases.length > 0 || chapter.files.length > 0 || chapter.downloaded)
+    ? chapters.filter((chapter) => inferred
+      ? chapter.files.length > 0 || chapter.downloaded
+      : chapter.releases.length > 0 || chapter.files.length > 0 || chapter.downloaded)
     : chapters;
   const canExpand = book.owned ? visibleChapters.length > 0 : book.chapter_count > 0 || chapters.length > 0;
   const url = book.open_release_id ? actions.readerUrl(book.open_release_id) : undefined;
@@ -80,7 +83,8 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
     || book.files.some((file) => file.id === bookmark.chapter_id)
     || book.chapters.some((chapter) => chapter.releases.some((release) => release.id === bookmark.chapter_id))
   );
-  const range = book.chapter_range ? t("ch. {first}–{last}", { first: book.chapter_range.first, last: book.chapter_range.last }) : t("chapters not known");
+  const knownRange = !inferred && book.chapter_range;
+  const range = knownRange ? t("ch. {first}–{last}", { first: knownRange.first, last: knownRange.last }) : t("chapters not mapped");
   const text = book.plan_text
     ?? (plan === "book" ? (book.pages ? tn(book.pages, "{count} page", "{count} pages") : t("On disk"))
       : plan === "assemble" ? t("All chapters on disk")
@@ -88,9 +92,9 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
           : t("Search the book, then chapters"));
   const boundarySource = book.map_sources?.includes("content") ? t("pages matched to the book") : book.map_sources?.includes("source_tags") ? t("from the source's volume tags") : book.estimated ? null : book.map_sources?.includes("ocr") ? t("read from book") : book.map_sources?.includes("operator") ? t("saved boundaries") : t("catalogue boundaries");
   const description = book.owned
-    ? `${book.chapter_range ? `${range} · ` : ""}${text}`
+    ? `${knownRange ? `${range} · ` : ""}${text}`
     : `${range} · ${text}`;
-  const detail = book.owned && book.chapter_range ? [range, boundarySource, text].filter(Boolean).join(" · ") : description;
+  const detail = book.owned && knownRange ? [range, boundarySource, text].filter(Boolean).join(" · ") : description;
   const primary = plan === "missing" || plan === "partial"
       ? <button type="button" className="btn btn-small" disabled={actions.busy} aria-label={t("Automatically search book {volume}", { volume: book.volume })} onClick={() => actions.onAutomaticSearchBook(book)}>{t("Search")}</button>
       : null;
@@ -147,9 +151,9 @@ function describeConfidence(data: SeriesUnits): string {
   if (confidence.level === "exact") return confidence.sources.includes("operator")
     ? t("Book boundaries: manually saved; editorial accuracy has not been independently verified.")
     : t("Book boundaries: mapped ({sources}).", { sources });
-  if (confidence.level === "estimated") return t("Chapters are laid out evenly across the books.");
+  if (confidence.level === "estimated") return t("Chapter placement inside the books is not verified.");
   if (confidence.level === "partial" && confidence.unknown_books) return tn(confidence.unknown_books, "Book boundaries: {sources}; {count} book has no verified chapter assignment.", "Book boundaries: {sources}; {count} books have no verified chapter assignment.", { sources });
-  if (confidence.level === "partial") return tn(confidence.estimated_books, "Book boundaries: {sources}; {count} book laid out between known neighbours.", "Book boundaries: {sources}; {count} books laid out between known neighbours.", { sources });
+  if (confidence.level === "partial") return tn(confidence.estimated_books, "Book boundaries: {sources}; {count} book has no verified chapter assignment.", "Book boundaries: {sources}; {count} books have no verified chapter assignment.", { sources });
   return t("Book boundaries: not known.");
 }
 
@@ -168,9 +172,10 @@ function CompletenessSummary({ data }: { data: SeriesUnits }) {
   </p>;
 }
 
-export default function SeriesUnitGroups({ data, onSetBoundaries, ...actions }: GroupActions & {
+export default function SeriesUnitGroups({ data, onSetBoundaries, ongoing = false, ...actions }: GroupActions & {
   data: SeriesUnits;
   onSetBoundaries: () => void;
+  ongoing?: boolean;
 }) {
   const form: "volumes" | "chapters" = data.form ?? (data.books.length ? "volumes" : "chapters");
   const preference = data.preference ?? "volumes";
@@ -200,6 +205,8 @@ export default function SeriesUnitGroups({ data, onSetBoundaries, ...actions }: 
     const all = [...data.books.flatMap((book) => book.chapters), ...data.unassigned_chapters];
     const onDisk = all.filter((chapter) => chapter.downloaded).length;
     const ownedBooks = orderedRows(data.books.filter((book) => book.owned), order);
+    const chapterFilesComplete = ownedBooks.length > 0 && all.length > 0 && onDisk === all.length;
+    const hideBooks = ongoing || chapterFilesComplete;
     return <section aria-label={t("Series chapters")}>
       <div className="toolbar">
         <h2>{t("Chapters")}</h2>
@@ -213,12 +220,12 @@ export default function SeriesUnitGroups({ data, onSetBoundaries, ...actions }: 
         </div>
       </div>
       <p className="muted small units-summary">{t("{onDisk} of {total} chapters on disk{reason}.", { onDisk, total: all.length, reason: data.form_reason ? ` · ${data.form_reason}` : "" })}</p>
-      <CompletenessSummary data={data} />
-      {ownedBooks.length > 0 ? <section className="volume-section" aria-label={t("Readable books")}>
+      {!hideBooks ? <CompletenessSummary data={data} /> : null}
+      {!hideBooks && ownedBooks.length > 0 ? <section className="volume-section" aria-label={t("Readable books")}>
         <header className="volume-header"><h2>{t("Books on disk")}</h2><span className="muted small">{t("Open a book to read chapters stored inside it.")}</span></header>
         {ownedBooks.map((book) => <BookRow key={book.key} book={book} chapters={[]} filter={filter} order={order} {...actions} />)}
       </section> : null}
-      {data.books.length > 0 ? <p className="muted small units-map"><button type="button" className="link-button" onClick={onSetBoundaries}>{t("Edit book boundaries")}</button></p> : null}
+      {!hideBooks && data.books.length > 0 ? <p className="muted small units-map"><button type="button" className="link-button" onClick={onSetBoundaries}>{t("Edit book boundaries")}</button></p> : null}
       {data.warning ? <p className="muted">{data.warning}</p> : null}
       <section className="volume-section" aria-label={t("Chapters")}>
         {allChapters.length ? <ChapterTable key={filter} chapters={allChapters} book={null} order={order} renderRows={actions.renderChapterRows} /> : <p className="muted small">{filter === "all" ? t("No chapters are indexed.") : t("No chapters match this filter.")}</p>}

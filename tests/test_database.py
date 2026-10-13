@@ -1380,6 +1380,34 @@ def test_prune_duplicate_queued_jobs_keeps_one_job_per_chapter(tmp_path):
         database.get_job(stale_legacy_job["id"])
 
 
+def test_prune_queued_alternate_numbered_prologue_already_owned(tmp_path):
+    database = Database(tmp_path / "prologue.sqlite3")
+    database.initialize()
+    database.upsert_manga({"id": "series", "title": "Example"}, "en")
+    releases = [
+        {
+            "id": identifier,
+            "chapter": None,
+            "title": "Prologue 1",
+            "canonical_chapter": None,
+            "numbering_status": "unmapped",
+            "numbering_method": "special_title",
+            "language": "en",
+            "provider": "suwayomi",
+            "source_url": f"https://example.test/{identifier}",
+        }
+        for identifier in ("owned", "alternate")
+    ]
+    database.upsert_chapters("series", releases)
+    with database.connect() as connection:
+        connection.execute("UPDATE chapter_release SET downloaded=1 WHERE id='owned'")
+    job = database.create_job("series", "alternate", "en")
+
+    assert database.prune_duplicate_queued_jobs() == 1
+    with pytest.raises(KeyError):
+        database.get_job(job["id"])
+
+
 def test_match_reviews_are_queued_once_and_resolved(tmp_path):
     database = Database(tmp_path / "review.sqlite3")
     database.initialize()
@@ -2239,6 +2267,91 @@ def test_publication_signals_and_pause_transitions(tmp_path):
     back = database.record_publication_pause("m1", paused=False, sources=[])
     assert back["paused"] is True and back["sources"] == ["myanimelist"]
     assert database.publication_pause("m1")["paused"] is False
+
+
+def test_official_release_after_catalogue_pause_resumes_calendar(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {"id": "m1", "title": "Example", "provider": "catalogue", "status": "hiatus"},
+        "en",
+        "none",
+    )
+    database.upsert_release_source(
+        "m1",
+        provider="suwayomi",
+        provider_manga_id="official-1",
+        title="Example",
+        source_url="https://publisher.example/series/1",
+        source_name="Publisher (EN)",
+        language="en",
+        match_confidence=1.0,
+        match_reason="test",
+        verified_by="test",
+    )
+    now = datetime.now(UTC)
+    pause = (now - timedelta(days=2)).isoformat()
+    old_release = (now - timedelta(days=3)).isoformat()
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE manga_release_source SET source_role='primary_official', publication_status='ongoing' "
+            "WHERE manga_id='m1'"
+        )
+        connection.execute(
+            "INSERT INTO metadata_source_record (manga_id, entity_type, entity_key, source, external_id, "
+            "match_confidence, match_reason, data_json, raw_json, fetched_at) "
+            "VALUES ('m1','work','','mangabaka','1',1.0,'test','{\"status\":\"hiatus\"}','{}',?)",
+            (pause,),
+        )
+        connection.execute(
+            "INSERT INTO chapter_release (id,manga_id,chapter,title,language,provider,publish_at,"
+            "source_url,first_seen_at,updated_at,source_name) "
+            "VALUES ('chapter-1','m1','1','Chapter 1','en','suwayomi',?,"
+            "'https://publisher.example/chapter/1',?,?, 'Publisher (EN)')",
+            (old_release, old_release, old_release),
+        )
+    assert "official_resume" not in database.publication_signals("m1")
+
+    new_release = (now - timedelta(days=1)).isoformat()
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE chapter_release SET publish_at=? WHERE id='chapter-1'",
+            (new_release,),
+        )
+    assert database.publication_signals("m1")["official_resume"] == "published"
+    calendar = database.list_calendar_inputs()[0]
+    assert calendar["publication_signals"]["official_resume"] == "published"
+
+
+def test_official_season_opening_is_included_in_manga_chapter_count(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {"id": "m1", "title": "Example", "provider": "suwayomi", "status": "hiatus"},
+        "en",
+        "none",
+    )
+    with database.connect() as connection:
+        for number, method in [
+            ("78", "official_title"),
+            ("78.5", "official_season_opening"),
+            ("79", "official_title"),
+        ]:
+            connection.execute(
+                "INSERT INTO chapter_release "
+                "(id,manga_id,chapter,title,language,provider,publish_at,"
+                "source_url,first_seen_at,updated_at,numbering_method,downloaded) "
+                "VALUES (?,'m1',?,?,'en','suwayomi','2026-01-01',"
+                "'https://publisher.example/chapter','2026-01-01','2026-01-01',?,1)",
+                (number, number, f"Episode {number}", method),
+            )
+
+    manga = database.get_manga("m1")
+    assert manga["logical_chapter_count"] == 3
+    assert manga["logical_downloaded_count"] == 3
+    assert "special_chapter_count" not in manga
 
 
 def test_a_chapter_range_file_that_is_a_mapped_volume_becomes_that_volume(tmp_path):

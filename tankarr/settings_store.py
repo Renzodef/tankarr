@@ -104,7 +104,6 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "page_quality_recovery_enabled": SettingSpec("bool"),
     "duplicate_cleanup_enabled": SettingSpec("bool"),
     "preferred_unit": SettingSpec("str", min_length=7, max_length=8),
-    "special_chapters_outside_books": SettingSpec("bool"),
     "source_priority_fresh": SettingSpec("str", max_length=2_000),
     "source_priority_backfill": SettingSpec("str", max_length=2_000),
     "suwayomi_enabled": SettingSpec("bool"),

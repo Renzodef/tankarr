@@ -262,6 +262,7 @@ def build_series_units(
     # The index counts a chapter assembled from parts once. The book view
     # displays those mapped part files; do not add a second empty parent row.
     mapped_part_parents: set[str] = set()
+    mapped_part_labels: set[str] = set()
     for label, slot in list(chapter_slots.items()):
         parts = slot.get("split_parts") or []
         if (
@@ -271,11 +272,28 @@ def build_series_units(
         ):
             del chapter_slots[label]
             mapped_part_parents.add(label)
+            mapped_part_labels.update(parts)
             for release in rows:
                 if release_slots.get(str(release["id"])) == label:
                     part = canonical_label(release.get("chapter"))
                     if part in parts:
                         release_slots[str(release["id"])] = part
+    excluded_extra_labels = (
+        set(index.get("excluded_chapter_labels") or [])
+        | {
+            label
+            for label, slot in chapter_slots.items()
+            if slot.get("special") and not slot.get("expected")
+        }
+        | {
+            label
+            for labels in exact_map.values()
+            for label in labels
+            if Decimal(label) != Decimal(label).to_integral_value()
+            and label not in canonical_decimals
+            and label not in mapped_part_labels
+        }
+    )
 
     book_releases: dict[str, list[dict[str, Any]]] = defaultdict(list)
     official_head_label = canonical_label(index.get("official_frontier"))
@@ -306,6 +324,8 @@ def build_series_units(
                 )
                 slot["releases"] = [release]
                 loose_slots.append(slot)
+            continue
+        if label in excluded_extra_labels:
             continue
         if label in mapped_part_parents and not release.get("downloaded"):
             continue
@@ -355,6 +375,8 @@ def build_series_units(
         else set()
     )
     for label in assignments:
+        if label in excluded_extra_labels:
+            continue
         if label in chapter_slots:
             continue
         number = canonical_label(label)
@@ -513,16 +535,17 @@ def build_series_units(
                 and not ignored
             ),
         )
-        # Source feeds often label unowned decimal fragments as specials. They
-        # are neither Wanted nor part of the managed book's contents until a
-        # file (or an exactly mapped owned book) actually provides them.
+        # Extra chapters are never individual story rows, even when their
+        # pages arrived inside an owned book or a previously imported file.
         if (
             slot["special"]
             and not slot["expected"]
-            and not slot["downloaded"]
-            and not slot["covered_by_volume"]
+            and slot["chapter"] is not None
+            and slot["chapter"] not in mapped_part_labels
         ):
             continue
+        if slot["chapter"] in mapped_part_labels:
+            slot["split_part"] = True
         if volume is None:
             unassigned.append(slot)
         else:
@@ -737,7 +760,6 @@ def load_series_units(
     preference: str = "volumes",
     *,
     sync: bool = False,
-    specials_outside_books: bool = False,
 ) -> dict[str, Any]:
     """Six bulk SELECTs, plus the application's fixed unit-context lookups.
 
@@ -771,7 +793,6 @@ def load_series_units(
         manga.get("metadata"),
         preference=preference,
         exact_sources=units.get("exact_sources") or [],
-        specials_outside_books=specials_outside_books,
         content=content,
         frontier=frontier,
     )

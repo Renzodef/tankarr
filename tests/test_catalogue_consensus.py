@@ -368,3 +368,86 @@ def test_a_qualifier_between_the_count_and_volumes_still_reads_the_count():
 
     assert edition["volume_count"] == 12
     assert managed_volume_count({"managed_edition": edition}) == 12
+
+
+def test_mixed_binding_notes_do_not_borrow_another_bindings_completion():
+    note = "1 omnibus vol - ongoing | print; 10 vols - complete | digital"
+    edition = english_edition(
+        [
+            record(
+                "mangabaka",
+                publishers=[
+                    {"name": "Example Publisher", "type": "English", "note": note}
+                ],
+            )
+        ]
+    )
+    assert edition["volume_count"] == 10
+    assert edition["complete"] is True
+    assert edition["note"] == note
+    assert managed_volume_count({"managed_edition": edition}) == 10
+
+
+def test_cached_mixed_binding_count_keeps_missing_books_expected():
+    from tankarr.chapter_mapping import build_chapter_index
+    from tankarr.series_summary import decorate_series_summary
+
+    manga = {
+        "status": "ended",
+        "monitor_mode": "all",
+        "series_unit_override": "volumes",
+    }
+    metadata = {
+        "status": "ended",
+        "volume_count": 10,
+        "book_count": 10,
+        "managed_edition": {
+            "volume_count": 1,
+            "omnibus": 1,
+            "complete": True,
+            "note": "1 omnibus vol - ongoing | print; 10 vols - complete | digital",
+        },
+    }
+    index = build_chapter_index(
+        manga,
+        metadata,
+        [
+            {
+                "id": "owned-book",
+                "volume": "1",
+                "chapter": None,
+                "provider": "manual",
+                "downloaded": True,
+                "monitored": True,
+                "title": "Volume 1",
+                "version": 1,
+                "pages": 200,
+            }
+        ],
+    )
+    counts = decorate_series_summary(manga, metadata, index)["library_count"]
+    assert counts["expected_count"] == 10
+    assert counts["downloaded_count"] == 1
+    assert counts["missing_count"] == 9
+    assert {s["volume"] for s in index["slots"] if s["expected"]} == {
+        str(i) for i in range(1, 11)
+    }
+
+
+def test_incomplete_binding_is_not_a_complete_edition():
+    edition = english_edition(
+        [
+            record(
+                "mangabaka",
+                publishers=[
+                    {
+                        "name": "Example Publisher",
+                        "type": "English",
+                        "note": "1 Volume - Incomplete",
+                    }
+                ],
+            )
+        ]
+    )
+    assert edition["complete"] is False
+    assert managed_volume_count({"managed_edition": edition}) is None

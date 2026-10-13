@@ -459,12 +459,6 @@ const SECTIONS: SectionDef[] = [
           ["chapters", msg("Chapters")],
         ],
       },
-      {
-        key: "special_chapters_outside_books",
-        label: msg("Show specials no book contains"),
-        hint: msg("A half chapter, an omake, or a second cut of a story a source published on its own: content that was never bound into a volume. Off by default, so a shelf of books carries no rows for it. Either way it is never counted as missing."),
-        kind: "boolean",
-      },
     ],
   },
   {

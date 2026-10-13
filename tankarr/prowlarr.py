@@ -280,8 +280,18 @@ class ProwlarrClient:
             if download_ref is None:
                 return None
         category_ids, category_names = self._release_categories(raw.get("categories"))
+        # Some indexers supply language markers as tags or flags rather than
+        # putting them in the title/category. Preserve that refusal evidence.
+        tags = []
+        for values in (raw.get("tags"), raw.get("indexerFlags")):
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                tag = value.get("name") if isinstance(value, dict) else value
+                if isinstance(tag, str):
+                    tags.append(tag.strip())
         if language.casefold() == "en" and self._clearly_non_english_release(
-            title, category_names
+            title, [*category_names, *tags]
         ):
             return None
         selected = self.settings.prowlarr_category_id_set

@@ -4,6 +4,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from tankarr.page_quality import (
@@ -374,6 +375,39 @@ def test_black_cards_mark_a_recut_edition(tmp_path: Path):
     # One dark page in ten (a real night scene, an end slate) is fine.
     paths[9].write_bytes(page(800, 1150))
     assert assess(measure_pages(paths), None, compare_length=False)["verdict"] == OK
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_fine_bright_lines_are_not_black_cards(tmp_path: Path, image_format: str):
+    """Thumbnail averaging must not erase the contrast of a dark drawing."""
+    from PIL import ImageDraw
+
+    directory = tmp_path / "episode"
+    paths = write_pages(directory, [(800, 1150)] * 10)
+    image = Image.new("RGB", (800, 1150), "black")
+    drawing = ImageDraw.Draw(image)
+    for y in range(0, 1150, 40):
+        drawing.line((0, y, 799, y), fill="white", width=1)
+    for index in (0, 9):
+        image.save(paths[index], format=image_format)
+    measured = measure_pages(paths)
+    assert measured["dark_pages"] == 0
+    assert assess(measured, None, compare_length=False)["verdict"] == OK
+
+
+def test_sparse_text_still_counts_as_a_black_card(tmp_path: Path):
+    """A few bright marks cannot turn a nearly uniform slate into a page."""
+    from PIL import ImageDraw
+
+    directory = tmp_path / "episode"
+    paths = write_pages(directory, [(800, 1150)] * 10)
+    image = Image.new("RGB", (800, 1150), "black")
+    ImageDraw.Draw(image).text((100, 500), "Studio splash", fill="white")
+    for index in (0, 9):
+        image.save(paths[index], format="JPEG")
+    measured = measure_pages(paths)
+    assert measured["dark_pages"] == 2
+    assert assess(measured, None, compare_length=False)["verdict"] == DEGRADED
 
 
 def test_strip_slices_in_a_paged_series_are_another_edition():

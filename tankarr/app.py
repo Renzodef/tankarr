@@ -69,7 +69,7 @@ from tankarr.catalogue import (
 )
 from tankarr.chapter_mapping import build_chapter_index, canonical_number
 from tankarr.config import Settings, get_settings
-from tankarr.database import ActiveDownloadJobsError, Database
+from tankarr.database import ActiveDownloadJobsError, Database, ReleaseSourceOwned
 from tankarr.http import async_client
 from tankarr.importer import LanguageReviewRequired, LibraryImporter
 from tankarr.internet_archive import InternetArchiveClient
@@ -91,6 +91,7 @@ from tankarr.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
 from tankarr.metrics import database_samples, render_metrics
 from tankarr.models import (
     AddMangaRequest,
+    AddManualMangaRequest,
     AddReleaseSourceRequest,
     ArtworkSelectionRequest,
     CancelJobsRequest,
@@ -115,6 +116,7 @@ from tankarr.monitoring import BACKLOG_MONITOR_MODES, FUTURE_MONITOR_MODES
 from tankarr.native_reader import NativeReaderLibrary, register_native_reader_routes
 from tankarr.notify import CHANNEL_SETTINGS, Notifier
 from tankarr.official_platforms import extensions_to_install, official_platforms_for
+from tankarr.oidc import register_oidc_routes
 from tankarr.operations import register_operations_routes
 from tankarr.operator_map import register_chapter_map_routes
 from tankarr.providers import build_providers, replace_configurable_providers
@@ -174,6 +176,7 @@ from tankarr.tasks import ScheduledTask, TaskBusy, TaskNotRunnable, TaskRegistry
 from tankarr.torrents import ORPHAN_SWEEP_INTERVAL_SECONDS, TorrentManager
 from tankarr.updates import UpdateChecker
 from tankarr.url_base import UrlBaseMiddleware
+from tankarr.verified_books import register_verified_book_routes
 from tankarr.worker import DownloadWorker
 
 
@@ -1868,12 +1871,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.komga_links = komga_links
     app.state.torrents = torrents
     app.state.authentication = authentication
+    register_oidc_routes(app, settings, authentication)
     app.state.api_executor = api_executor
     app.state.revision_executor = revision_executor
 
     @app.get("/api/auth/status")
     async def authentication_status(request: Request):
-        return authentication.status(request.scope)
+        status = authentication.status(request.scope)
+        if settings.oidc_enabled:
+            status["oidc_login_url"] = f"{settings.url_base}/api/auth/oidc/login"
+        return status
 
     @app.post("/api/auth/login")
     async def login(request: Request, credentials: LoginRequest):
@@ -2259,6 +2266,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=502, detail=f"Unable to preview manga: {exc}"
             ) from exc
+
+    @app.post("/api/manga/manual", status_code=201)
+    async def add_manual_manga(request: AddManualMangaRequest):
+        language = enabled_search_language(request.language)
+        try:
+            manga = await service.add_manual_series(
+                request.model_dump(), language, request.monitor_mode
+            )
+        except RecoveryBlocked as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        result = decorate_manga(manga)
+        result["queued"] = 0
+        return result
 
     @app.post("/api/manga", status_code=201)
     async def add_manga(request: AddMangaRequest):
@@ -2787,9 +2809,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 manga_id,
                 str(getattr(settings, "preferred_unit", "volumes") or "volumes"),
                 sync=True,
-                specials_outside_books=bool(
-                    getattr(settings, "special_chapters_outside_books", False)
-                ),
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Series not found") from exc
@@ -3045,10 +3064,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/manga/{manga_id}/release-sources", status_code=201)
     async def add_release_source(manga_id: str, request: AddReleaseSourceRequest):
-        # The operator mapping it by hand outranks an earlier refusal.
-        database.clear_release_source_rejection(
-            manga_id, request.provider, request.provider_manga_id
-        )
         """Manually map one provider series as a verified release source.
 
         Automatic discovery refuses ambiguous candidates by design (equal-title
@@ -3075,31 +3090,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail=f"Unknown or disabled provider: {request.provider}",
             )
         language = str(manga["preferred_language"])
+        if not adapter.supports_language(language):
+            raise HTTPException(409, "Source does not support the series language")
         try:
             detail = await adapter.get_manga(request.provider_manga_id)
+            if (
+                detail.get("available_languages")
+                and language not in detail["available_languages"]
+            ):
+                raise HTTPException(409, "Source does not support the series language")
             chapters = await adapter.list_chapters(request.provider_manga_id, language)
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001 - surfaced as one gateway error
             raise HTTPException(
                 status_code=502,
-                detail=f"Unable to inspect the source series: {exc}",
+                detail=redact_secrets(f"Unable to inspect the source series: {exc}"),
             ) from exc
-        mapping = database.upsert_release_source(
-            manga_id,
-            provider=request.provider,
-            provider_manga_id=str(request.provider_manga_id),
-            title=str(detail.get("title") or request.provider_manga_id),
-            source_url=str(detail.get("source_url") or "") or None,
-            source_name=str(detail.get("source_name") or "") or None,
-            language=language,
-            match_confidence=1.0,
-            match_reason="Manual operator mapping",
-            verified_by="manual",
+        try:
+            mapping = database.upsert_release_source(
+                manga_id,
+                provider=request.provider,
+                provider_manga_id=str(request.provider_manga_id),
+                title=str(detail.get("title") or request.provider_manga_id),
+                source_url=str(detail.get("source_url") or "") or None,
+                source_name=str(detail.get("source_name") or "") or None,
+                language=language,
+                match_confidence=1.0,
+                match_reason="Manual operator mapping",
+                verified_by="manual",
+            )
+        except ReleaseSourceOwned as exc:
+            raise HTTPException(409, redact_secrets(str(exc))) from exc
+        # Only a successfully verified manual mapping replaces a refusal.
+        database.clear_release_source_rejection(
+            manga_id, request.provider, request.provider_manga_id
         )
         monitor_new = manga["monitor_mode"] in BACKLOG_MONITOR_MODES
         inserted = database.upsert_chapters(manga_id, chapters, monitor_new=monitor_new)
         database.record_release_source_result(
             manga_id, request.provider, str(request.provider_manga_id)
         )
+        if request.prefer:
+            source_id = str(detail.get("source_id") or "")
+            preferred = (
+                f"{request.provider}:{source_id}" if source_id else request.provider
+            )
+            database.update_manga(manga_id, {"preferred_source_key": preferred})
+            await service.rerank_queued_jobs(manga_id)
         queued = await monitor.queue_missing(manga_id) if monitor_new else 0
         return {
             "mapping": mapping,
@@ -3107,6 +3145,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "new": len(inserted["new_chapter_ids"]),
             "queued": queued,
         }
+
+    @app.get("/api/manga/{manga_id}/release-source-candidates")
+    async def release_source_candidates(
+        manga_id: str, q: str = Query(min_length=1, max_length=200)
+    ):
+        try:
+            manga = database.get_manga(manga_id)
+        except KeyError:
+            raise HTTPException(404, "Manga not found") from None
+        language = str(manga["preferred_language"])
+        candidates = []
+        errors = []
+        for name, adapter in providers.items():
+            if name in {
+                "local",
+                str(manga.get("provider") or ""),
+            } or not adapter.supports_language(language):
+                continue
+            try:
+                async with asyncio.timeout(60):
+                    found, _ = await adapter.search_with_diagnostics(
+                        q.strip(), language, limit=20
+                    )
+                for item in found:
+                    if (
+                        item.get("available_languages")
+                        and language not in item["available_languages"]
+                    ):
+                        continue
+                    candidates.append(
+                        {
+                            "provider": name,
+                            "id": str(item["id"]),
+                            "title": str(item["title"]),
+                            "source_name": item.get("source_name") or name,
+                            "source_id": item.get("source_id"),
+                            "language": language,
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001 - partial results remain usable
+                errors.append(
+                    {"provider": name, "error": redact_secrets(str(exc))[:300]}
+                )
+        return {"candidates": candidates, "errors": errors}
+
+    @app.delete("/api/manga/{manga_id}/release-source-preference")
+    async def clear_release_source_preference(manga_id: str):
+        service.assert_mutations_allowed()
+        try:
+            result = database.update_manga(manga_id, {"preferred_source_key": None})
+        except KeyError:
+            raise HTTPException(404, "Manga not found") from None
+        await service.rerank_queued_jobs(manga_id)
+        return result
 
     @app.post("/api/manga/{manga_id}/chapters/search")
     async def search_chapter_releases(manga_id: str, request: ChapterSearchRequest):
@@ -5669,6 +5761,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     register_chapter_map_routes(app, database, service)
+    register_verified_book_routes(app, database, service)
     register_native_reader_routes(app, settings, database)
     assembler = register_assemble_routes(app, database, service)
     assembly_batch = BookAssemblyBatch(

@@ -66,6 +66,13 @@ def _is_webtoon(metadata: dict[str, Any] | None) -> bool:
         return True
     if str(metadata.get("reading_direction") or "").upper() == "WEBTOON":
         return True
+    # A distribution link is weaker evidence than an explicit catalogue kind.
+    # Printed manga/comics can also be listed by episode on these platforms.
+    # Specific scrolling-format signals above still take precedence.
+    content_kind = str(metadata.get("content_kind") or "").casefold()
+    classified_kind = str(classification.get("kind") or "").casefold()
+    if (content_kind or classified_kind) in {"manga", "comic"}:
+        return False
     if any(
         WEBTOON_URL.search(str(link.get("url") or ""))
         for link in metadata.get("official_links") or []
@@ -81,8 +88,6 @@ def _is_webtoon(metadata: dict[str, Any] | None) -> bool:
         "original english language",
         "original_english_language",
     }
-    classified_kind = str(classification.get("kind") or "").casefold()
-    content_kind = str(metadata.get("content_kind") or "").casefold()
     return subtype not in broad_subtypes and (
         classified_kind == "webtoon" or content_kind == "webtoon"
     )
@@ -876,7 +881,6 @@ def apply_series_form(
     *,
     preference: str = "volumes",
     exact_sources: list[str] | None = None,
-    specials_outside_books: bool = False,
     content: dict[str, dict[str, Any]] | None = None,
     frontier: Decimal | None = None,
 ) -> dict[str, Any]:
@@ -885,7 +889,25 @@ def apply_series_form(
     preference = "chapters" if str(preference).casefold() == "chapters" else "volumes"
     form, reason = series_form(manga, metadata, units.get("expected_book_count"))
     books = list(units.get("books") or [])
-    unassigned = list(units.get("unassigned_chapters") or [])
+    unassigned = [
+        slot
+        for slot in units.get("unassigned_chapters") or []
+        if not (
+            slot.get("special")
+            and not slot.get("expected")
+            and not slot.get("split_part")
+        )
+    ]
+    for book in books:
+        book["chapters"] = [
+            slot
+            for slot in book.get("chapters") or []
+            if not (
+                slot.get("special")
+                and not slot.get("expected")
+                and not slot.get("split_part")
+            )
+        ]
     reset_estimated_layout(books, unassigned)
     units["beyond_frontier"] = mark_beyond_frontier(books, unassigned, frontier)
     expected_books = units.get("expected_book_count")
@@ -949,16 +971,6 @@ def apply_series_form(
     ):
         form = "chapters"
         reason = "an unfinished shelf of chapters is not divided into books"
-    # A special no book contains, a half chapter or a second cut of a story
-    # published apart, is a row on a shelf of books only if the reader asked
-    # for it. It is never counted as missing either way.
-    if not specials_outside_books:
-        hidden = [slot for slot in unassigned if slot.get("special")]
-        for slot in hidden:
-            unassigned.remove(slot)
-        units["hidden_specials"] = len(hidden)
-    else:
-        units["hidden_specials"] = 0
     if form != "volumes" and len(books) > 1 and len(unassigned) >= len(books):
         # A chapter shelf still has books on it, and showing them empty beside
         # a heap of loose chapters is the disorder the even split exists to
@@ -1035,9 +1047,7 @@ def apply_series_form(
         units["content_notes"] = []
         # A whole chapter whose parts the books hold is not a chapter to hunt;
         # on a finished, complete shelf a loose chapter is in one of the books.
-        units["hidden_specials"] = int(
-            units.get("hidden_specials") or 0
-        ) + drop_split_parents(books, unassigned)
+        drop_split_parents(books, unassigned)
         # What no source described is laid out between its known neighbours,
         # in equal parts, so the shelf never shows an empty book beside a
         # pile of loose chapters. Layout only: see spread_unmapped_chapters.

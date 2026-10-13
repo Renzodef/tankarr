@@ -14,6 +14,7 @@ import httpx
 from PIL import Image, UnidentifiedImageError
 
 from tankarr import USER_AGENT
+from tankarr.download_page_cache import DownloadPageCache
 from tankarr.download_tuning import AdaptivePageConcurrency, local_download_pressure
 from tankarr.providers.base import (
     ProgressCallback,
@@ -487,8 +488,9 @@ class SuwayomiProvider(Provider):
 
         async def search_source(source: dict[str, Any]) -> list[dict[str, Any]]:
             try:
-                async with asyncio.timeout(self.search_timeout_seconds):
-                    async with semaphore:
+                async with semaphore:
+                    # Give each source its request budget after capacity is free.
+                    async with asyncio.timeout(self.search_timeout_seconds):
                         data = await self._graphql(
                             SEARCH_MUTATION,
                             {
@@ -656,6 +658,9 @@ class SuwayomiProvider(Provider):
                 f"Suwayomi returned no pages for chapter {chapter_id}"
             )
         target_dir.mkdir(parents=True, exist_ok=True)
+        cache = await asyncio.to_thread(
+            DownloadPageCache, target_dir, chapter_id, page_urls
+        )
         effective_concurrency = self.page_concurrency.recommend(
             concurrency, **local_download_pressure()
         )
@@ -676,6 +681,12 @@ class SuwayomiProvider(Provider):
 
         async def fetch(index: int, raw_url: str) -> Path:
             nonlocal completed
+            cached = await asyncio.to_thread(cache.get, index, _verify_page)
+            if cached is not None:
+                async with progress_lock:
+                    completed += 1
+                    await progress(completed, len(page_urls))
+                return cached
             try:
                 for attempt in range(3):
                     response = await self._request(
@@ -733,6 +744,9 @@ class SuwayomiProvider(Provider):
             destination = target_dir / f"{index + 1:04d}{suffix}"
             await asyncio.to_thread(destination.write_bytes, response.content)
             async with progress_lock:
+                await asyncio.to_thread(
+                    cache.record, index, destination, response.content
+                )
                 completed += 1
                 await progress(completed, len(page_urls))
             return destination

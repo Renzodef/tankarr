@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import shutil
 import time
@@ -151,6 +152,86 @@ def test_helpers_parse_names_and_numbers():
         "Not All Girls are Stupid",
     )
     assert split_author_title("Secret Comics Japan") == ([], "Secret Comics Japan")
+
+
+def test_archive_import_keeps_main_chapter_before_decimal_extras(tmp_path: Path):
+    source = tmp_path / "chapters.cbz"
+    names = [
+        "ch4.1/page10.png",
+        "ch4.12/page2.png",
+        "ch004/page10.png",
+        "ch4.2/page2.png",
+        "ch004/page2.png",
+        "ch4.1/page2.png",
+    ]
+    expected = [names[index] for index in (4, 2, 5, 0, 1, 3)]
+    payloads = {}
+    for index, name in enumerate(names):
+        with Image.new("RGB", (4, 4), (index * 30, 40, 60)) as image:
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            payloads[name] = buffer.getvalue()
+    with zipfile.ZipFile(source, "w") as archive:
+        for name in names:
+            archive.writestr(name, payloads[name])
+    settings = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
+    importer = LibraryImporter(settings, object(), object())
+    pages = importer._extract_pages(source, tmp_path / "pages")
+
+    assert [page.read_bytes() for page in pages] == [payloads[n] for n in expected]
+    assert importer._fast_source_content_sha256(source) == local_page_content_sha256(
+        pages
+    )
+    managed = tmp_path / "managed.cbz"
+    reversed_managed = tmp_path / "wrong-order.cbz"
+    for path, order in [
+        (managed, expected),
+        (reversed_managed, list(reversed(expected))),
+    ]:
+        with zipfile.ZipFile(path, "w") as archive:
+            for index, name in enumerate(order, 1):
+                archive.writestr(f"{index:04d}.png", payloads[name])
+    assert importer._matching_archive_page_signature(source, managed)
+    assert not importer._matching_archive_page_signature(source, reversed_managed)
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["page1.10.png", "page1.2.png", "page1.png", "page10.png", "page2.png"],
+        ["root/ch2/page10.png", "root/ch2/page2.png", "root/ch10/page1.png"],
+    ],
+)
+def test_archive_page_order_preserves_non_decimal_folder_order(names):
+    assert sorted(names, key=importer_module.archive_page_key) == sorted(
+        names, key=natural_key
+    )
+
+
+def test_rar_page_signature_keeps_main_chapter_before_decimal_extras(
+    tmp_path: Path, monkeypatch
+):
+    archive = tmp_path / "chapters.cbr"
+    archive.write_bytes(b"Rar!\x1a\x07\x00")
+    payload = {
+        "lsarContents": [
+            {"XADFileName": "ch4.1/0001.jpg", "XADFileSize": 10, "RARCRC32": 110},
+            {"XADFileName": "ch004/0001.jpg", "XADFileSize": 20, "RARCRC32": 220},
+        ]
+    }
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps(payload)
+
+    monkeypatch.setattr(
+        importer_module.shutil,
+        "which",
+        lambda name: "/usr/bin/lsar" if name == "lsar" else None,
+    )
+    monkeypatch.setattr(importer_module.subprocess, "run", lambda *_a, **_k: Result())
+
+    assert LibraryImporter._rar_page_signature(archive) == ((20, 220), (10, 110))
 
 
 def test_zip_fast_path_rejects_a_rar_with_a_cbz_extension(tmp_path: Path):
@@ -357,6 +438,80 @@ def test_manual_archive_parts_attach_to_an_existing_remote_series(
             comic_info = packaged.read("ComicInfo.xml").decode()
         assert "Downloaded via Tankarr from Dropbox" in comic_info
         assert "<Web>https://www.dropbox.com/rebirth-volume-22</Web>" in comic_info
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_status"),
+    [
+        ("Example volume 1 [en].zip", 201),
+        ("Example volume 1 [ja].zip", 409),
+    ],
+)
+def test_manual_language_confirmation_overrides_ocr_script_false_positive(
+    tmp_path: Path, monkeypatch, filename: str, expected_status: int
+):
+    import_root = tmp_path / "incoming"
+    archive = import_root / filename
+    make_volume_zip(archive, pages=6)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        import_dir=import_root,
+        monitor_enabled=False,
+    )
+    provision_library_identity(settings)
+    monkeypatch.setattr(
+        importer_module,
+        "audit_english_pages",
+        lambda _pages, **_kwargs: {
+            "verdict": "refused",
+            "foreign_script_detected": True,
+            "reason": "OCR misidentified lettering in artwork",
+        },
+    )
+    app = create_app(settings)
+    app.state.database.upsert_manga(
+        {
+            "id": "example",
+            "provider": "mangadex",
+            "title": "Example",
+            "description": "",
+            "cover_url": None,
+            "authors": [],
+            "original_language": "ja",
+            "status": "completed",
+            "last_volume": "1",
+            "last_chapter": None,
+            "available_languages": ["en"],
+            "source_url": "https://mangadex.org/title/example",
+        },
+        "en",
+        "existing",
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/manga/example/manual-import",
+            json={
+                "path": archive.name,
+                "language": "en",
+                "source_url": "https://mangadex.org/chapter/example",
+                "source_name": "MangaDex English scanlation",
+                "confirm_language": True,
+                "parts": [
+                    {
+                        "volume": "1",
+                        "page_start": 1,
+                        "page_end": 6,
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == expected_status, response.text
+    if expected_status == 201:
+        assert response.json()["language_evidence"]["manual_confirmation"] is True
+        assert response.json()["books"] == 1
 
 
 def test_browser_upload_imports_a_volume_into_the_selected_series(tmp_path: Path):

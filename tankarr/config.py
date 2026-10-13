@@ -52,6 +52,7 @@ def normalize_setup_completed_at(value: str) -> str:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
+        hide_input_in_errors=True,
         env_prefix="TANKARR_",
         env_file=".env",
         env_file_encoding="utf-8",
@@ -115,10 +116,6 @@ class Settings(BaseSettings):
     duplicate_cleanup_enabled: bool = True
     # Unit preference when both chapters and books can complete a series.
     preferred_unit: Literal["chapters", "volumes"] = "volumes"
-    # A special that no book contains: a half chapter, an omake, a second cut
-    # of a story a source published apart. Off by default, because a shelf of
-    # books should not carry rows for what was never bound into one.
-    special_chapters_outside_books: bool = False
     source_priority_fresh: str = ""
     source_priority_backfill: str = ""
     suwayomi_enabled: bool = False
@@ -231,6 +228,14 @@ class Settings(BaseSettings):
     # comma-separated list of addresses or networks; the "external"
     # authentication method accepts requests from them only.
     auth_trusted_proxies: str = ""
+    oidc_enabled: bool = False
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = Field(default="", repr=False)
+    oidc_redirect_uri: str = ""
+    oidc_scopes: str = "openid profile email"
+    oidc_allowed_subjects: str = ""
+    oidc_allowed_groups: str = ""
     # Ask GitHub once a day whether a newer release exists (System page).
     update_check_enabled: bool = True
     ntfy_url: str | None = None
@@ -573,6 +578,14 @@ class Settings(BaseSettings):
                 "TANKARR_QBITTORRENT_SAVE_PATH cannot be the filesystem root"
             )
         return normalized
+
+    @model_validator(mode="after")
+    def validate_openid_connect(self) -> Settings:
+        if self.oidc_enabled:
+            from tankarr.oidc import validate_oidc_settings
+
+            validate_oidc_settings(self)
+        return self
 
     @model_validator(mode="after")
     def validate_auth_credentials(self) -> Settings:

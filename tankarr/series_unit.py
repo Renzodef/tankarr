@@ -86,6 +86,10 @@ def is_volume_release(release: dict[str, Any]) -> bool:
     if not volume or not str(volume).strip():
         return False
     chapter = release.get("chapter")
+    # Reconciliation can leave a provider's numbered chapter unmapped. Its
+    # volume tag still describes membership, not a whole-book release.
+    if _number(release.get("source_chapter")) is not None:
+        return False
     return not (chapter and str(chapter).strip())
 
 
@@ -581,15 +585,16 @@ def _source_key(release: dict[str, Any]) -> str:
     )
 
 
-def _rank(release: dict[str, Any]) -> tuple[int, int, int, str, Decimal]:
+def _rank(release: dict[str, Any]) -> tuple[int, int, int, int, str, Decimal]:
     """Which copy of a duplicated number wins inside one source: a plain
-    chapter over an extra reusing its number, then the richer/newer file,
-    then the lowest volume label."""
+    chapter over an extra reusing its number, then an owned copy over a
+    stale listing, then the richer/newer file and lowest volume label."""
 
     title = str(release.get("title") or "")
     volume = _number(release.get("volume"))
     return (
         0 if _EXTRA_WORDS.search(title) else 1,
+        int(bool(release.get("downloaded"))),
         int(release.get("pages") or 0),
         int(release.get("version") or 0),
         str(release.get("publish_at") or ""),

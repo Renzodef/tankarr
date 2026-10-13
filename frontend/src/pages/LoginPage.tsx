@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
 import { Logo } from "../components";
 import type { AuthStatus } from "../types";
@@ -14,6 +14,14 @@ export default function LoginPage({
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [oidcLoginUrl, setOidcLoginUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void api.authStatus().then((status) => {
+      if (active) setOidcLoginUrl(status.oidc_login_url ?? null);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -37,6 +45,7 @@ export default function LoginPage({
           <Logo size={54} />
           <h1 id="login-title">tankarr</h1>
         </div>
+        {oidcLoginUrl ? <a className="btn btn-primary login-submit" href={oidcLoginUrl}>{t("Sign in with OpenID Connect")}</a> : null}
         <form onSubmit={(event) => void submit(event)}>
           <div className="form-row">
             <label htmlFor="login-username">{t("Username")}</label>

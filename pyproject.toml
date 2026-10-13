@@ -38,8 +38,10 @@ classifiers = [
   "Topic :: Multimedia :: Graphics",
 ]
 dependencies = [
+  "authlib>=1.6.12,<1.7",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
+  "itsdangerous>=2.2,<3",
   "orjson>=3.10,<4",
   "pillow>=11,<13",
   "pydantic-settings>=2.7,<3",
@@ -49,6 +51,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "joserfc>=1.6,<2",
   "pytest>=8.3,<10",
   "pytest-asyncio>=0.25,<2",
   "respx>=0.22,<1",

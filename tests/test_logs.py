@@ -47,6 +47,29 @@ def test_levels_are_normalised_and_validated():
         Settings(log_level="loud")
 
 
+@pytest.mark.parametrize("base", ["", "/tankarr"])
+def test_debug_access_log_omits_openid_callback_query(
+    tmp_path, clean_root_logger, base
+):
+    settings = _settings(tmp_path, log_level="debug")
+    path = logs.configure_logging(settings)
+    callback = f"{base}/api/auth/oidc/callback"
+    logging.getLogger("uvicorn.access").info(
+        '%s - "%s %s HTTP/%s" %d',
+        "192.0.2.10",
+        "GET",
+        f"{callback}?code=fixture-code&state=fixture-state&error_description=fixture-secret",
+        "1.1",
+        401,
+    )
+    message = path.read_text()
+    assert f"GET {callback} HTTP/1.1" in message
+    assert "401" in message
+    assert "fixture-code" not in message
+    assert "fixture-state" not in message
+    assert "fixture-secret" not in message
+
+
 def test_configure_logging_writes_a_rotating_file_and_keeps_one_handler(
     tmp_path: Path, clean_root_logger
 ):

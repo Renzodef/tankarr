@@ -51,6 +51,41 @@ def test_release_ahead_of_the_primary_official_head_waits_for_evidence():
     )
 
 
+def test_official_season_zero_episode_with_repeated_title_keeps_its_own_chapter():
+    official = [
+        release(
+            "season-one-finale",
+            "Webtoons.com (EN)",
+            79,
+            title="[Season 1] Ep. 78 (ch. 78)",
+            host="webtoons.com",
+        ),
+        release(
+            "season-two-zero",
+            "Webtoons.com (EN)",
+            80,
+            title="[Season 2] Ep. 0 (ch. 78)",
+            host="webtoons.com",
+        ),
+        release(
+            "season-two-one",
+            "Webtoons.com (EN)",
+            81,
+            title="[Season 2] Ep. 1 (ch. 79)",
+            host="webtoons.com",
+        ),
+    ]
+
+    decisions = reconcile_numbering(
+        official, official_hosts=frozenset({"webtoons.com"})
+    )
+
+    assert decisions["season-one-finale"]["canonical_chapter"] == "78"
+    assert decisions["season-two-zero"]["canonical_chapter"] == "78.5"
+    assert decisions["season-two-zero"]["numbering_method"] == "official_season_opening"
+    assert decisions["season-two-one"]["canonical_chapter"] == "79"
+
+
 def test_finished_catalogue_maps_matching_explicit_title_inside_its_boundary():
     pending = release("mirror-45", "Mirror", 45, title="Chapter 45")
     pending.update(

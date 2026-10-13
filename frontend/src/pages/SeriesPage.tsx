@@ -6,6 +6,7 @@ import ChapterMapEditor from "../components/ChapterMapEditor";
 import SeriesUnitGroups from "../components/SeriesUnitGroups";
 import SeriesAuditDialog from "../components/SeriesAuditDialog";
 import TranslationPanel from "../components/TranslationPanel";
+import SeriesSourcePicker from "../components/SeriesSourcePicker";
 import {
   ChapterReleaseSearchModal,
   type ChapterSearchTarget,
@@ -31,7 +32,7 @@ import {
   seriesCoverUrl,
   useApp,
 } from "../components";
-import { additionalContentLabel, countNoun, libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
+import { countNoun, libraryStatus, publicationStatus, seriesCounts } from "../seriesStatus";
 import { workYears } from "../workYears";
 import type {
   CanonicalMetadata,
@@ -89,8 +90,12 @@ const SUPPORTED_ARTWORK_UPLOAD_TYPES = new Set([
   "image/avif",
 ]);
 
-function preferredRelease(releases: Chapter[]): Chapter {
+function preferredRelease(releases: Chapter[], preferredSource?: string | null): Chapter {
   return [...releases].sort((a, b) => {
+    if (preferredSource) {
+      const preference = Number((b.source_key ?? b.provider) === preferredSource) - Number((a.source_key ?? a.provider) === preferredSource);
+      if (preference) return preference;
+    }
     const versionDelta = (b.version ?? 0) - (a.version ?? 0);
     if (versionDelta) return versionDelta;
     const pagesDelta = (b.pages ?? 0) - (a.pages ?? 0);
@@ -190,7 +195,9 @@ export default function SeriesPage({ id }: { id: string }) {
   const [metadataRefreshing, setMetadataRefreshing] = useState(false);
   const [metadataRefreshNotice, setMetadataRefreshNotice] = useState<MetadataRefreshNotice | null>(null);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
-  const [seriesPackSearchOpen, setSeriesPackSearchOpen] = useState(false);
+  const [seriesPackSearchId, setSeriesPackSearchId] = useState<string | null>(null);
+  const seriesPackSearchOpen = seriesPackSearchId === id;
+  useEffect(() => setSeriesPackSearchId(null), [id]);
   const [fileDeletion, setFileDeletion] = useState<FileDeletionTarget | null>(null);
   const [chapterSearch, setChapterSearch] = useState<ChapterSearchTarget | null>(null);
   const [calendar, setCalendar] = useState<SeriesCalendar | null>(null);
@@ -619,7 +626,7 @@ export default function SeriesPage({ id }: { id: string }) {
               >
                 {counts.downloaded_count} / {counts.reference_unknown ? "?" : counts.total_count} {countNoun(counts.unit, 2)}
               </StatusPill>
-              <StatusPill
+              {!(counts.unit === "chapter" && (publication.key === "continuing" || publication.key === "hiatus")) ? <StatusPill
                 kind="muted"
                 title={t("The same series measured the other way: a shelf of books, and the chapters printed in them. A question mark means no catalogue has said.")}
               >
@@ -628,7 +635,7 @@ export default function SeriesPage({ id }: { id: string }) {
                   : manga.book_total_count != null
                     ? tn(manga.book_total_count, "{count} book", "{count} books")
                     : t("{count} books", { count: "?" })}
-              </StatusPill>
+              </StatusPill> : null}
               {counts.unit === "chapter" && counts.latest_chapter ? (
                 <StatusPill kind="muted">
                   {counts.reference_kind === "official" ? t("Latest official chapter") : t("Latest available chapter")}: {counts.latest_chapter}
@@ -655,11 +662,6 @@ export default function SeriesPage({ id }: { id: string }) {
                 </StatusPill>
               ) : null}
             </div>
-            {additionalContentLabel(counts) ? (
-              <p className="muted small">
-                {t("Also on disk: {content}. Shown separately from the reference chapter count; source numbering is preserved.", { content: additionalContentLabel(counts) })}
-              </p>
-            ) : null}
             {counts.count_note ? <p className="muted small">{counts.count_note}</p> : null}
             {enriched?.publishers?.length ? (
               <div className="muted small series-publishers">
@@ -813,7 +815,7 @@ export default function SeriesPage({ id }: { id: string }) {
                 disabled={busy}
                 aria-expanded={seriesPackSearchOpen}
                 title={t("Search Prowlarr manually for whole-series and multi-volume packs")}
-                onClick={() => setSeriesPackSearchOpen((value) => !value)}
+                onClick={() => setSeriesPackSearchId((value) => value === id ? null : id)}
               >
                 <Icon name="search" /> {t("Series Pack Search")}
               </button>
@@ -853,14 +855,16 @@ export default function SeriesPage({ id }: { id: string }) {
         </div>
       </div>
 
-      {seriesPackSearchOpen ? (
+      {seriesPackSearchOpen && manga.id === id ? (
         <SeriesPackSearchPanel
-          key={manga.id}
+          key={`pack-search:${manga.id}`}
           manga={manga}
           open
-          onClose={() => setSeriesPackSearchOpen(false)}
+          onClose={() => setSeriesPackSearchId(null)}
         />
       ) : null}
+
+      <SeriesSourcePicker key={`source-picker:${manga.id}`} manga={manga} onChanged={() => void load(true)} />
 
       {metadataRefreshNotice ? (
         <div
@@ -910,8 +914,9 @@ export default function SeriesPage({ id }: { id: string }) {
       {unitsError ? <LoadError message={unitsError} retryLabel={t("Retry books and chapters")} retry={() => void load(true)} loading={loading} hasData={Boolean(units?.manga_id === manga.id)} /> : null}
       {manga.translation_enabled ? <TranslationPanel manga={manga} /> : null}
       {units?.manga_id === manga.id ? <SeriesUnitGroups
-        key={manga.id}
+        key={`series-units:${manga.id}`}
         data={units}
+        ongoing={publication.key === "continuing" || publication.key === "hiatus"}
         busy={busy}
         monitoringLocked={manga.library_status_override === "up_to_date"}
         readerLabel={readerLink?.label ?? "reader"}
@@ -933,7 +938,7 @@ export default function SeriesPage({ id }: { id: string }) {
         }}
         onRetireDuplicates={(book) => void previewDuplicateRetirement(book)}
         renderChapterRows={(chapters, book) => chapters.map((chapter) => {
-          const best = chapter.releases.length ? preferredRelease(chapter.releases) : undefined;
+          const best = chapter.releases.length ? preferredRelease(chapter.releases, manga.preferred_source_key) : undefined;
           const downloaded = chapter.releases.find((release) => release.id === chapter.open_release_id)
             ?? chapter.releases.find((release) => release.downloaded);
           const activeJob = chapterJobs.get(chapter.key) ?? chapter.releases.map((release) => chapterJobs.get(release.id)).find((job) => job !== undefined);
@@ -980,7 +985,7 @@ export default function SeriesPage({ id }: { id: string }) {
       /> : null}
       {showChapterMap ? (
         <ChapterMapEditor
-          key={manga.id}
+          key={`chapter-map:${manga.id}`}
           mangaId={manga.id}
           title={manga.title}
           onClose={() => setShowChapterMap(false)}
@@ -1535,7 +1540,7 @@ function torrentStatusPill(status: string): { kind: string; label: string } {
   return jobStatusPill(status);
 }
 
-function SeriesPackSearchPanel({ manga, open, onClose }: { manga: Manga; open: boolean; onClose: () => void }) {
+export function SeriesPackSearchPanel({ manga, open, onClose }: { manga: Manga; open: boolean; onClose: () => void }) {
   const { notify } = useApp();
   const [query, setQuery] = useState(manga.title);
   const [results, setResults] = useState<TorrentRelease[] | null>(null);
@@ -1543,50 +1548,58 @@ function SeriesPackSearchPanel({ manga, open, onClose }: { manga: Manga; open: b
   const [busy, setBusy] = useState(false);
   const [searching, setSearching] = useState(false);
 
+  const searchRequest = useRef<AbortController | null>(null);
+  const downloadsRequest = useRef<AbortController | null>(null);
+
   const loadDownloads = useCallback(async () => {
+    if (downloadsRequest.current && !downloadsRequest.current.signal.aborted) return;
+    const controller = new AbortController();
+    downloadsRequest.current = controller;
     try {
-      // Only work in progress belongs on the series page: finished and failed
-      // grabs are handled automatically and stay in History.
-      setDownloads(
-        await api.torrents(manga.id, ["adding", "queued", "downloading", "importing"], 100),
+      const rows = await api.torrents(
+        manga.id, ["adding", "queued", "downloading", "importing"], 100, controller.signal,
       );
+      if (!controller.signal.aborted) setDownloads(rows);
     } catch (caught) {
-      if (open) notify("error", String(caught));
+      if (!controller.signal.aborted && open) notify("error", String(caught));
+    } finally {
+      if (downloadsRequest.current === controller) downloadsRequest.current = null;
     }
   }, [manga.id, notify, open]);
 
   useEffect(() => {
     void loadDownloads();
     const timer = window.setInterval(() => void loadDownloads(), 4000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      downloadsRequest.current?.abort();
+    };
   }, [loadDownloads]);
 
-  const search = async () => {
+  const search = useCallback(async (searchQuery: string) => {
+    searchRequest.current?.abort();
+    const controller = new AbortController();
+    searchRequest.current = controller;
     setSearching(true);
     setResults(null);
     try {
-      const response = await api.searchTorrents(manga.id, query);
+      const response = await api.searchTorrents(manga.id, searchQuery, controller.signal);
+      if (controller.signal.aborted) return;
       setResults(response.results);
       response.errors.forEach((item) =>
         notify("info", `${item.provider}: ${item.error}`),
       );
     } catch (caught) {
-      notify("error", String(caught));
+      if (!controller.signal.aborted) notify("error", String(caught));
     } finally {
-      setSearching(false);
+      if (!controller.signal.aborted) setSearching(false);
     }
-  };
+  }, [manga.id, notify]);
 
-  // Opening the panel is the search: the series title is already the query,
-  // like Sonarr's interactive season search. The input stays for refinement.
-  const autoSearchedRef = useRef(false);
   useEffect(() => {
-    if (!open || autoSearchedRef.current) return;
-    if (manga.preferred_language !== "en") return;
-    autoSearchedRef.current = true;
-    void search();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+    if (open && manga.preferred_language === "en") void search(manga.title);
+    return () => searchRequest.current?.abort();
+  }, [open, manga.preferred_language, manga.title, search]);
 
   const grab = async (release: TorrentRelease) => {
     setBusy(true);
@@ -1741,7 +1754,7 @@ function SeriesPackSearchPanel({ manga, open, onClose }: { manga: Manga; open: b
               className="torrent-search-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void search();
+                void search(query);
               }}
             >
               <input
@@ -1924,7 +1937,7 @@ function ChapterRows({
       <span title={t("Every known release failed; retry one from History to unblock it.")}>{t("Blocked")}</span>
     </StatusPill>
   ) : (
-    <StatusPill kind="muted">{chapter.missing ? t("Missing") : chapter.special ? t("Optional special") : t("Not wanted")}</StatusPill>
+    <StatusPill kind="muted">{chapter.missing ? t("Missing") : t("Not wanted")}</StatusPill>
   );
   return (
     <>

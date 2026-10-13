@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -526,6 +527,57 @@ async def test_organizer_keeps_one_copy_when_two_downloads_share_a_chapter(
     assert dropped["downloaded"] is False and dropped["library_path"] is None
     assert database.get_job(job["id"])["result_path"] is None
     assert komga.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("difference", [None, "page", "order", "stored_hash"])
+async def test_organizer_compares_volume_page_content_before_resolving_collision(
+    tmp_path: Path, difference: str | None
+):
+    database, service, _ = make_service(tmp_path)
+    manga_data = manga()
+    book = {**chapter(), "chapter": None, "release_unit": "volume"}
+    mirror = {**book, "id": "book-mirror", "provider": "suwayomi"}
+    database.upsert_manga(manga_data, "en", "none")
+    database.upsert_chapters(manga_data["id"], [book, mirror])
+    for release in (book, mirror):
+        database.set_release_book(release["id"], "1")
+    destination = final_library_path(service.settings.library_dir, manga_data, book)
+    legacy = destination.parent / "legacy-book.cbz"
+    destination.parent.mkdir(parents=True)
+    for path, metadata, first_page in [
+        (destination, b"official metadata", b"first page"),
+        (
+            legacy,
+            b"source metadata",
+            b"different page" if difference == "page" else b"first page",
+        ),
+    ]:
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("ComicInfo.xml", metadata)
+            pages = [first_page, b"second page"]
+            if path == legacy and difference == "order":
+                pages.reverse()
+            for index, page in enumerate(pages, 1):
+                archive.writestr(f"{index:04d}.jpg", page)
+    database.mark_chapter_downloaded(book["id"], destination, sha256(destination))
+    database.mark_chapter_downloaded(mirror["id"], legacy, sha256(legacy))
+    if difference == "stored_hash":
+        with zipfile.ZipFile(legacy, "a") as archive:
+            archive.writestr("extra-metadata.txt", b"changed after import")
+    kept_hash = sha256(destination)
+    blocked = difference is not None
+
+    preview = await service.organize_library(dry_run=True)
+    assert legacy.exists()
+    assert preview["organization_blocked"] is blocked
+    assert preview["planned_duplicate_removals"] == (0 if blocked else 1)
+
+    result = await service.organize_library()
+    assert result["organization_blocked"] is blocked
+    assert sha256(destination) == kept_hash
+    assert legacy.exists() is blocked
+    assert bool(database.get_chapter(mirror["id"])["downloaded"]) is blocked
 
 
 @pytest.mark.asyncio

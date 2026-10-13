@@ -330,3 +330,27 @@ def test_a_lone_catalogue_count_does_not_close_an_ended_works_frontier():
     # A record from before corroboration existed keeps its old standing.
     legacy = {"chapter_count": 55}
     assert official_frontier([], frozenset(), metadata=legacy, status="ended") == 55
+
+
+def test_series_source_preference_overrides_ranking_and_falls_back():
+    ranking = SourceRanking()
+    preferred = release(
+        "preferred", "suwayomi", source_id="101", source_name="Fixture source"
+    )
+    other = release("other", "suwayomi", source_id="202", source_name="MangaDex")
+    assert (
+        ranking.best([preferred, other], now=NOW, preferred_source="suwayomi:101")["id"]
+        == "preferred"
+    )
+    assert (
+        ranking.best([other], now=NOW, preferred_source="suwayomi:101")["id"] == "other"
+    )
+    assert (
+        ranking.best(
+            [preferred, other],
+            now=NOW,
+            preferred_source="suwayomi:101",
+            demoted_sources=frozenset({"suwayomi:101"}),
+        )["id"]
+        == "other"
+    )

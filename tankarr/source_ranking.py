@@ -626,6 +626,7 @@ class SourceRanking:
         official_hosts: frozenset[str] = frozenset(),
         demoted_sources: frozenset[str] = frozenset(),
         health: Mapping[str, int] | None = None,
+        preferred_source: str | None = None,
     ) -> dict[str, Any] | None:
         phase = group_phase(releases, now=now)
         candidates = list(releases)
@@ -633,12 +634,19 @@ class SourceRanking:
             return None
         return min(
             candidates,
-            key=lambda item: self.sort_key(
-                item,
-                phase=phase,
-                official_hosts=official_hosts,
-                demoted_sources=demoted_sources,
-                health=health,
+            key=lambda item: (
+                bool(preferred_source)
+                and (
+                    preferred_source.casefold() not in release_source_keys(item)
+                    or any(key in demoted_sources for key in release_source_keys(item))
+                ),
+                self.sort_key(
+                    item,
+                    phase=phase,
+                    official_hosts=official_hosts,
+                    demoted_sources=demoted_sources,
+                    health=health,
+                ),
             ),
         )
 

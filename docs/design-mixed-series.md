@@ -51,6 +51,25 @@ decimal boundaries use exact numeric labels. Explicit operator assignments
 enable chapter fallback for missing books without changing the series counting
 unit.
 
+**Verified books.** A book Tankarr did not assemble itself (imported by hand, a
+machine translation, an oversized pack) cannot prove what it holds, so it is
+suspect: its size is judged against the edition and it never covers a chapter
+on its own. A person can read a book and record what it holds.
+`GET /api/manga/{id}/verified-books` lists every owned whole book with its
+content digest, the chapters the map lists for its volume and why it is
+suspect; `PUT /api/manga/{id}/volumes/{volume}/verification` stores the proof
+(the current content digest, the exact chapters, an optional source URL and a
+note saying how the book was checked) and `DELETE` withdraws it. The proof is
+refused unless the digest is the book's current one and the chapters are
+exactly those the map lists for that volume (register them first with the
+operator map or a reading), and it stops applying by itself when the content
+or the map changes. A verified book is no longer taken for another edition or
+a wrong split, so nothing asks for a replacement of it, and its explicit
+boundaries can satisfy missing chapters, a machine translation included. A
+proof only lifts a doubt: it never retires a chapter file, because a verified
+book stays out of duplicate detection like every suspect book, and it adds
+nothing to a book that had no doubt to lift.
+
 The series page displays **units in reading order**:
 
 ```

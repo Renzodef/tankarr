@@ -951,6 +951,10 @@ class SuwayomiRuntime:
         self.write_server_conf()
         self._rotate_log()
         argv = self.command()
+        # Minimal Linux images provide C.UTF-8, but usually not en_US.UTF-8.
+        # An unavailable locale makes Java's native filename encoding ASCII:
+        # distinct non-ASCII manga/chapter names then share the same cache path.
+        utf8_locale = "C.UTF-8" if sys.platform.startswith("linux") else "en_US.UTF-8"
         log = self.log_path.open("ab")
         try:
             log.write(
@@ -973,7 +977,8 @@ class SuwayomiRuntime:
                         if not name.startswith("TANKARR_")
                     },
                     "HOME": str(self.home),
-                    "LANG": "en_US.UTF-8",
+                    "LANG": utf8_locale,
+                    "LC_ALL": utf8_locale,
                     "JAVA_TOOL_OPTIONS": "",
                 },
             )

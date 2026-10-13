@@ -194,13 +194,3 @@ export function libraryStatus(manga: Manga): SeriesStatusBadge {
         : t("All {total} currently indexed {noun} are imported.", { total, noun }),
   };
 }
-
-/** Owned material outside the reference sequence, without renumbering it. */
-export function additionalContentLabel(counts: LibraryCountSummary): string {
-  const prologues = counts.additional_content?.prologues ?? 0;
-  const extras = counts.additional_content?.extras ?? 0;
-  return [
-    prologues ? tn(prologues, "{count} prologue", "{count} prologues") : null,
-    extras ? tn(extras, "{count} extra", "{count} extras") : null,
-  ].filter(Boolean).join(" + ");
-}

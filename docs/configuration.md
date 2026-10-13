@@ -174,7 +174,6 @@ described under [Advanced](#advanced).
 | `TANKARR_PAGE_QUALITY_RECOVERY_ENABLED` | `true` | During each Wanted pass, compare imported chapters with the page size of the rest of the series and download a replacement for those that carry only a fraction of it, when another source has the chapter. Nothing is deleted without a replacement. Restart required. |
 | `TANKARR_DUPLICATE_CLEANUP_ENABLED` | `true` | When the map of chapters to volumes, checked against the pages, proves that a chapter file is already inside a book you own, move the chapter file to the recycle bin during the next Wanted pass (at most 10 series per pass). When `false`, duplicates are only reported on the series page. Settings → Sources. |
 | `TANKARR_PREFERRED_UNIT` | `volumes` | `volumes` or `chapters`: which of the two Tankarr collects when both whole books and chapters could complete a finished work. A work that is still running follows chapters unless only books exist. Settings → Sources. |
-| `TANKARR_SPECIAL_CHAPTERS_OUTSIDE_BOOKS` | `false` | On a series shelf made of books, also show rows for specials that no book contains: half chapters, omake, a story a source published on its own. They are never counted as missing either way. Settings → Sources. |
 
 ## Suwayomi
 
@@ -353,6 +352,31 @@ curl -H "X-Api-Key: $API_KEY" http://localhost:8787/api/system/health
 | `TANKARR_AUTH_USERNAME` | *unset* | Login user name; it cannot contain `:`. Set it together with the password: setting only one of the two stops Tankarr at startup. Changing it signs out existing browser sessions. Settings → Security. |
 | `TANKARR_AUTH_REQUIRED` | `true` | `false` lets an installation without credentials run with no login at all. Only for a development machine that nothing else can reach. Restart required. |
 | `TANKARR_AUTH_PASSWORD` | *unset* | Login password, at least 8 characters when set on the Settings page. The managed Suwayomi server uses the same user name and password. Secret; stored in the secrets file. Settings → Security. |
+| `TANKARR_OIDC_ENABLED` | `false` | Enable optional OpenID Connect alongside local forms login. Requires `forms`, authentication enabled, HTTPS, and an explicit subject or group allowlist. Restart required. |
+| `TANKARR_OIDC_ISSUER_URL` | *empty* | Exact HTTPS issuer published by your identity provider, including any trailing slash. Discovery uses its `.well-known/openid-configuration`. |
+| `TANKARR_OIDC_CLIENT_ID` | *empty* | Client ID registered for Tankarr at the identity provider. |
+| `TANKARR_OIDC_CLIENT_SECRET` | *empty* | Client secret. Keep it in the deployment environment or secret manager. Never sent to the browser. |
+| `TANKARR_OIDC_REDIRECT_URI` | *empty* | Exact public HTTPS callback URL registered at the provider: `https://tankarr.example.com/api/auth/oidc/callback`, including the URL base if configured. |
+| `TANKARR_OIDC_SCOPES` | `openid profile email` | Space-separated scopes; `openid` is required. Add `groups` if your provider requires it to include the group claim. |
+| `TANKARR_OIDC_ALLOWED_SUBJECTS` | *empty* | Comma-separated exact `sub` claims allowed to sign in as Tankarr administrators. At least one subject or group must be allowed. |
+| `TANKARR_OIDC_ALLOWED_GROUPS` | *empty* | Comma-separated exact entries in the signed `groups` claim allowed administrator access. Either this list or the subject list can grant access. |
+
+### OpenID Connect
+
+Register Tankarr as a confidential OpenID Connect client in Authentik,
+Authelia, Keycloak, or another conforming provider. Use Authorization Code,
+PKCE S256, and client-secret authentication. Register the exact redirect URL
+above, set the issuer, client credentials and an allowlist, then enable OIDC.
+The login page offers **Sign in with OpenID Connect** and keeps the local
+username/password form available if the provider is down.
+
+Only signed ID tokens with a matching issuer, audience, expiry, nonce and an
+allowed subject or group create a Tankarr session. All approved identities
+have administrator access; this does not add per-user libraries or roles.
+Provider tokens remain on the server only during login. A flow expires after
+ten minutes and a restart requires starting it again. **Log Out** revokes the
+Tankarr session; it does not sign out the identity provider. See the
+[OIDC design](design-oidc.md) for the trust and session model.
 
 ## Reader, Komga and Stump
 

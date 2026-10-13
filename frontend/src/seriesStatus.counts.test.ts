@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { additionalContentLabel, libraryStatus } from "./seriesStatus";
+import { libraryStatus } from "./seriesStatus";
 import type { LibraryCountSummary, Manga } from "./types";
 
 function series(count: Partial<LibraryCountSummary>): Manga {
@@ -52,13 +52,11 @@ it("distinguishes a complete index from a verified complete work", () => {
   expect(badge.label).toBe("Indexed chapters present");
 });
 
-it("shows prologues separately while preserving the reference count", () => {
+it("does not include extras in the reference count", () => {
   const manga = series({
     expected_count: 24,
     reference_unknown: false,
-    additional_content: { prologues: 2, extras: 1 },
   });
-  expect(additionalContentLabel(manga.library_count!)).toBe("2 prologues + 1 extra");
   expect(libraryStatus(manga).label).toBe("Up to date");
   expect(manga.library_count!.total_count).toBe(24);
 });

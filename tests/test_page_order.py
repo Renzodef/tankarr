@@ -2,6 +2,7 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from tankarr.importer import LibraryImporter
@@ -45,7 +46,14 @@ def test_volume_import_packages_corrected_page_order(tmp_path: Path):
         settings=SimpleNamespace(data_dir=tmp_path),
         database=SimpleNamespace(
             list_volume_metadata=lambda _manga_id: [
-                {"volume_key": "1", "artwork_path": "cover.png"}
+                {
+                    "volume_key": "1",
+                    "artwork_path": "cover.png",
+                    "data": {
+                        "artwork_source": "catalogue",
+                        "artwork_source_url": "https://covers.example.invalid/book.jpg",
+                    },
+                }
             ]
         ),
     )
@@ -61,3 +69,51 @@ def test_volume_import_packages_corrected_page_order(tmp_path: Path):
     with zipfile.ZipFile(tmp_path / "book.cbz") as archive:
         with Image.open(archive.open("0001.png")) as first:
             assert first.getpixel((0, 0)) == (180, 20, 35)
+
+
+@pytest.mark.parametrize(
+    "artwork",
+    [
+        None,
+        {},
+        {"artwork_source": "local", "artwork_source_url": "local-volume:book:hash"},
+        {
+            "artwork_source": "local",
+            "artwork_source_url": "https://covers.example.invalid/book.jpg",
+        },
+        {"artwork_source": "catalogue", "artwork_source_url": "file:///cover.png"},
+        {"artwork_source": "catalogue", "artwork_source_url": "https://[invalid"},
+    ],
+)
+def test_import_keeps_order_when_artwork_is_library_derived_or_unproven(
+    tmp_path: Path, artwork
+):
+    # A matching final illustration is not evidence of a reversed book when
+    # the reference itself was selected from the book, or has no provenance.
+    pages, _cover = _pages(tmp_path, reversed_scan=True)
+    expected = [page.read_bytes() for page in pages]
+    importer = SimpleNamespace(
+        settings=SimpleNamespace(data_dir=tmp_path),
+        database=SimpleNamespace(
+            list_volume_metadata=lambda _manga_id: [
+                {"volume_key": "1", "artwork_path": "cover.png", "data": artwork}
+            ]
+        ),
+    )
+
+    LibraryImporter._package_local_import(
+        importer,
+        tmp_path / "book.cbz",
+        pages,
+        {"id": "example", "title": "Example", "authors": []},
+        {"volume": "1", "chapter": None, "language": "en", "provider": "manual"},
+    )
+
+    assert not (tmp_path / ".cover-first").exists()
+    with zipfile.ZipFile(tmp_path / "book.cbz") as archive:
+        actual = [
+            archive.read(name)
+            for name in sorted(archive.namelist())
+            if name.endswith(".png")
+        ]
+    assert actual == expected

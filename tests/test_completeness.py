@@ -91,16 +91,16 @@ def test_single_decimal_special_does_not_replace_a_missing_main_chapter():
     assert result["missing_chapter_ranges"] == ["3"]
 
 
-def test_metadata_total_counts_numbered_specials_instead_of_assuming_last_number():
+def test_metadata_total_does_not_use_a_special_to_prove_complete():
     result = assess(
         chapters(1, 2, 3, 4, "4.5"),
         remote_manga=manga(status="unknown", last_chapter=""),
     )
 
-    assert result["status"] == "complete"
+    assert result["status"] == "unknown"
     assert result["expected_chapter_count"] == 5
-    assert result["covered_chapter_count"] == 5
-    assert result["missing_chapter_count"] == 0
+    assert result["covered_chapter_count"] == 4
+    assert result["missing_chapter_count"] is None
     assert result["missing_chapter_ranges"] == []
 
 
@@ -111,8 +111,8 @@ def test_metadata_cardinality_deficit_does_not_invent_missing_number_ranges():
     )
 
     assert result["status"] == "incomplete"
-    assert result["covered_chapter_count"] == 4
-    assert result["missing_chapter_count"] == 1
+    assert result["covered_chapter_count"] == 3
+    assert result["missing_chapter_count"] == 2
     assert result["missing_chapter_ranges"] == []
 
 

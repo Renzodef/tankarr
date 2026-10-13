@@ -1648,6 +1648,13 @@ class MetadataService:
     ) -> dict[str, Any]:
         manga = self.database.get_manga(manga_id)
         records = [self._origin_record(manga)]
+        if manual := manga.get("manual_metadata"):
+            records[0]["alternate_titles"] = _unique_strings(
+                [manual.get("original_title"), *(manual.get("alternate_titles") or [])]
+            )
+            records[0]["catalogue_alternate_titles"] = records[0]["alternate_titles"]
+            if manual.get("work_type"):
+                records[0]["work_type"] = manual["work_type"]
         exact_correlations = self._effective_correlations(manga)
         series_source_names = {
             source.name for source in self.sources if source.supports_series
@@ -1846,7 +1853,7 @@ class MetadataService:
                     )
                 source_status.append(status)
                 continue
-            if not source.automatic_matching:
+            if manga.get("manual_metadata") or not source.automatic_matching:
                 self.database.delete_metadata_source_records(
                     manga_id, source=source.name, identity_only=True
                 )
@@ -3001,8 +3008,14 @@ class MetadataService:
         records = [
             record for record in records if str(record.get("title") or "").strip()
         ]
-        work_type = self._resolve_work_type(manga, records)
-        classification = self._classify_content(manga, records)
+        corroborated_origin = self._corroborated_asian_origin(records)
+        origin_manga = (
+            {**manga, "original_language": corroborated_origin}
+            if corroborated_origin
+            else manga
+        )
+        work_type = self._resolve_work_type(origin_manga, records)
+        classification = self._classify_content(origin_manga, records)
         normalized_type = str(work_type or "").casefold()
         is_asian_work = normalized_type in {
             "manga",
@@ -3354,7 +3367,11 @@ class MetadataService:
         }
         links = _merge_external_links(source_links)
         provider_correlations = _provider_correlations(records)
-        original_language = first("original_language", manga.get("original_language"))
+        original_language = corroborated_origin or first(
+            "original_language", manga.get("original_language")
+        )
+        if corroborated_origin:
+            provenance["original_language"] = "corroborated Asian origin"
         reading_direction = None
         if normalized_type == "manga" or (
             original_language == "ja"
@@ -4779,6 +4796,25 @@ class MetadataService:
         return None
 
     @staticmethod
+    def _corroborated_asian_origin(records: list[dict[str, Any]]) -> str | None:
+        """Resolve a conflicting catalogue label using independent origin evidence."""
+        for language, subtype in (("zh", "manhua"), ("ko", "manhwa")):
+            typed_sources = {
+                str(record.get("source") or "")
+                for record in records
+                if str(record.get("original_language") or "").casefold() == language
+                and str(record.get("work_type") or "").casefold() == subtype
+            }
+            tagged_sources = {
+                str(record.get("source") or "")
+                for record in records
+                if subtype in {str(tag).casefold() for tag in record.get("tags") or []}
+            }
+            if any(a and b and a != b for a in typed_sources for b in tagged_sources):
+                return language
+        return None
+
+    @staticmethod
     def _resolve_work_type(
         manga: dict[str, Any], records: list[dict[str, Any]]
     ) -> str | None:
@@ -4842,6 +4878,16 @@ class MetadataService:
         """Classify the work family from trusted origin/catalogue evidence."""
 
         provider = str(manga.get("provider") or "").casefold()
+        corroborated_origin = cls._corroborated_asian_origin(records)
+        if corroborated_origin:
+            subtype = "Manhua" if corroborated_origin == "zh" else "Manhwa"
+            return {
+                "kind": "webtoon",
+                "subtype": subtype,
+                "source": "corroborated Asian origin",
+                "confidence": 0.99,
+                "reason": f"independent {subtype} type and tag evidence",
+            }
         by_source = {str(record.get("source") or ""): record for record in records}
         for source in (
             "mangabaka",

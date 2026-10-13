@@ -292,14 +292,16 @@ subsequently indexed chapter 31 remains expected and can appear in Wanted. The
 series stays continuing and normal monitoring remains active. Explicit edition
 limits still take precedence, and ended series use their catalogue/end numbering.
 
-### Chapter numbers and additional content
+### Chapter numbers and extras
 
 The main chapter count follows the reference sequence; it is not a raw count of
-files or source listings. Owned, separately labelled prologues and recognised
-extras are shown alongside it on Library cards and the series page. Material
-already included in expected chapter slots is never added twice, and alternate
-releases of the same numbered prologue count once. Additional content does not
-advance the latest chapter number or create missing chapters.
+files or source listings. Extra chapters and separately labelled prologues do
+not create rows, Wanted entries, progress counts or automatic download jobs.
+Pages bundled into a normal volume remain in that volume's archive. A decimal
+label is a main chapter only when its position is established by an exact
+reading map, an official season opening or a verified continuation at the end
+of the source's chapter sequence. Ambiguous catalogue totals remain unresolved
+until the story's chapter count is verified.
 
 Different editions can include prologues in their numbering or omit withdrawn
 chapters, so their raw totals need not match. Preserve the source label and check

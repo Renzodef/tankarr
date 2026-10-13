@@ -374,14 +374,20 @@ export const api = {
       `/api/manga/${encodeURIComponent(mangaId)}/release-sources/${encodeURIComponent(provider)}/${encodeURIComponent(providerMangaId)}`,
       { method: "DELETE" },
     ),
-  addReleaseSource: (mangaId: string, provider: string, providerMangaId: string) =>
+  addReleaseSource: (mangaId: string, provider: string, providerMangaId: string, prefer = false) =>
     request<{ releases: number; new: number; queued: number }>(
       `/api/manga/${encodeURIComponent(mangaId)}/release-sources`,
       {
         method: "POST",
-        body: JSON.stringify({ provider, provider_manga_id: providerMangaId }),
+        body: JSON.stringify({ provider, provider_manga_id: providerMangaId, prefer }),
       },
     ),
+  releaseSourceCandidates: (mangaId: string, query: string, signal?: AbortSignal) =>
+    request<{ candidates: { provider: string; id: string; title: string; source_name: string; language: string }[]; errors: { provider: string; error: string }[] }>(
+      `/api/manga/${encodeURIComponent(mangaId)}/release-source-candidates?q=${encodeURIComponent(query)}`, { signal },
+    ),
+  clearReleaseSourcePreference: (mangaId: string) =>
+    request(`/api/manga/${encodeURIComponent(mangaId)}/release-source-preference`, { method: "DELETE" }),
   updateManga: (
     id: string,
     changes: Partial<Pick<Manga, "preferred_language" | "monitor_mode">> & {
@@ -497,12 +503,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force: false, replace }),
     }),
-  searchTorrents: (mangaId: string, query?: string) => {
+  searchTorrents: (mangaId: string, query?: string, signal?: AbortSignal) => {
     const parameters = new URLSearchParams();
     if (query?.trim()) parameters.set("q", query.trim());
     const suffix = parameters.size ? `?${parameters}` : "";
     return request<TorrentSearchResponse>(
       `/api/manga/${encodeURIComponent(mangaId)}/torrent-search${suffix}`,
+      { signal },
     );
   },
   grabTorrent: (
@@ -531,11 +538,11 @@ export const api = {
       `/api/system/alerts/${encodeURIComponent(key)}/dismiss`,
       { method: "POST", body: JSON.stringify({ signature }) },
     ),
-  torrents: (mangaId?: string, statuses?: string[], limit = 200) => {
+  torrents: (mangaId?: string, statuses?: string[], limit = 200, signal?: AbortSignal) => {
     const parameters = new URLSearchParams({ limit: String(limit) });
     if (mangaId) parameters.set("manga_id", mangaId);
     (statuses ?? []).forEach((status) => parameters.append("status", status));
-    return request<TorrentDownload[]>(`/api/torrents?${parameters}`);
+    return request<TorrentDownload[]>(`/api/torrents?${parameters}`, { signal });
   },
   torrentContents: (downloadId: number) =>
     request<TorrentContents>(`/api/torrents/${downloadId}/contents`),

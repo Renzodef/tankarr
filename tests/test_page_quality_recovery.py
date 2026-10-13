@@ -191,11 +191,13 @@ async def test_two_sources_agreeing_on_a_short_chapter_are_believed(tmp_path: Pa
         manga["id"],
         "fragments.example-13",
         verdict="refused",
-        assessment={**short, "reason": "x"},
+        assessment={**short, "reason": "x", "refusal_kind": "length"},
     )
     good = database.get_chapter("good.example-13")
     witness = service._length_corroborated(
-        manga["id"], good, {**short, "normalized_height": 3200}
+        manga["id"],
+        good,
+        {**short, "normalized_height": 3200, "refusal_kind": "length"},
     )
     assert witness == "fragments.example"
     # And a refused download never talks the floor down, nor is it judged
@@ -508,3 +510,169 @@ async def test_a_tight_budget_reaches_every_series_across_passes_not_just_the_fi
     assert set(database.page_quality(second["id"]).keys()) == {
         f"second.example-{n}" for n in range(1, 4)
     }
+
+
+@pytest.mark.parametrize("quality_override", [False, True])
+@pytest.mark.parametrize(
+    "changes, baseline, expected_kind",
+    [
+        ({"median_aspect": 20}, None, "shape"),
+        ({"dark_pages": 2}, None, "black_cards"),
+        ({"median_aspect": 3}, {"median_aspect": 1.4}, "shape"),
+        ({"median_width": 80}, None, "resolution"),
+    ],
+)
+def test_non_length_refusals_cannot_be_waived_or_corroborated(
+    tmp_path, monkeypatch, quality_override, changes, baseline, expected_kind
+):
+    from tankarr.page_quality import assess
+
+    settings, database, service = provision(tmp_path)
+    manga = seed(database, settings)
+    chapter = database.get_chapter("good.example-13")
+    measurement = {
+        "normalized_height": 3000,
+        "pages": 10,
+        "measured_pages": 10,
+        "median_aspect": 1.4,
+        "median_width": 800,
+        **changes,
+    }
+    quality = assess(measurement, baseline, compare_length=False)
+    assert quality["verdict"] == DEGRADED
+    assert quality["refusal_kind"] == expected_kind
+
+    def no_length_witness(*_args):
+        pytest.fail("a length witness cannot authorize another quality refusal")
+
+    monkeypatch.setattr(service, "_length_corroborated", no_length_witness)
+    assert (
+        service._settle_degraded_download(
+            {"quality_override": quality_override}, manga, chapter, quality
+        )
+        is None
+    )
+    recorded = database.page_quality(manga["id"])[chapter["id"]]
+    assert recorded["verdict"] == "refused"
+
+
+@pytest.mark.parametrize("quality_override", [False, True])
+def test_untyped_refusals_remain_closed(tmp_path, monkeypatch, quality_override):
+    settings, database, service = provision(tmp_path)
+    manga = seed(database, settings)
+    chapter = database.get_chapter("good.example-13")
+    quality = {"verdict": DEGRADED, "reason": "unrecognized quality failure"}
+
+    def no_length_witness(*_args):
+        pytest.fail("unknown refusal cannot become a length acceptance")
+
+    monkeypatch.setattr(service, "_length_corroborated", no_length_witness)
+    assert (
+        service._settle_degraded_download(
+            {"quality_override": quality_override}, manga, chapter, quality
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("quality_override", [False, True])
+def test_length_refusal_retains_its_documented_settlement(
+    tmp_path, monkeypatch, quality_override
+):
+    from tankarr.page_quality import assess
+
+    settings, database, service = provision(tmp_path)
+    manga = seed(database, settings)
+    chapter = database.get_chapter("good.example-13")
+    quality = assess(
+        {"normalized_height": 3000, "pages": 10, "measured_pages": 10},
+        {"floor": 5000, "quartile": 10000},
+    )
+    assert quality["verdict"] == DEGRADED
+    assert quality["refusal_kind"] == "length"
+    monkeypatch.setattr(service, "_length_corroborated", lambda *_args: "other.example")
+    settled = service._settle_degraded_download(
+        {"quality_override": quality_override}, manga, chapter, quality
+    )
+    assert settled["verdict"] == OK
+    assert ("operator" if quality_override else "other.example") in settled["reason"]
+
+
+@pytest.mark.parametrize(
+    "witness_kind", ["", "black_cards", "shape", "resolution", "length"]
+)
+def test_corroboration_requires_sound_or_length_only_witness(tmp_path, witness_kind):
+    settings, database, service = provision(tmp_path)
+    manga = seed(database, settings)
+    quality = {
+        "normalized_height": 3000,
+        "pages": 10,
+        "measured_pages": 10,
+        "refusal_kind": "length",
+    }
+    database.record_page_quality(
+        manga["id"],
+        "fragments.example-13",
+        verdict="refused",
+        assessment={**quality, "refusal_kind": witness_kind},
+    )
+    assert (
+        database.page_quality(manga["id"])["fragments.example-13"]["refusal_kind"]
+        == witness_kind
+    )
+    witness = service._length_corroborated(
+        manga["id"], database.get_chapter("good.example-13"), quality
+    )
+    assert witness == ("fragments.example" if witness_kind == "length" else None)
+    # A sound file can still witness the same height.
+    database.record_page_quality(
+        manga["id"],
+        "fragments.example-13",
+        verdict=OK,
+        assessment={**quality, "refusal_kind": ""},
+    )
+    assert (
+        service._length_corroborated(
+            manga["id"], database.get_chapter("good.example-13"), quality
+        )
+        == "fragments.example"
+    )
+
+
+def test_refusal_kind_migration_preserves_existing_quality_evidence(tmp_path):
+    import sqlite3
+
+    settings, database, service = provision(tmp_path)
+    manga = seed(database, settings)
+    database.record_page_quality(
+        manga["id"],
+        "fragments.example-13",
+        verdict="refused",
+        assessment={"normalized_height": 3000, "reason": "historic refusal"},
+    )
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute("ALTER TABLE page_quality DROP COLUMN refusal_kind")
+    reopened = Database(settings.database_path)
+    reopened.initialize()
+    record = reopened.page_quality(manga["id"])["fragments.example-13"]
+    assert record["reason"] == "historic refusal"
+    assert record["normalized_height"] == 3000
+    assert record["refusal_kind"] == ""
+
+
+@pytest.mark.parametrize(
+    "witness_verdict, expected", [(DEGRADED, True), ("unknown", False)]
+)
+def test_length_witness_requires_a_settled_quality_verdict(
+    tmp_path, witness_verdict, expected
+):
+    settings, database, service = provision(tmp_path)
+    manga = seed(database, settings)
+    quality = {"normalized_height": 3000, "refusal_kind": "length"}
+    database.record_page_quality(
+        manga["id"], "fragments.example-13", verdict=witness_verdict, assessment=quality
+    )
+    witness = service._length_corroborated(
+        manga["id"], database.get_chapter("good.example-13"), quality
+    )
+    assert witness == ("fragments.example" if expected else None)

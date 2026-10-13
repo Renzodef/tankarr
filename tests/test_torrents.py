@@ -5,6 +5,7 @@ import hashlib
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -250,6 +251,54 @@ class SuccessfulImporter:
             "language_evidence": {"verdict": "confirmed"},
             "books": 1,
         }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [None, {"volume.cbz"}])
+async def test_manual_numbering_survives_interrupted_import_and_restart(
+    tmp_path: Path, selected: set[str] | None
+):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    seed(database)
+    job = database.create_torrent_download("kamui", release())
+    database.update_torrent_download(job["id"], status="completed")
+    content = tmp_path / "download"
+    content.mkdir()
+    qbit = FakeQBitTorrent(content)
+    qbit.current = {"category": "tankarr", "state": "uploading", "progress": 1}
+    importer = SuccessfulImporter()
+    importer.import_torrent_download = AsyncMock(side_effect=asyncio.CancelledError())
+    service = FakeService(tmp_path)
+    manager = TorrentManager(
+        database, service, importer, FakeMetadata(), FakeProwlarr(), qbit
+    )
+    assignments = {"volume.cbz": {"volume": "7", "chapter": None}}
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager.import_now(
+            job["id"], selected_paths=selected, assigned=assignments
+        )
+    database.close()
+    restarted_db = Database(tmp_path / "tankarr.sqlite3")
+    restarted_db.initialize()
+    resumed_importer = SuccessfulImporter()
+    resumed_importer.import_torrent_download = AsyncMock(
+        wraps=resumed_importer.import_torrent_download
+    )
+    restarted = TorrentManager(
+        restarted_db, service, resumed_importer, FakeMetadata(), FakeProwlarr(), qbit
+    )
+    try:
+        assert await restarted.poll_once() == {"checked": 1, "imported": 1}
+        options = resumed_importer.import_torrent_download.call_args.kwargs
+        assert options["assigned"] == assignments
+        assert options["selected_paths"] == selected
+        assert options["confirm_language"] is False
+        assert options["automatic_decision"] is True
+        assert restarted_db.get_torrent_download(job["id"])["status"] == "imported"
+    finally:
+        restarted_db.close()
 
 
 @pytest.mark.asyncio

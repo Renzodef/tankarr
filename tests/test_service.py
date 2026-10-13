@@ -90,7 +90,9 @@ async def test_indexer_offer_cannot_be_queued_as_a_provider_download(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_offered_optional_half_chapter_is_queued_outside_wanted(tmp_path: Path):
+async def test_offered_optional_half_chapter_never_enters_automatic_queue(
+    tmp_path: Path,
+):
     database = Database(tmp_path / "tankarr.sqlite3")
     database.initialize()
     database.upsert_manga(manga("ongoing", "2"), "en", "all")
@@ -110,21 +112,23 @@ async def test_offered_optional_half_chapter_is_queued_outside_wanted(tmp_path: 
         release["slot_key"] for entry in wanted for release in entry["chapters"]
     }
     jobs = await service.create_missing_download_jobs("manga-1")
-    assert {job["chapter_id"] for job in jobs} == {
-        "chapter-1",
-        "chapter-1.5",
-        "chapter-2",
-    }
-    optional_job = next(job for job in jobs if job["chapter_id"] == "chapter-1.5")
-    assert await service.rerank_queued_jobs("manga-1") == 0
-    assert service._queued_job_is_acquisition_allowed(
-        "manga-1", "chapter-1.5", optional_job["id"], origin="monitor"
+    assert {job["chapter_id"] for job in jobs} == {"chapter-1", "chapter-2"}
+    stale = database.create_job("manga-1", "chapter-1.5", "en", origin="monitor")
+    assert await service.rerank_queued_jobs("manga-1") == 1
+    with pytest.raises(KeyError):
+        database.get_job(stale["id"])
+    with database.connect() as connection:
+        connection.execute("UPDATE manga SET monitor_specials=1 WHERE id='manga-1'")
+    optional = await service.create_missing_download_jobs("manga-1")
+    assert optional == []
+    assert not service._queued_job_is_acquisition_allowed(
+        "manga-1", "chapter-1.5", stale["id"], origin="monitor"
     )
     assert await service.create_missing_download_jobs("manga-1") == []
 
 
 @pytest.mark.asyncio
-async def test_future_optional_special_job_survives_rerank(tmp_path: Path):
+async def test_future_optional_special_job_is_removed_on_rerank(tmp_path: Path):
     database = Database(tmp_path / "tankarr.sqlite3")
     database.initialize()
     database.upsert_manga(manga("ongoing", "2"), "en", "future")
@@ -136,10 +140,13 @@ async def test_future_optional_special_job_survives_rerank(tmp_path: Path):
         object(),  # type: ignore[arg-type]
     )
 
-    jobs = await service.create_missing_download_jobs("manga-1", ["chapter-1.5"])
-    assert [job["chapter_id"] for job in jobs] == ["chapter-1.5"]
-    assert await service.rerank_queued_jobs("manga-1") == 0
-    assert database.get_job(jobs[0]["id"])["status"] == "queued"
+    assert await service.create_missing_download_jobs("manga-1", ["chapter-1.5"]) == []
+    with database.connect() as connection:
+        connection.execute("UPDATE manga SET monitor_specials=1 WHERE id='manga-1'")
+    stale = database.create_job("manga-1", "chapter-1.5", "en", origin="monitor")
+    assert await service.create_missing_download_jobs("manga-1", ["chapter-1.5"]) == []
+    with pytest.raises(KeyError):
+        database.get_job(stale["id"])
 
 
 @pytest.mark.asyncio
