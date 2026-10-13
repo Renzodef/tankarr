@@ -1,3 +1,6 @@
+from unittest.mock import AsyncMock
+
+import pytest
 from fastapi.testclient import TestClient
 
 from tankarr.app import create_app
@@ -113,3 +116,40 @@ def test_source_picker_rejects_a_source_in_another_language(tmp_path):
         assert response.status_code == 409
         assert not app.state.database.list_release_sources("origin-id")
         assert app.state.database.get_manga("origin-id")["preferred_source_key"] is None
+
+
+@pytest.mark.parametrize(
+    ("error_type", "message"),
+    [
+        (RuntimeError, "Source search failed. Try again later."),
+        (TimeoutError, "Source search timed out. Try again later."),
+    ],
+)
+def test_source_picker_keeps_partial_results_without_exposing_provider_errors(
+    tmp_path, caplog, error_type, message
+):
+    app = app_at(tmp_path)
+    broken = SourceProvider()
+    private_detail = (
+        "fixture-private-detail: SELECT * FROM credentials; "
+        "https://fixture-user:fixture-password@nas.local/search?apikey=fixture-key"
+    )
+    broken.search_with_diagnostics = AsyncMock(side_effect=error_type(private_detail))
+    app.state.providers["unavailable"] = broken
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/manga/origin-id/release-source-candidates?q=Fixture"
+        )
+        assert response.status_code == 200
+        assert response.json()["candidates"][0]["provider"] == "suwayomi"
+        assert response.json()["errors"] == [
+            {"provider": "unavailable", "error": message}
+        ]
+        for sensitive in (
+            "fixture-private-detail",
+            "SELECT * FROM credentials",
+            "fixture-password",
+            "fixture-key",
+        ):
+            assert sensitive not in response.text
+            assert sensitive not in caplog.text

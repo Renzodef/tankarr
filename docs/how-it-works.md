@@ -207,9 +207,12 @@ instead. A book whose chapters are all on disk and exactly mapped is shown as
 **From chapters** and can be assembled into a single volume CBZ, see
 [Assemble books](operator-workflows.md#assemble-books).
 
-Specials that no book contains, such as a half chapter or an omake, are never
-counted as missing. **Show specials no book contains** (off by default) lists
-them on a shelf of books.
+Optional extras that no book contains, such as an omake, do not create shelf
+rows, missing-chapter counts or automatic download jobs. Pages bundled into
+a normal volume remain in that archive. An official season-opening episode
+or a decimal label established as a main chapter by an exact reading map
+still belongs to the main sequence; see
+[Chapter numbers and extras](operator-workflows.md#chapter-numbers-and-extras).
 
 ## Canonical chapter index and cross-source numbering
 

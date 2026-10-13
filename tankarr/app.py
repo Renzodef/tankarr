@@ -3184,9 +3184,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "language": language,
                         }
                     )
-            except Exception as exc:  # noqa: BLE001 - partial results remain usable
+            except TimeoutError:
                 errors.append(
-                    {"provider": name, "error": redact_secrets(str(exc))[:300]}
+                    {
+                        "provider": name,
+                        "error": "Source search timed out. Try again later.",
+                    }
+                )
+            except Exception:  # noqa: BLE001 - partial results remain usable
+                errors.append(
+                    {
+                        "provider": name,
+                        "error": "Source search failed. Try again later.",
+                    }
                 )
         return {"candidates": candidates, "errors": errors}
 

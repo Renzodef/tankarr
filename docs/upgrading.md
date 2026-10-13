@@ -30,6 +30,25 @@ breaking changes, always listed in the notes.
 
 ## Updating
 
+### Upgrading from v0.9.0 to v0.10.0
+
+Create a configuration/database backup before upgrading. This release adds
+persisted source preferences, manual catalogue data, import assignments and
+verification metadata. Restore the pre-upgrade backup if you roll back to
+v0.9.0.
+
+The retired `TANKARR_SPECIAL_CHAPTERS_OUTSIDE_BOOKS` setting can be removed
+from existing configuration. Optional extras do not contribute to automatic
+acquisition or main-story completion; official season-opening episodes still
+count as main chapters.
+
+OpenID Connect is optional and disabled by default. Enabling it requires an
+HTTPS issuer and callback, client credentials and an explicit subject or group
+allowlist. Local login remains available. See
+[OpenID Connect](configuration.md#openid-connect) for configuration.
+
+### Update the image
+
 ```sh
 docker compose pull tankarr
 docker compose up -d tankarr
