@@ -38,7 +38,7 @@ fi
 # through Tankarr's own code path (tests/demo_real.py, needs network); the
 # default is the fictional, offline library of tests/demo_snapshot.py.
 case "${TANKARR_DEMO_DATASET:-fictional}" in
-  real) "$PYTHON" tests/demo_real.py "$WORK/demo" ;;
+  real) "$PYTHON" -u tests/demo_real.py "$WORK/demo" ;;
   fictional) "$PYTHON" tests/demo_snapshot.py "$WORK/demo" ;;
   *) echo "TANKARR_DEMO_DATASET must be real or fictional" >&2; exit 2 ;;
 esac

@@ -2,11 +2,12 @@
 
 The online demo (docs site, /demo/) shows Tankarr on works people know. This
 script adds well-known manga, manhwa and manhua by their MangaBaka identity
-through Tankarr's own code path, "Add New" followed by the metadata
-enrichment that fetches the covers and the catalogue data, so what the demo
-shows is what an installation shows. Only the release history is invented:
-a weekly cadence, a few recent chapters missing for the Wanted list, a short
-queue. The one series with real pages is Pepper&Carrot by David Revoy,
+through Tankarr's own code path, "Add New" followed by MangaBaka metadata
+enrichment and cover downloads. Other catalogue lookups are omitted from
+this build so their availability cannot hold up the site. Only the release
+history is invented: a weekly cadence, a few recent chapters missing for the
+Wanted list, a short queue. The one series with real pages is Pepper&Carrot
+by David Revoy,
 published under CC BY 4.0 (https://www.peppercarrot.com), so the built-in
 reader has books to open; no page of a licensed work is distributed.
 
@@ -46,6 +47,8 @@ PEPPER_EPISODES_WITH_PAGES = 6
 PEPPER_EPISODES_MISSING = 2
 PEPPER_PAGE_WIDTH = 1000
 MINIMUM_SERIES = 20
+SERIES_TIMEOUT_SECONDS = 30
+READER_TIMEOUT_SECONDS = 180
 
 # (MangaBaka id, unit, recent releases missing). Manga, manhwa, manhua and an
 # OEL webtoon, running and finished, so every state of the interface shows.
@@ -207,7 +210,7 @@ async def add_pepper_and_carrot(app, output: Path, today: datetime) -> str:
         "licence at www.peppercarrot.com; the pages in this demo are his."
     )
     async with httpx.AsyncClient(
-        headers={"User-Agent": USER_AGENT}, timeout=60, follow_redirects=True
+        headers={"User-Agent": USER_AGENT}, timeout=15, follow_redirects=True
     ) as http:
         episodes = await pepper_episodes(http)
         if not episodes:
@@ -326,6 +329,33 @@ async def add_pepper_and_carrot(app, output: Path, today: datetime) -> str:
     return manga_id
 
 
+async def prepare_catalogue(metadata):
+    """Keep demo enrichment on its identity catalogue, without cross-site searches."""
+    catalogue = next(
+        source for source in metadata.sources if source.name == "mangabaka"
+    )
+    for source in metadata.sources:
+        if source is not catalogue:
+            await source.aclose()
+    metadata.sources = [catalogue]
+    return catalogue
+
+
+async def add_catalogue_work(app, catalogue, external_id: str, unit: str):
+    # Cover the initial lookup too: provider retries previously happened outside
+    # the enrichment timeout, and could consume the entire Pages job budget.
+    async with asyncio.timeout(SERIES_TIMEOUT_SECONDS):
+        record = await catalogue.get_series(external_id)
+        manga = await app.state.service.add_catalogue_series(
+            record, "en", "all", series_unit=unit
+        )
+        # Match Add New's identity pinning instead of searching again by title.
+        await app.state.metadata.update_manual_correlations(
+            str(manga["id"]), {"mangabaka": str(record["external_id"])}
+        )
+        return record, manga
+
+
 async def build(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     data = output / "artwork"
@@ -361,23 +391,19 @@ async def build(output: Path) -> None:
     metadata = app.state.metadata
     service.last_deletion_recovery = {"recovery_blocked": False, "warnings": []}
     service.last_library_organization = service._organization_report()
-    mangabaka = next(
-        source for source in metadata.sources if source.name == "mangabaka"
-    )
+    mangabaka = await prepare_catalogue(metadata)
     today = datetime.now(UTC).replace(hour=9, minute=0, second=0, microsecond=0)
 
     added: list[tuple[str, str]] = []
     queued: list[tuple[str, str]] = []
     for index, (external_id, unit, missing) in enumerate(REAL_SERIES):
+        print(
+            f"loading MangaBaka {external_id} ({index + 1}/{len(REAL_SERIES)})",
+            flush=True,
+        )
         try:
-            record = await mangabaka.get_series(external_id)
-            manga = await service.add_catalogue_series(
-                record, "en", "all", series_unit=unit
-            )
+            record, manga = await add_catalogue_work(app, mangabaka, external_id, unit)
             manga_id = str(manga["id"])
-            await asyncio.wait_for(
-                metadata.enrich_series(manga_id, force=True), timeout=180
-            )
             stored = database.get_series_metadata(manga_id) or {}
             canonical = stored.get("data") or {}
             status = canonical.get("status") or record.get("status")
@@ -422,7 +448,7 @@ async def build(output: Path) -> None:
             if missing and status == "ongoing" and len(queued) < 3:
                 queued.append((manga_id, rows[owned]["id"]))
             sources = ", ".join(
-                f"{item.get('source')}:{'ok' if item.get('ok') else 'x'}"
+                f"{item.get('name')}:{item.get('state')}"
                 for item in (stored.get("source_status") or [])
             )
             added.append((external_id, title))
@@ -434,12 +460,15 @@ async def build(output: Path) -> None:
             f"only {len(added)} series could be added; the demo needs {MINIMUM_SERIES}"
         )
 
-    pepper = await add_pepper_and_carrot(app, output, today)
+    print("loading Pepper&Carrot reader pages", flush=True)
+    async with asyncio.timeout(READER_TIMEOUT_SECONDS):
+        pepper = await add_pepper_and_carrot(app, output, today)
     print(f"added Pepper&Carrot ({pepper}) with pages")
     for manga_id, release_id in queued:
         database.create_job(manga_id, release_id, "en", origin="automatic")
 
-    await metadata.aclose() if hasattr(metadata, "aclose") else None
+    await mangabaka.aclose()
+    await metadata.artwork.aclose()
     database.close()
     source = settings.database_path
     with sqlite3.connect(source) as connection:
