@@ -30,8 +30,8 @@ Optional tools, needed only by the features that use them:
 | Poppler (`pdfinfo`, `pdftoppm`) | PDF import. |
 
 The Docker image includes all of them. Tests that need Tesseract or Poppler are
-skipped when the tool is missing; CI installs Tesseract with English data and
-DejaVu Sans.
+skipped when the tool is missing; CI installs Tesseract with English data,
+DejaVu Sans and Poppler so both OCR and PDF integration tests run.
 
 ## Set up a development environment
 
