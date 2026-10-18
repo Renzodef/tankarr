@@ -364,10 +364,17 @@ def decorate_series_summary(
             counts["segmentation_differs"] = False
             counts["automatic_expected_count"] = total
             counts["automatic_expected_source"] = "available sources"
-            # The available reference includes owned book coverage as well
-            # as source rows. Otherwise covered chapters make an actually
-            # downloadable missing chapter look unindexed.
-            observed = total
+            # Count owned book coverage alongside source rows, but keep gaps
+            # without a source unindexed so Missing and Wanted agree.
+            observed = sum(
+                bool(
+                    slot.get("available")
+                    or slot.get("downloaded")
+                    or slot.get("covered_by_volume")
+                )
+                for slot in chapter_index.get("slots") or []
+                if slot.get("expected") and slot.get("chapter") is not None
+            )
         reported = _positive_integer((metadata or {}).get("latest_release_chapter"))
         if counts["reference_unknown"] and reported:
             counts["count_note"] = (
@@ -438,6 +445,10 @@ def decorate_series_summary(
         counts["reference_kind"] = str(
             chapter_index.get("reference_kind") or "catalogue"
         )
+        if counts["reference_kind"] == "available":
+            counts["automatic_expected_count"] = expected_volumes
+            counts["automatic_expected_source"] = "available sources"
+            counts["source"] = "available sources"
         counts["reference_unknown"] = False
         counts["total_count"] = max(int(expected_volumes or 0), len(slots), satisfied)
         counts["available_count"] = sum(1 for slot in slots if slot.get("available"))

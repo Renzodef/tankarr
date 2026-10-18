@@ -278,19 +278,27 @@ download filesystem. The nightly recycle job expires its bytes after the same
 configured retention period as library files (7 days by default). Receipts
 separate new attempts from retries and preserve recovery across interruptions.
 
-## Verify the latest published chapter of a continuing series
+## Keep a continuing series up to date in its configured language
 
-When a catalogue mixes chapter numbers, prologues and specials, a verified
-publication number can resolve an unknown count without setting a final edition
-limit. `PATCH /api/manga/{id}` accepts `verified_chapter_count` (a positive integer)
-and `verified_chapter_source` (the evidence URL or description). Both are required
-together; Tankarr records the verification time. Send
-`{"verified_chapter_count":"automatic"}` to clear the verification.
+For a running or paused series, Tankarr follows the official publication calendar
+in the configured language when that reference is available. Future announced
+episodes are not missing yet; ordinary monitoring acquires releases as they are
+published. Without an official reference, the latest recoverable release in that
+language defines how far the library needs to reach. Gaps between known main
+chapters remain missing, so an interrupted run cannot claim to be up to date.
 
-For example, verifying chapter 30 materialises missing chapters through 30. A
-subsequently indexed chapter 31 remains expected and can appear in Wanted. The
-series stays continuing and normal monitoring remains active. Explicit edition
-limits still take precedence, and ended series use their catalogue/end numbering.
+For example, English chapters 1–8 on disk are up to date when the English sources
+stop at 8, even if the original edition is at 18. When English chapter 9 becomes
+available it appears in Wanted. An English run containing 1–3 and 5 still lacks
+chapter 4. Original-language catalogue counts never create translation catch-up
+requirements for continuing series. Ended series retain their chapter/volume
+mapping and final-edition coverage checks. Explicit managed-edition limits remain
+operator decisions.
+
+Legacy `verified_chapter_count`, `verified_chapter_source` and verification times
+are retained as evidence, but an unbound number does not change the automatic
+reference of a continuing series. `PATCH /api/manga/{id}` with
+`{"verified_chapter_count":"automatic"}` clears that legacy evidence.
 
 ### Chapter numbers and extras
 
