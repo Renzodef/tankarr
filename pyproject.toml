@@ -38,7 +38,7 @@ classifiers = [
   "Topic :: Multimedia :: Graphics",
 ]
 dependencies = [
-  "authlib>=1.6.12,<1.7",
+  "authlib>=1.6.12,<1.10",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "itsdangerous>=2.2,<3",
