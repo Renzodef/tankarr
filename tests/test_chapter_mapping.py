@@ -1025,7 +1025,7 @@ def test_running_work_reference_is_the_official_source_or_available_chapters():
 
 
 @pytest.mark.parametrize("status", ["ongoing", "hiatus"])
-def test_continuing_available_count_ignores_catalogue_extras_and_unseen_gaps(status):
+def test_continuing_available_reference_preserves_continuity_not_original_total(status):
     from tankarr.series_summary import decorate_series_summary
 
     manga = {"status": status, "monitor_mode": "all", "preferred_language": "en"}
@@ -1045,11 +1045,16 @@ def test_continuing_available_count_ignores_catalogue_extras_and_unseen_gaps(sta
     rows = [r for r in rows if r["chapter"] != "42"]
     rows.append(release("66", downloaded=False))
     index = build_chapter_index(manga, metadata, rows)
-    assert index["expected_count"] == 65  # a count, not the last number 66
+    assert index["expected_count"] == 66
     assert index["latest_chapter"] == "66"
-    assert index["raw_missing_count"] == 1
+    assert index["raw_missing_count"] == 2
     assert index["unresolved_expected_count"] == 0
-    assert not any(s["chapter"] == "42" for s in index["slots"])
+    gap = next(s for s in index["slots"] if s["chapter"] == "42")
+    assert gap["expected"] and not gap["available"]
+    counts = decorate_series_summary(dict(manga), metadata, index)["library_count"]
+    assert counts["missing_count"] == 2
+    assert counts["indexed_missing_count"] == 1
+    assert counts["unindexed_missing_count"] == 1
 
     ended = build_chapter_index({**manga, "status_override": "ended"}, metadata, rows)
     assert ended["reference_kind"] == "catalogue"
@@ -2431,7 +2436,9 @@ def test_numbered_prologue_file_does_not_satisfy_normal_chapter():
 
 
 @pytest.mark.parametrize("next_chapter", [False, True])
-def test_verified_publication_number_is_not_a_final_edition_limit(next_chapter):
+def test_legacy_verified_number_does_not_override_recoverable_running_releases(
+    next_chapter,
+):
     manga = {
         "status": "ongoing",
         "monitor_mode": "all",
@@ -2444,19 +2451,19 @@ def test_verified_publication_number_is_not_a_final_edition_limit(next_chapter):
         releases.append(release("4", downloaded=False))
     index = build_chapter_index(manga, {}, releases)
     assert index["expected_count"] == (4 if next_chapter else 3)
-    assert index["reference_kind"] == "verified"
+    assert index["reference_kind"] == "available"
     from tankarr.series_summary import decorate_series_summary
 
     summary = decorate_series_summary(dict(manga), {}, index)
     assert summary["library_count"]["reference_unknown"] is False
-    assert summary["library_count"]["source"] == manga["verified_chapter_source"]
+    assert summary["library_count"]["source"] == "available sources"
     assert index["raw_missing_count"] == int(next_chapter)
     if next_chapter:
         slot = next(s for s in index["slots"] if s["chapter"] == "4")
         assert slot["expected"] and not slot["special"]
 
 
-def test_verified_publication_number_materialises_unindexed_gaps():
+def test_unbound_verified_number_does_not_materialise_original_language_tail():
     index = build_chapter_index(
         {
             "status": "ongoing",
@@ -2468,8 +2475,93 @@ def test_verified_publication_number_materialises_unindexed_gaps():
         {},
         [release("1")],
     )
-    assert index["expected_count"] == 3
-    assert index["raw_missing_count"] == 2
+    assert index["expected_count"] == 1
+    assert index["raw_missing_count"] == 0
+    assert index["latest_chapter"] == "1"
+
+
+@pytest.mark.parametrize("status", ["ongoing", "hiatus"])
+@pytest.mark.parametrize("official", [False, True])
+def test_running_english_run_ignores_japanese_head_and_legacy_verification(
+    status, official
+):
+    from tankarr.series_summary import decorate_series_summary
+
+    manga = {
+        "status": status,
+        "monitor_mode": "all",
+        "preferred_language": "en",
+        "verified_chapter_count": 18,
+        "verified_chapter_source": "https://original.example/series",
+    }
+    metadata = {"status": status, "chapter_count": 18, "volume_count": 6}
+    if official:
+        metadata["official_links"] = [
+            {"url": "https://publisher.example/series", "language": "en"}
+        ]
+    rows = [{**release(str(n)), "language": "en"} for n in range(1, 9)]
+    if official:
+        for row in rows:
+            row["source_url"] = "https://publisher.example/episode/" + row["chapter"]
+    rows += [
+        {**release(str(n), provider="original", downloaded=False), "language": "ja"}
+        for n in range(1, 19)
+    ]
+    index = build_chapter_index(manga, metadata, rows)
+    assert index["expected_count"] == 8
+    assert index["raw_missing_count"] == 0
+    assert index["latest_chapter"] == "8"
+    assert index["reference_kind"] == ("official" if official else "available")
+    assert {s["chapter"] for s in index["slots"]} == {str(n) for n in range(1, 9)}
+    counts = decorate_series_summary(dict(manga), metadata, index)["library_count"]
+    assert counts["downloaded_count"] == counts["total_count"] == 8
+    assert counts["missing_count"] == 0
+    rows.append(
+        {
+            **release("9", downloaded=False),
+            "language": "en",
+            "source_url": "https://publisher.example/episode/9" if official else None,
+        }
+    )
+    next_index = build_chapter_index(manga, metadata, rows)
+    assert next_index["expected_count"] == 9
+    assert next_index["raw_missing_count"] == 1
+    assert next_index["latest_chapter"] == "9"
+
+
+def test_running_books_follow_available_language_edition_not_original_volume_count():
+    from tankarr.series_summary import decorate_series_summary
+
+    manga = {"status": "ongoing", "monitor_mode": "all", "preferred_language": "en"}
+    metadata = {"status": "ongoing", "volume_count": 10}
+    rows = [{**release(None, volume=str(n)), "language": "en"} for n in range(1, 3)]
+    index = build_chapter_index(manga, metadata, rows)
+    assert index["unit"] == "volume"
+    assert index["expected_count"] == 2
+    assert index["raw_missing_count"] == 0
+    assert index["reference_kind"] == "available"
+    counts = decorate_series_summary(dict(manga), metadata, index)["library_count"]
+    assert counts["missing_count"] == 0
+    assert counts["automatic_expected_count"] == counts["total_count"] == 2
+
+    ended = build_chapter_index(
+        {**manga, "status": "ended"}, {**metadata, "status": "ended"}, rows
+    )
+    assert ended["expected_count"] == 10
+    assert ended["raw_missing_count"] == 8
+
+
+def test_running_implausible_numbering_cannot_certify_continuity():
+    from tankarr.series_summary import decorate_series_summary
+
+    manga = {"status": "ongoing", "monitor_mode": "all"}
+    index = build_chapter_index(manga, {}, [release("1"), release("1000000000")])
+    assert len(index["slots"]) == 2
+    assert index["reference_kind"] == "none"
+    assert index["expected_count"] is None
+    assert decorate_series_summary(dict(manga), {}, index)["library_count"][
+        "reference_unknown"
+    ]
 
 
 def test_explicit_edition_limit_takes_precedence_over_verified_publication():

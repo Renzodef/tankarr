@@ -6,16 +6,14 @@ and keep two agents from stepping on each other.
 
 ## Which repository is this?
 
-Look at `git remote get-url origin`.
+`Renzodef/tankarr` is the single source of truth for development and releases.
+Check `git remote get-url origin` before working: it should identify this
+repository or a contributor's fork. Maintainers and contributors use the same
+branch and pull request workflow below, including in Codex cloud environments.
 
-- `…/tankarr.git` is the **public repository**: `main` holds the published
-  versions and merged pull requests, changes arrive only through pull requests,
-  and releases are tags. The rules below apply as written.
-- The maintainer develops in a **private working repository**
-  (`…/tankarr-dev.git`) and publishes each version here as one commit. There,
-  `AGENTS.local.md` (never committed) describes the local workflow and takes
-  precedence over "How changes reach users" below; everything else applies
-  there too.
+`main` holds reviewed changes; version tags select the commits shipped to
+installations. Installation-specific instructions belong in `AGENTS.local.md`
+(never committed). They do not establish a separate development repository.
 
 ## The product stays generic
 

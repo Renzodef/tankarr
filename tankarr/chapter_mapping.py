@@ -758,6 +758,19 @@ def build_chapter_index(
     # unit also settles nomenclature conflicts between sources (duplicates,
     # split parts, extras) before any slot exists.
     all_releases = [dict(release) for release in raw_releases]
+    publication = publication_summary(manga, metadata)
+    if publication["status"] == "continuing" or publication["paused"]:
+        preferred = str(manga.get("preferred_language") or "").strip().casefold()
+        if preferred:
+            # A translated running edition follows its own publication, never
+            # the original edition's head. Unknown legacy rows are already
+            # language-scoped by the provider/database and remain usable.
+            all_releases = [
+                release
+                for release in all_releases
+                if str(release.get("language") or "unknown").strip().casefold()
+                in {preferred, "unknown"}
+            ]
     raw_release_list = all_releases
     for release in all_releases:
         if release.get("chapter") == 0 and not isinstance(release.get("chapter"), bool):
@@ -1161,23 +1174,10 @@ def build_chapter_index(
             expected_chapter_total = candidate
             expected_chapter_source = "catalogue total counts the prologue"
             reference_kind = "catalogue"
-    verified = _positive_integer(manga.get("verified_chapter_count"))
-    if (
-        chapters_unit
-        and not volume_scoped
-        and publication["status"] != "ended"
-        and manual_expected_count is None
-        and verified is not None
-        and manga.get("verified_chapter_source")
-    ):
-        # A checked publication frontier is a floor, never an edition's end.
-        # New source chapters remain expected and can become Wanted, while
-        # holes below the verified number are materialised even if unindexed.
-        sequence_end = max(verified, observed_max, expected_chapter_total or 0)
-        sequence_basis = "verified_publication_frontier"
-        expected_chapter_total = sequence_end
-        expected_chapter_source = str(manga["verified_chapter_source"])
-        reference_kind = "verified"
+    # Legacy verified publication counts have no language/calendar binding.
+    # Preserve them as evidence, but do not let an original-language number
+    # create missing translated chapters. Running references come only from
+    # the managed official calendar or releases in the configured language.
     if sequence_end is not None and sequence_end > MAX_CANONICAL_SEQUENCE:
         sequence_end = None
         sequence_basis = None
@@ -1198,15 +1198,16 @@ def build_chapter_index(
         observed_max = max(observed_global, default=0)
 
     missing_numbers: set[int] = set()
-    if (
-        chapters_unit
-        and not volume_scoped
-        and observed_global
-        and reference_kind != "available"
-    ):
-        missing_numbers.update(
-            set(range(min(observed_global), observed_max + 1)) - observed_global
-        )
+    if chapters_unit and not volume_scoped and observed_global:
+        first_observed = min(observed_global)
+        if observed_max - first_observed < MAX_CANONICAL_SEQUENCE:
+            missing_numbers.update(
+                set(range(first_observed, observed_max + 1)) - observed_global
+            )
+        elif reference_kind == "available":
+            # An implausible source label must neither allocate millions of
+            # placeholders nor certify continuity that we could not verify.
+            reference_kind = "none"
     if sequence_end is not None:
         missing_numbers.update(set(range(1, sequence_end + 1)) - observed_global)
 
@@ -1298,7 +1299,10 @@ def build_chapter_index(
             chapter=None,
             volume=volume,
             releases=grouped,
-            expected=True,
+            expected=not continuing
+            or any(
+                item.get("downloaded") or not is_unpublished(item) for item in grouped
+            ),
             special=False,
             evidence="observed_volume",
             monitor_mode=monitor_mode,
@@ -1329,6 +1333,25 @@ def build_chapter_index(
     if edition_books:
         expected_volume_total = edition_books
         expected_volume_source = "edition on disk"
+    if (
+        continuing
+        and not chapters_unit
+        and not edition_books
+        and not (
+            manual_expected_count is not None
+            and manual_expected_unit in {"volume", "issue"}
+        )
+    ):
+        expected_volume_total = max(
+            (
+                number
+                for slot in volume_slots
+                if slot["expected"]
+                and (number := _positive_integer(slot.get("volume"))) is not None
+            ),
+            default=None,
+        )
+        expected_volume_source = "available sources" if expected_volume_total else None
     # A volumes series counts books even before any source offers one: the
     # catalogue's volume total materialises the expected books so Wanted and
     # the indexer search know what to look for.
@@ -1703,6 +1726,7 @@ def build_chapter_index(
                     slot.get("available")
                     or slot.get("downloaded")
                     or slot.get("covered_by_volume")
+                    or slot.get("evidence") == "gap_between_observed_chapters"
                 )
         expected_chapter_total = sum(
             1
@@ -1934,7 +1958,13 @@ def build_chapter_index(
         "expected_source": expected_source,
         "reference_kind": reference_kind
         if not volume_sequence_mode
-        else ("catalogue" if expected_volume_total else "none"),
+        else (
+            "available"
+            if continuing and expected_volume_source == "available sources"
+            else "catalogue"
+            if expected_volume_total
+            else "none"
+        ),
         "unresolved_expected_count": unresolved_expected_count,
         "mapped_missing_count": raw_missing_count - ignored_missing_count,
         "raw_missing_count": raw_missing_count,

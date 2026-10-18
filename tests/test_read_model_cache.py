@@ -466,7 +466,7 @@ def test_first_cached_read_after_restart_returns_saved_snapshot(
         assert fresh.content != before.content
 
 
-def test_verified_publication_api_keeps_future_wanted_chapters(cache_app, monkeypatch):
+def test_legacy_verified_number_does_not_expand_running_wanted(cache_app, monkeypatch):
     monkeypatch.setattr(
         cache_app.state.service, "assert_mutations_allowed", lambda: None
     )
@@ -489,8 +489,8 @@ def test_verified_publication_api_keeps_future_wanted_chapters(cache_app, monkey
         assert manga["expected_count_override"] is None
         wanted = client.get("/api/wanted?fresh=true").json()
         entry = next(item for item in wanted if item["manga"]["id"] == "published")
-        assert entry["expected_count"] == 2
-        assert {c["chapter"] for c in entry["chapters"]} == {"1", "2"}
+        assert entry["expected_count"] == 1
+        assert {c["chapter"] for c in entry["chapters"]} == {"1"}
         database.upsert_chapters("published", [release("published", 3)])
         wanted = client.get("/api/wanted?fresh=true").json()
         entry = next(item for item in wanted if item["manga"]["id"] == "published")

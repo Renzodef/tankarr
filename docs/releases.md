@@ -24,13 +24,14 @@ only and marks the GitHub release as a pre-release; it never moves `latest`.
 
 ## Where development happens
 
-Tankarr is developed in a private working repository and published here one
-version at a time. Each version is a single commit on `main`, "Release vX.Y.Z",
-carrying the whole tree of that version and listing what changed since the
-previous one, followed by the tag. Between releases `main` also receives
-contributors' pull requests; before the next release the maintainer applies
-them to the working repository (`git format-patch <last release>..main` here,
-`git am` there), so a release never drops a merged contribution.
+This repository is the single source of truth for development and releases.
+Maintainers and contributors submit changes through pull requests to `main`.
+A release branch starts from the latest `main` and adds the version bump;
+after its pull request is merged, a tag selects that commit for publication.
+Merged contributions are already included and require no separate import.
+
+Installations use the images published from these tags. A running release can
+therefore lag behind development on `main` while using the same codebase.
 
 `main` is protected: no direct pushes, no force pushes, no deletion, and every
 change needs a pull request with passing checks. Release tags are immutable.
@@ -40,9 +41,15 @@ change needs a pull request with passing checks. Release tags are immutable.
 1. **Choose the version.** Patch for fixes only, minor for new features, major
    for breaking changes; before 1.0, a minor release may still break things,
    and the notes say so.
-2. **Bring in what was merged here.** Every pull request merged into `main`
-   since the last release must already be in the working repository.
-3. **Bump the version** in the working repository: `__version__` in
+2. **Start from the latest `main`.** Fetch the repository and create a release
+   branch from `origin/main`:
+
+   ```sh
+   git fetch origin main
+   git switch -c release/vX.Y.Z origin/main
+   ```
+
+3. **Bump the version** on that branch: `__version__` in
    `tankarr/__init__.py`, `version` in `frontend/package.json` (with
    `npm version --no-git-tag-version X.Y.Z --prefix frontend`, which also
    updates the lockfile) and `appVersion` in `contrib/helm/tankarr/Chart.yaml`
@@ -51,10 +58,9 @@ change needs a pull request with passing checks. Release tags are immutable.
    (`PINNED_RELEASE` in `tankarr/suwayomi_runtime.py`) should move to the
    current upstream release: update its tag and the SHA-256 of the server JAR
    from the `Checksums.sha256` file of that release.
-4. **Push the release branch.** A branch `release/vX.Y.Z` whose single commit
-   "Release vX.Y.Z" holds the tree of that version, with the changes since the
-   previous release in its message. Open a pull request against `main` with
-   that message as its description. CI runs on it, and the image
+4. **Push the release branch.** Commit the version bump as "Release vX.Y.Z"
+   and describe the changes since the previous tag in the pull request against
+   `main`. CI runs on it, and the image
    `branch-release-vX.Y.Z` can be tried on a real installation first.
 5. **Squash-merge the pull request.** The repository uses the pull request's
    title and description as the commit message, so `main` gains exactly one
@@ -77,10 +83,9 @@ the next patch version.
 
 ## Hotfixes
 
-For an urgent fix that cannot wait for the next version: fix it in the working
-repository, bump the patch version and release it as above. A contributor's fix
-merged here is released the same way after it has been brought into the
-working repository.
+For an urgent fix that cannot wait for the next version: submit the fix through
+a pull request to `main`, then bump the patch version and release it as above.
+Maintainers' and contributors' fixes follow the same process.
 
 ## Trying a change before it is merged
 
@@ -110,8 +115,8 @@ required checks pass. Two exceptions receive the `needs-review` label and
 wait for a maintainer: a major update of a runtime dependency (judged per
 dependency, so a group is not held back by a major bump of a development
 tool) and a change of the Docker base images.
-Merged updates are carried into the working repository before the next
-release, like any other merged pull request.
+Merged updates are included in the next release directly from `main`, like
+any other merged pull request.
 
 ## Pull request labels
 
