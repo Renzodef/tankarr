@@ -40,10 +40,16 @@ def counted_client(tmp_path):
         client.close()
 
 
-def test_the_card_and_the_page_agree_on_both_counts(counted_client):
-    # The catalogues count 22 books and 249 chapters. The grid read them and
-    # the series page did not, so the same work claimed "249 chapters" on one
-    # screen and "? chapters" on the other.
+@pytest.mark.parametrize("status, expected_books", [("ongoing", None), ("ended", 22)])
+def test_the_card_and_the_page_agree_on_both_counts(
+    counted_client, status, expected_books
+):
+    # Ended works retain catalogue totals on both screens. A running edition
+    # with no recoverable books has an unknown reference, rather than an
+    # obligation to acquire the original edition's 22 books.
+    counted_client.app.state.database.update_manga(
+        "manga-1", {"status_override": "ended" if status == "ended" else "automatic"}
+    )
     card = next(
         item
         for item in counted_client.get("/api/manga").json()
@@ -51,9 +57,15 @@ def test_the_card_and_the_page_agree_on_both_counts(counted_client):
     )
     page = counted_client.get("/api/manga/manga-1").json()
     assert card["chapter_total_count"] == 249
-    assert card["book_total_count"] == 22
+    assert card["book_total_count"] == expected_books
     assert page["chapter_total_count"] == card["chapter_total_count"]
     assert page["book_total_count"] == card["book_total_count"]
+    counts = page["library_count"]
+    assert counts["automatic_expected_count"] == expected_books
+    assert counts["catalogue_expected_count"] == 22
+    assert counts["reference_unknown"] is (status == "ongoing")
+    if status == "ongoing":
+        assert counts["missing_count"] == 0
 
 
 def test_a_total_typed_by_hand_is_the_number_everywhere(counted_client):

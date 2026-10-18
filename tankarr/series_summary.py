@@ -445,11 +445,17 @@ def decorate_series_summary(
         counts["reference_kind"] = str(
             chapter_index.get("reference_kind") or "catalogue"
         )
-        if counts["reference_kind"] == "available":
-            counts["automatic_expected_count"] = expected_volumes
-            counts["automatic_expected_source"] = "available sources"
-            counts["source"] = "available sources"
-        counts["reference_unknown"] = False
+        if counts["reference_kind"] in {"available", "none"}:
+            counts["automatic_expected_count"] = expected_volumes or None
+            counts["automatic_expected_source"] = (
+                "available sources" if expected_volumes else None
+            )
+            counts["source"] = counts["automatic_expected_source"]
+        counts["reference_unknown"] = (
+            not expected_volumes
+            and counts["reference_kind"] == "none"
+            and manga["publication"]["status"] != "ended"
+        )
         counts["total_count"] = max(int(expected_volumes or 0), len(slots), satisfied)
         counts["available_count"] = sum(1 for slot in slots if slot.get("available"))
         counts["downloaded_count"] = satisfied

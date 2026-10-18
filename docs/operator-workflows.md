@@ -286,6 +286,9 @@ episodes are not missing yet; ordinary monitoring acquires releases as they are
 published. Without an official reference, the latest recoverable release in that
 language defines how far the library needs to reach. Gaps between known main
 chapters remain missing, so an interrupted run cannot claim to be up to date.
+If no managed reference or recoverable books are known for a running volume
+edition, its expected total remains unknown; the catalogue's original-edition
+total is retained as information without creating missing translated books.
 
 For example, English chapters 1–8 on disk are up to date when the English sources
 stop at 8, even if the original edition is at 18. When English chapter 9 becomes
