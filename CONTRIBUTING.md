@@ -15,14 +15,14 @@ welcome.
 
 ## How changes flow
 
-Tankarr is developed in the maintainer's private working repository and
-published here one version at a time: every commit on `main` is either a
-release ("Release vX.Y.Z", one commit carrying that whole version) or a merged
-pull request. Tags on `main` build the Docker images.
+All Tankarr development happens in this repository. Maintainers and
+contributors work on branches and submit pull requests to `main`. Version tags
+on `main` build the Docker images used by installations; there is no separate
+working repository to synchronize.
 
 | Branch or tag | Purpose | Published as |
 | --- | --- | --- |
-| `main` | Released versions and merged pull requests | Nothing by itself |
+| `main` | Reviewed development and release commits | Nothing by itself |
 | `vX.Y.Z` tag | A release | `ghcr.io/renzodef/tankarr:X.Y.Z`, `:X.Y`, `:latest` |
 | Any other branch here | A change under test | `ghcr.io/renzodef/tankarr:branch-<name>` |
 
@@ -37,8 +37,7 @@ through pull requests that pass CI. To contribute:
 4. CI must be green: backend lint and tests, frontend tests and build, browser
    tests, the Docker image build, and dependency review.
 5. The maintainer reviews and squash-merges it. Your change is on `main` at
-   once, in the next release image after that, and it is carried into the
-   maintainer's working repository so every later version keeps it.
+   once and ships in the next release image.
 
 ## Development setup
 
