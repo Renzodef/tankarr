@@ -5,7 +5,7 @@ type: application
 # Chart version; appVersion is the image tag the chart deploys by default and
 # follows Tankarr's releases.
 version: 0.1.0
-appVersion: "0.10.0"
+appVersion: "0.10.1"
 kubeVersion: ">=1.25.0-0"
 home: https://renzodef.github.io/tankarr/
 icon: https://raw.githubusercontent.com/Renzodef/tankarr/main/docs/assets/logo.svg
