@@ -39,6 +39,7 @@ from tankarr.library_snapshot import (
 from tankarr.numbering_reconciliation import reconcile_numbering
 from tankarr.series_summary import publication_summary
 from tankarr.series_unit import is_volume_release, select_releases
+from tankarr.source_circuit import circuit_delay_seconds
 from tankarr.source_numbering import numbered_prologue
 from tankarr.source_ranking import (
     SourceRanking,
@@ -352,6 +353,15 @@ CREATE TABLE IF NOT EXISTS source_circuit (
     failures INTEGER NOT NULL DEFAULT 0,
     next_retry_at REAL NOT NULL DEFAULT 0,
     failure_code TEXT NOT NULL DEFAULT ''
+);
+
+-- Suwayomi numeric ids Tankarr looked at recently. Search stubs often keep
+-- last_fetched_at at 0, so the age window cannot see them in Suwayomi's
+-- own columns. Rows older than the window are deleted when the keep-set
+-- is read.
+CREATE TABLE IF NOT EXISTS suwayomi_catalogue_touch (
+    manga_id INTEGER PRIMARY KEY,
+    seen_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS download_job (
@@ -953,7 +963,7 @@ def clean_release_title(value: object) -> str:
 
 # Increment whenever initialize adds or changes a schema migration. The marker is
 # committed only after initialization succeeds; upgrades are backed up beforehand.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class Database:
@@ -974,6 +984,7 @@ class Database:
         self.source_ranking: SourceRanking = SourceRanking.from_settings(
             provider_priority=DOWNLOAD_PROVIDER_PRIORITY_DEFAULT
         )
+        self._catalogue_owners: tuple[Any, dict[str, str]] | None = None
 
     def _open(self) -> sqlite3.Connection:
         # A pooled connection is handed to whichever thread asks next, one at
@@ -2224,6 +2235,7 @@ class Database:
                     "SELECT id FROM chapter_release WHERE manga_id=?", (manga_id,)
                 ).fetchall()
             }
+            pending: list[tuple] = []
             for chapter in chapter_list:
                 if chapter["id"] not in existing_ids:
                     new_ids.append(chapter["id"])
@@ -2255,6 +2267,16 @@ class Database:
                     chapter.get("numbering_method") or "source_identity"
                 )
                 numbering_confidence = float(chapter.get("numbering_confidence") or 0.0)
+                explicit_numbering = any(
+                    key in chapter
+                    for key in (
+                        "numbering_status",
+                        "numbering_method",
+                        "numbering_confidence",
+                        "numbering_evidence",
+                        "numbering_version",
+                    )
+                )
                 if release_unit == "volume" and not chapter.get("numbering_status"):
                     # A book is identified by its volume, as the start-up
                     # repair of the same rows records it.
@@ -2265,11 +2287,13 @@ class Database:
                     numbering_confidence = float(
                         chapter.get("numbering_confidence") or 1.0
                     )
+                    explicit_numbering = True
                 compatibility_chapter = (
                     canonical_chapter if numbering_status == "mapped" else None
                 )
-                connection.execute(
-                    """
+                pending.append(
+                    (
+                        """
                     INSERT INTO chapter_release (
                         id, manga_id, volume, chapter, source_chapter,
                         canonical_chapter, numbering_status, numbering_method,
@@ -2305,11 +2329,26 @@ class Database:
                         canonical_chapter=CASE
                             WHEN chapter_release.release_unit='volume' THEN NULL
                             ELSE excluded.canonical_chapter END,
-                        numbering_status=excluded.numbering_status,
-                        numbering_method=excluded.numbering_method,
-                        numbering_confidence=excluded.numbering_confidence,
-                        numbering_evidence_json=excluded.numbering_evidence_json,
-                        numbering_version=excluded.numbering_version,
+                        numbering_status=CASE
+                            WHEN excluded.numbering_version < 0
+                            THEN chapter_release.numbering_status
+                            ELSE excluded.numbering_status END,
+                        numbering_method=CASE
+                            WHEN excluded.numbering_version < 0
+                            THEN chapter_release.numbering_method
+                            ELSE excluded.numbering_method END,
+                        numbering_confidence=CASE
+                            WHEN excluded.numbering_version < 0
+                            THEN chapter_release.numbering_confidence
+                            ELSE excluded.numbering_confidence END,
+                        numbering_evidence_json=CASE
+                            WHEN excluded.numbering_version < 0
+                            THEN chapter_release.numbering_evidence_json
+                            ELSE excluded.numbering_evidence_json END,
+                        numbering_version=CASE
+                            WHEN excluded.numbering_version < 0
+                            THEN chapter_release.numbering_version
+                            ELSE excluded.numbering_version END,
                         title=excluded.title,
                         language=excluded.language,
                         groups_json=excluded.groups_json,
@@ -2325,39 +2364,86 @@ class Database:
                         updated_at=excluded.updated_at,
                         source_key=COALESCE(excluded.source_key, chapter_release.source_key),
                         source_name=COALESCE(excluded.source_name, chapter_release.source_name)
+                    WHERE chapter_release.release_unit IS NOT (
+                            CASE WHEN chapter_release.release_unit='volume'
+                                 THEN 'volume' ELSE excluded.release_unit END)
+                       OR chapter_release.volume IS NOT (
+                            CASE WHEN chapter_release.release_unit='volume'
+                                 THEN COALESCE(excluded.chapter, excluded.volume)
+                                 ELSE COALESCE(excluded.volume, chapter_release.volume) END)
+                       OR chapter_release.chapter IS NOT (
+                            CASE WHEN chapter_release.release_unit='volume' THEN NULL
+                                 ELSE excluded.chapter END)
+                       OR chapter_release.source_chapter IS NOT excluded.source_chapter
+                       OR chapter_release.canonical_chapter IS NOT (
+                            CASE WHEN chapter_release.release_unit='volume' THEN NULL
+                                 ELSE excluded.canonical_chapter END)
+                       OR (
+                            excluded.numbering_version >= 0 AND (
+                                chapter_release.numbering_status IS NOT excluded.numbering_status
+                                OR chapter_release.numbering_method IS NOT excluded.numbering_method
+                                OR chapter_release.numbering_confidence IS NOT excluded.numbering_confidence
+                                OR chapter_release.numbering_evidence_json IS NOT excluded.numbering_evidence_json
+                                OR chapter_release.numbering_version IS NOT excluded.numbering_version
+                            )
+                       )
+                       OR chapter_release.title IS NOT excluded.title
+                       OR chapter_release.language IS NOT excluded.language
+                       OR chapter_release.groups_json IS NOT excluded.groups_json
+                       OR chapter_release.publish_at IS NOT excluded.publish_at
+                       OR chapter_release.source_url IS NOT excluded.source_url
+                       OR chapter_release.pages IS NOT (
+                            CASE WHEN chapter_release.downloaded=1
+                                      AND chapter_release.pages>0
+                                 THEN chapter_release.pages ELSE excluded.pages END)
+                       OR chapter_release.version IS NOT excluded.version
+                       OR chapter_release.source_key IS NOT COALESCE(
+                            excluded.source_key, chapter_release.source_key)
+                       OR chapter_release.source_name IS NOT COALESCE(
+                            excluded.source_name, chapter_release.source_name)
                     """,
-                    (
-                        chapter["id"],
-                        manga_id,
-                        chapter.get("volume"),
-                        compatibility_chapter,
-                        source_chapter,
-                        canonical_chapter,
-                        numbering_status,
-                        numbering_method,
-                        numbering_confidence,
-                        json.dumps(
-                            chapter.get("numbering_evidence") or {},
-                            ensure_ascii=False,
+                        (
+                            chapter["id"],
+                            manga_id,
+                            chapter.get("volume"),
+                            compatibility_chapter,
+                            source_chapter,
+                            canonical_chapter,
+                            numbering_status,
+                            numbering_method,
+                            numbering_confidence,
+                            json.dumps(
+                                chapter.get("numbering_evidence") or {},
+                                ensure_ascii=False,
+                            ),
+                            int(chapter.get("numbering_version") or 0)
+                            if explicit_numbering
+                            else -1,
+                            chapter.get("title", ""),
+                            chapter["language"],
+                            chapter["provider"],
+                            json.dumps(chapter.get("groups", []), ensure_ascii=False),
+                            chapter.get("publish_at"),
+                            chapter["source_url"],
+                            chapter.get("pages"),
+                            chapter.get("version"),
+                            int(monitor_new),
+                            now,
+                            now,
+                            chapter.get("source_key") or chapter["provider"],
+                            chapter.get("source_name"),
+                            release_unit,
                         ),
-                        int(chapter.get("numbering_version") or 0),
-                        chapter.get("title", ""),
-                        chapter["language"],
-                        chapter["provider"],
-                        json.dumps(chapter.get("groups", []), ensure_ascii=False),
-                        chapter.get("publish_at"),
-                        chapter["source_url"],
-                        chapter.get("pages"),
-                        chapter.get("version"),
-                        int(monitor_new),
-                        now,
-                        now,
-                        chapter.get("source_key") or chapter["provider"],
-                        chapter.get("source_name"),
-                        release_unit,
-                    ),
+                    )
                 )
-            self._reconcile_numbering_connection(connection, manga_id)
+            # Unchanged rows match the WHERE and are not rewritten, so a
+            # 15-minute refresh does not bump every chapter clock and force
+            # a library rebuild. Numbering runs only when a row was written.
+            before = connection.total_changes
+            if pending:
+                connection.executemany(pending[0][0], [row[1] for row in pending])
+            if connection.total_changes != before:
+                self._reconcile_numbering_connection(connection, manga_id)
         return {"seen": len(chapter_list), "new_chapter_ids": new_ids}
 
     @staticmethod
@@ -4128,7 +4214,7 @@ class Database:
             return []
         metadata_row = self.get_series_metadata(manga_id)
         metadata = (metadata_row or {}).get("data") or {}
-        all_chapters = self.list_chapters(manga_id, manga["preferred_language"])
+        all_chapters = self.list_queue_chapters(manga_id, manga["preferred_language"])
         # The series unit is what the series page and Wanted show: it is
         # resolved from every release. The gates below drop releases that
         # cannot be queued; resolving the unit again from what is left made a
@@ -5074,11 +5160,30 @@ class Database:
         """MangaBaka id → series id, for every work already in the library.
 
         A work added through Add New keeps its catalogue id in the metadata
-        identity, not in ``manga.source_id``, so both are consulted.
+        identity, not in ``manga.source_id``, so both are consulted. The map
+        is reused until those rows change: building it walks every catalogue
+        identity, and Add New asks for it on every search.
         """
 
-        owners: dict[str, str] = {}
         with self.connect() as connection:
+            stamp = (
+                tuple(
+                    connection.execute(
+                        "SELECT COUNT(*), COALESCE(MAX(rowid), 0) "
+                        "FROM metadata_source_record WHERE source='mangabaka'"
+                    ).fetchone()
+                ),
+                tuple(
+                    connection.execute(
+                        "SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM manga "
+                        "WHERE provider='catalogue'"
+                    ).fetchone()
+                ),
+            )
+            cached = self._catalogue_owners
+            if cached is not None and cached[0] == stamp:
+                return cached[1]
+            owners: dict[str, str] = {}
             rows = connection.execute(
                 """
                 SELECT manga_id, external_id
@@ -5093,7 +5198,73 @@ class Database:
                 "WHERE provider='catalogue' AND NULLIF(trim(source_id), '') IS NOT NULL"
             ).fetchall():
                 owners.setdefault(str(row["source_id"]), str(row["id"]))
+            self._catalogue_owners = (stamp, owners)
         return owners
+
+    def get_setting(self, key: str) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM setting WHERE key=?", (key,)
+            ).fetchone()
+        return None if row is None else str(row["value"])
+
+    def touch_suwayomi_manga(self, manga_ids: Iterable[int]) -> None:
+        """Remember Suwayomi ids Tankarr just fetched, so cleanup can spare them."""
+
+        now = utc_now()
+        rows: list[tuple[int, str]] = []
+        for item in manga_ids:
+            try:
+                value = int(item)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                rows.append((value, now))
+        if not rows:
+            return
+        with self.connect() as connection:
+            connection.executemany(
+                "INSERT INTO suwayomi_catalogue_touch (manga_id, seen_at) "
+                "VALUES (?, ?) ON CONFLICT(manga_id) DO UPDATE SET "
+                "seen_at=excluded.seen_at",
+                rows,
+            )
+
+    def suwayomi_catalogue_keep_ids(
+        self, *, instance_token: str | None, max_age_hours: int
+    ) -> set[int]:
+        """Suwayomi ids Tankarr still needs: mappings, open reviews, recent touches."""
+
+        from datetime import timedelta
+
+        from tankarr.providers.suwayomi import ID_PATTERN, suwayomi_id_is_current
+
+        cutoff = (datetime.now(UTC) - timedelta(hours=int(max_age_hours))).isoformat()
+        ids: set[int] = set()
+
+        def take(value: object) -> None:
+            if not suwayomi_id_is_current(value, instance_token):
+                return
+            match = ID_PATTERN.fullmatch(str(value or ""))
+            if match is not None:
+                ids.add(int(match.group(2)))
+
+        for mapping in self.list_all_release_sources():
+            if str(mapping.get("provider") or "") == "suwayomi":
+                take(mapping.get("provider_manga_id"))
+        for review in self.list_match_reviews(open_only=True):
+            if str(review.get("provider") or "") == "suwayomi":
+                take(review.get("candidate_id"))
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM suwayomi_catalogue_touch WHERE seen_at < ?",
+                (cutoff,),
+            )
+            for row in connection.execute(
+                "SELECT manga_id FROM suwayomi_catalogue_touch"
+            ):
+                ids.add(int(row[0]))
+        return ids
 
     def create_author(self, author_id: str, display_name: str) -> dict[str, Any]:
         now = utc_now()
@@ -6171,6 +6342,36 @@ class Database:
             rows = connection.execute(
                 """
                 SELECT * FROM chapter_release
+                WHERE manga_id=? AND language=?
+                ORDER BY
+                    CASE WHEN CAST(volume AS REAL) IS NULL THEN 1 ELSE 0 END,
+                    CAST(volume AS REAL),
+                    CASE WHEN CAST(chapter AS REAL) IS NULL THEN 1 ELSE 0 END,
+                    CAST(chapter AS REAL),
+                    publish_at,
+                    id
+                """,
+                (manga_id, language),
+            ).fetchall()
+        return [self._decode_chapter(row) for row in rows]
+
+    def list_queue_chapters(self, manga_id: str, language: str) -> list[dict[str, Any]]:
+        """Chapter rows for acquisition, without the large numbering JSON.
+
+        The monitor asks this for every followed series. ``numbering_evidence_json``
+        and the file hashes are not inputs to ranking or the unit gates.
+        """
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, manga_id, volume, chapter, source_chapter,
+                       canonical_chapter, numbering_status, numbering_method,
+                       title, language, provider, groups_json, publish_at,
+                       source_url, pages, version, downloaded, monitored,
+                       source_key, source_name, release_unit, assembled_from,
+                       verified_book
+                FROM chapter_release
                 WHERE manga_id=? AND language=?
                 ORDER BY
                     CASE WHEN CAST(volume AS REAL) IS NULL THEN 1 ELSE 0 END,
@@ -9218,7 +9419,9 @@ class Database:
             ).fetchone()
         return float(row[0]) if row else 0.0
 
-    def record_source_circuit(self, source_key: str, *, error: str = "") -> float:
+    def record_source_circuit(
+        self, source_key: str, *, error: str = "", detail: str = ""
+    ) -> float:
         """A successful empty search is healthy; repeated failures pause one source."""
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -9231,7 +9434,7 @@ class Database:
                 "SELECT failures FROM source_circuit WHERE source_key=?", (source_key,)
             ).fetchone()
             failures = int(row[0]) + 1 if row else 1
-            delay = min(600, 30 * 2 ** min(5, failures - 2)) if failures > 1 else 0
+            delay = circuit_delay_seconds(failures, f"{error}\n{detail}")
             deadline = datetime.now(UTC).timestamp() + delay if delay else 0.0
             connection.execute(
                 "INSERT INTO source_circuit VALUES (?, ?, ?, ?) "

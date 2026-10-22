@@ -4,6 +4,9 @@ import asyncio
 import io
 import logging
 import re
+import time
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -24,6 +27,7 @@ from tankarr.providers.base import (
     ProviderUnavailableError,
     SearchDiagnostic,
 )
+from tankarr.source_circuit import circuit_delay_seconds, http_overload
 from tankarr.source_numbering import renumber_from_titles
 
 logger = logging.getLogger(__name__)
@@ -137,6 +141,9 @@ PRIORITY_PREPARE = 5
 PRIORITY_UI = 10
 PRIORITY_REFRESH = 20
 PRIORITY_DISCOVERY = 30
+# No status digits and no "rate limit" phrase: recording this text again
+# would treat the pause itself as another overload.
+BACKOFF_MESSAGE = "Backing off after repeated overload responses"
 
 
 ID_PATTERN = re.compile(r"suwayomi-(?:([0-9a-f]{8})-)?([1-9][0-9]*)")
@@ -214,6 +221,18 @@ class SuwayomiProvider(Provider):
             self.http.limiter.requests_per_second
         )
         self._reported_page_concurrency: int | None = None
+        # Recent numeric ids, so catalogue cleanup can spare a search that
+        # Suwayomi stored with last_fetched_at still at 0.
+        self.catalogue_touch: Callable[[list[int]], None] | None = None
+        # Durable cooldown already recorded for this extension.
+        self.source_blocked: Callable[[str, str], bool] | None = None
+        # Managed mode: start the local server and hold it for one operation.
+        # External mode leaves this unset and talks to the operator's server.
+        self.ensure_runtime: Callable[[], AbstractAsyncContextManager[None]] | None = (
+            None
+        )
+        self._overload_failures: dict[str, int] = {}
+        self._overload_until: dict[str, float] = {}
 
     def supports_language(self, language: str) -> bool:
         return bool(language.strip())
@@ -302,7 +321,22 @@ class SuwayomiProvider(Provider):
             priority=priority,
         )
 
+    def _engine(self) -> AbstractAsyncContextManager[None]:
+        if self.ensure_runtime is not None:
+            return self.ensure_runtime()
+        return nullcontext()
+
     async def _graphql(
+        self,
+        query: str,
+        variables: dict[str, Any],
+        *,
+        priority: int | None = None,
+    ) -> dict[str, Any]:
+        async with self._engine():
+            return await self._graphql_request(query, variables, priority=priority)
+
+    async def _graphql_request(
         self,
         query: str,
         variables: dict[str, Any],
@@ -487,6 +521,8 @@ class SuwayomiProvider(Provider):
         semaphore = asyncio.Semaphore(4)
 
         async def search_source(source: dict[str, Any]) -> list[dict[str, Any]]:
+            if self._source_paused(source):
+                raise ProviderRequestError(BACKOFF_MESSAGE)
             try:
                 async with semaphore:
                     # Give each source its request budget after capacity is free.
@@ -510,11 +546,17 @@ class SuwayomiProvider(Provider):
                 raise ProviderRequestError(
                     f"Search exceeded {self.search_timeout_seconds:g}s"
                 ) from exc
+            except (ProviderRequestError, ProviderUnavailableError) as exc:
+                self._note_overload(source.get("id"), str(exc))
+                raise
             payload = data.get("fetchSourceManga") or {}
-            return [
+            found = [
                 self._parse_manga(item, source=source, language=language)
                 for item in payload.get("mangas") or []
             ]
+            self._touch_ids(item.get("id") for item in payload.get("mangas") or [])
+            self._clear_overload(source.get("id"))
+            return found
 
         outcomes = await asyncio.gather(
             *(search_source(source) for source in sources), return_exceptions=True
@@ -559,12 +601,66 @@ class SuwayomiProvider(Provider):
                     source.get("displayName") or source.get("name") or source["id"]
                 ),
                 "error": str(error),
+                "error_type": type(error).__name__,
+                "source_url": str(source.get("homeUrl") or ""),
             }
             for source, error in errors
         ]
         return results, diagnostics
 
-    async def _detail(self, manga_id: str) -> dict[str, Any]:
+    def _source_paused(self, source: dict[str, Any]) -> bool:
+        key = str(source.get("id") or "")
+        if self._overload_until.get(key, 0.0) > time.monotonic():
+            return True
+        blocked = self.source_blocked
+        if blocked is None:
+            return False
+        try:
+            return bool(
+                blocked(
+                    str(source.get("homeUrl") or ""),
+                    str(source.get("displayName") or source.get("name") or ""),
+                )
+            )
+        except Exception:  # noqa: BLE001 - a cooldown lookup must not hide search
+            logger.debug("Suwayomi source cooldown check failed", exc_info=True)
+            return False
+
+    def _note_overload(self, source_id: object, message: str) -> None:
+        if not http_overload(message):
+            return
+        key = str(source_id)
+        failures = self._overload_failures.get(key, 0) + 1
+        self._overload_failures[key] = failures
+        self._overload_until[key] = time.monotonic() + circuit_delay_seconds(
+            failures, message
+        )
+
+    def _clear_overload(self, source_id: object) -> None:
+        key = str(source_id)
+        self._overload_failures.pop(key, None)
+        self._overload_until.pop(key, None)
+
+    def _touch_ids(self, identifiers: Any) -> None:
+        callback = self.catalogue_touch
+        if callback is None:
+            return
+        numeric: list[int] = []
+        for item in identifiers:
+            try:
+                value = int(item)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                numeric.append(value)
+        if not numeric:
+            return
+        try:
+            callback(numeric)
+        except Exception:  # noqa: BLE001 - a touch must not fail the fetch
+            logger.debug("Suwayomi catalogue touch failed", exc_info=True)
+
+    async def _detail(self, manga_id: str, *, fetch_chapters: bool) -> dict[str, Any]:
         identifier = self._numeric_id(manga_id, "manga")
         data = await self._graphql(
             DETAIL_MUTATION,
@@ -572,17 +668,18 @@ class SuwayomiProvider(Provider):
                 "input": {
                     "id": identifier,
                     "fetchManga": True,
-                    "fetchChapters": True,
+                    "fetchChapters": fetch_chapters,
                 }
             },
         )
         payload = data.get("fetchMangaAndChapters")
         if not isinstance(payload, dict) or not isinstance(payload.get("manga"), dict):
             raise ProviderRequestError(f"Suwayomi manga does not exist: {manga_id}")
+        self._touch_ids([identifier])
         return payload
 
     async def get_manga(self, manga_id: str) -> dict[str, Any]:
-        payload = await self._detail(manga_id)
+        payload = await self._detail(manga_id, fetch_chapters=False)
         manga = payload["manga"]
         source = manga.get("source") or {}
         language = str(source.get("lang") or self.default_language).strip().lower()
@@ -591,7 +688,7 @@ class SuwayomiProvider(Provider):
     async def list_chapters(self, manga_id: str, language: str) -> list[dict[str, Any]]:
         if not self.supports_language(language):
             return []
-        payload = await self._detail(manga_id)
+        payload = await self._detail(manga_id, fetch_chapters=True)
         source_language = (
             str((payload.get("manga", {}).get("source") or {}).get("lang") or language)
             .strip()
@@ -613,7 +710,7 @@ class SuwayomiProvider(Provider):
     async def get_cover(self, manga_id: str, filename: str) -> tuple[bytes, str]:
         if filename != "cover":
             raise ValueError("Invalid Suwayomi cover identifier")
-        payload = await self._detail(manga_id)
+        payload = await self._detail(manga_id, fetch_chapters=False)
         thumbnail = str(payload["manga"].get("thumbnailUrl") or "")
         if not thumbnail:
             raise FileNotFoundError(f"Suwayomi manga has no cover: {manga_id}")
@@ -629,6 +726,21 @@ class SuwayomiProvider(Provider):
         return response.content, content_type
 
     async def download_pages(
+        self,
+        chapter_id: str,
+        target_dir: Path,
+        progress: ProgressCallback,
+        concurrency: int = 4,
+    ) -> list[Path]:
+        # Page bytes are fetched after the GraphQL call returns. Hold the
+        # managed server for the whole chapter so an idle stop cannot kill
+        # the JVM between pages.
+        async with self._engine():
+            return await self._download_pages(
+                chapter_id, target_dir, progress, concurrency
+            )
+
+    async def _download_pages(
         self,
         chapter_id: str,
         target_dir: Path,

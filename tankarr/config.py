@@ -146,6 +146,19 @@ class Settings(BaseSettings):
     # Sources the operator installs are enabled, NSFW or not; the per-source
     # search budget is an internal constant, not a knob.
     suwayomi_search_timeout_seconds: float = Field(default=30.0, ge=2.0, le=120.0)
+    # Managed mode only. Suwayomi stores every search and chapter fetch, and
+    # the pinned server cannot delete them. Tankarr removes rows it does not
+    # track, in small batches, while the server is stopped.
+    suwayomi_catalogue_cleanup_enabled: bool = True
+    suwayomi_catalogue_cleanup_interval_hours: int = Field(default=6, ge=1, le=168)
+    suwayomi_catalogue_max_age_hours: int = Field(default=24, ge=1, le=2160)
+    # Compact the managed database during daily maintenance when it is large
+    # and has grown since the last compaction. A stable file is left alone.
+    suwayomi_catalogue_compact: bool = True
+    # Minutes the managed server may sit with no Tankarr work before it is
+    # stopped. 0 keeps it running for the life of the process. The next
+    # download, search, chapter fetch or monitor pass starts it again.
+    suwayomi_idle_shutdown_minutes: int = Field(default=10, ge=0, le=1440)
     prowlarr_enabled: bool = False
     prowlarr_url: str = "http://prowlarr:9696"
     prowlarr_api_key: str | None = Field(default=None, repr=False)
@@ -207,7 +220,9 @@ class Settings(BaseSettings):
     # Restored control-plane data must be inspected before any background I/O.
     restored_safe_mode: bool = False
     monitor_enabled: bool = True
-    monitor_interval_seconds: float = Field(default=900.0, ge=5.0, le=86400.0)
+    # 30 minutes: long enough that a managed Suwayomi stopped after its idle
+    # timeout is not started again a moment later by the next monitor pass.
+    monitor_interval_seconds: float = Field(default=1800.0, ge=5.0, le=86400.0)
     wanted_search_enabled: bool = True
     wanted_search_interval_seconds: float = Field(
         default=21600.0, ge=900.0, le=604800.0

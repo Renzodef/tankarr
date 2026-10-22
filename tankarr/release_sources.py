@@ -23,7 +23,7 @@ from tankarr.providers.base import (
     ProviderUnavailableError,
 )
 from tankarr.providers.suwayomi import StaleSuwayomiIdentity
-from tankarr.source_circuit import source_gate_key
+from tankarr.source_circuit import http_overload, source_gate_key
 from tankarr.source_ranking import official_hosts, release_host
 
 logger = logging.getLogger(__name__)
@@ -509,7 +509,7 @@ class ReleaseSourceManager:
                     exc, (ProviderRequestError, ProviderUnavailableError, TimeoutError)
                 ):
                     self.database.record_source_circuit(
-                        gate_key, error=type(exc).__name__
+                        gate_key, error=type(exc).__name__, detail=str(exc)
                     )
                 message = f"{type(exc).__name__}: {exc}"[:1000]
                 self.database.record_release_source_result(
@@ -559,7 +559,27 @@ class ReleaseSourceManager:
                     }
                     for item in search_diagnostics
                 )
+                if provider.name == "suwayomi":
+                    for item in search_diagnostics:
+                        detail = str(item.get("error") or "")
+                        if not http_overload(detail):
+                            continue
+                        self.database.record_source_circuit(
+                            source_gate_key(
+                                "suwayomi",
+                                item.get("source_url"),
+                                item.get("provider"),
+                            ),
+                            error=str(item.get("error_type") or "ProviderRequestError"),
+                            detail=detail,
+                        )
             except Exception as exc:  # noqa: BLE001 - aliases can recover
+                if provider.name == "suwayomi" and http_overload(str(exc)):
+                    self.database.record_source_circuit(
+                        source_gate_key("suwayomi", "", provider.name),
+                        error=type(exc).__name__,
+                        detail=str(exc),
+                    )
                 diagnostics.append(
                     {
                         "provider": provider.name,
@@ -628,6 +648,16 @@ class ReleaseSourceManager:
                 try:
                     detail = await provider.get_manga(str(candidate["id"]))
                 except Exception as exc:  # noqa: BLE001 - try another candidate
+                    if provider.name == "suwayomi" and http_overload(str(exc)):
+                        self.database.record_source_circuit(
+                            source_gate_key(
+                                "suwayomi",
+                                candidate.get("source_url"),
+                                candidate.get("source_name"),
+                            ),
+                            error=type(exc).__name__,
+                            detail=str(exc),
+                        )
                     diagnostics.append(
                         {
                             "provider": provider.name,

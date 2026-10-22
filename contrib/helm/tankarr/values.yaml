@@ -23,6 +23,8 @@ env:
   # Hide the local login form once OpenID Connect is enabled and valid.
   # Put TANKARR_OIDC_CLIENT_SECRET in secretEnv. See the configuration reference.
   # TANKARR_OIDC_DISABLE_LOCAL_LOGIN: "true"
+  # Keep the managed Suwayomi server running instead of stopping it when idle:
+  # TANKARR_SUWAYOMI_IDLE_SHUTDOWN_MINUTES: "0"
 
 # Variables that hold secrets: API keys, passwords, tokens. The chart writes
 # them to a Secret of its own and loads it into the container.

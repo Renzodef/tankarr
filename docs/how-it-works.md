@@ -303,8 +303,8 @@ reaches the declared final chapter.
 Two independent schedules drive the automation. Both can be switched off and
 tuned in **Settings → General**:
 
-- **Release monitoring** (`TANKARR_MONITOR_INTERVAL_SECONDS`, default 900, every
-  15 minutes): every series monitored for new chapters (All or Future) has its
+- **Release monitoring** (`TANKARR_MONITOR_INTERVAL_SECONDS`, default 1800, every
+  30 minutes): every series monitored for new chapters (All or Future) has its
   sources refreshed and new chapters queued. Existing and None series only have
   their metadata refreshed, and series imported locally are not polled.
 - **Scheduled Wanted recovery** (`TANKARR_WANTED_SEARCH_INTERVAL_SECONDS`,

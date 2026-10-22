@@ -167,6 +167,7 @@ async def test_organizer_moves_legacy_file_and_updates_chapter_and_job_paths(
     repeated = await service.organize_library()
     assert repeated["moved"] == 0
     assert repeated["unchanged"] == 1
+    assert repeated["skipped"] is True
     assert repeated["normalized_records"] == 0
     assert database.get_chapter(chapter_data["id"])["updated_at"] == chapter_updated_at
     assert database.get_job(job["id"])["updated_at"] == job_updated_at

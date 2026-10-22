@@ -311,7 +311,7 @@ export default function WantedPage() {
         void load(true);
         return;
       }
-      timer = window.setTimeout(() => void poll(), document.hidden ? 30_000 : 5_000);
+      timer = window.setTimeout(() => void poll(), document.hidden ? 60_000 : 15_000);
     };
     timer = window.setTimeout(() => void poll(), 5_000);
     return () => { stopped = true; window.clearTimeout(timer); };

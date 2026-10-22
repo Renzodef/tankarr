@@ -19,6 +19,8 @@ BASE_URL = "https://suwayomi.test"
 
 
 def graphql_response(request: Request) -> Response:
+    if not hasattr(graphql_response, "detail_flags"):
+        graphql_response.detail_flags = []
     payload = json.loads(request.content)
     query = payload["query"]
     variables = payload["variables"]
@@ -78,11 +80,9 @@ def graphql_response(request: Request) -> Response:
             },
         )
     if "TankarrManga" in query:
-        assert variables["input"] == {
-            "id": 7,
-            "fetchManga": True,
-            "fetchChapters": True,
-        }
+        assert variables["input"]["id"] == 7
+        assert variables["input"]["fetchManga"] is True
+        graphql_response.detail_flags.append(bool(variables["input"]["fetchChapters"]))
         return Response(
             200,
             json={
@@ -590,9 +590,9 @@ async def test_search_reports_a_stalled_source_when_another_source_succeeds(
         await client.aclose()
 
     assert [item["title"] for item in results] == ["Available Manga"]
-    assert diagnostics == [
-        {"provider": "Stalled (EN)", "error": "Search exceeded 0.01s"}
-    ]
+    assert [
+        {"provider": item["provider"], "error": item["error"]} for item in diagnostics
+    ] == [{"provider": "Stalled (EN)", "error": "Search exceeded 0.01s"}]
 
 
 @pytest.mark.asyncio
@@ -640,7 +640,9 @@ async def test_queued_source_gets_timeout_budget_after_waiting_for_capacity(
     assert called == ["1", "2", "3", "4", "5"]
     assert peak_active == 4
     assert active == 0
-    assert diagnostics == [
+    assert [
+        {"provider": item["provider"], "error": item["error"]} for item in diagnostics
+    ] == [
         {"provider": f"Source {index} (EN)", "error": "Search exceeded 0.02s"}
         for index in range(1, 5)
     ]
@@ -679,6 +681,7 @@ async def test_detail_chapters_cover_and_pages_use_tankarr_pipeline(tmp_path: Pa
         )
     )
     client = provider()
+    graphql_response.detail_flags = []
     try:
         manga = await client.get_manga("suwayomi-7")
         chapters = await client.list_chapters("suwayomi-7", "en")
@@ -692,6 +695,7 @@ async def test_detail_chapters_cover_and_pages_use_tankarr_pipeline(tmp_path: Pa
     finally:
         await client.aclose()
 
+    assert graphql_response.detail_flags == [False, True, False]
     assert manga["source_name"] == "MangaDex (EN)"
     assert [chapter["chapter"] for chapter in chapters] == ["9.5", "10"]
     assert [chapter["id"] for chapter in chapters] == [

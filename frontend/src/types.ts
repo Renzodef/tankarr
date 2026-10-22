@@ -1498,6 +1498,9 @@ export type SuwayomiRuntimeStatus = {
   jar_size_bytes: number;
   running: boolean;
   ready: boolean;
+  activity?: "running" | "starting" | "idle" | "stopped" | "maintenance" | "crashed" | "absent";
+  idle_shutdown_minutes?: number;
+  in_use?: number;
   pid: number | null;
   uptime_seconds: number | null;
   restarts: number;

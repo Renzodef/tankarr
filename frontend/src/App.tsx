@@ -335,7 +335,7 @@ export default function App({
       if (!stopped) {
         healthTimer = window.setTimeout(
           pollHealth,
-          document.hidden ? 60000 : 15000,
+          document.hidden ? 60000 : 30000,
         );
       }
     };
