@@ -10,7 +10,7 @@ import pytest
 
 from tankarr.config import Settings
 from tankarr.monitor import ReleaseMonitor
-from tankarr.suwayomi_runtime import SuwayomiRuntime
+from tankarr.suwayomi_runtime import SuwayomiDeferred, SuwayomiRuntime
 from tests.test_suwayomi_runtime import fake_installed, python_command
 
 
@@ -71,6 +71,31 @@ async def test_zero_timeout_and_an_operator_stop_stay_distinct(tmp_path):
     assert runtime.running is True
     await runtime.stop(operator=True)
     assert runtime.activity() == "stopped"
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_automatic_work_waits_out_the_minimum_off_time(tmp_path):
+    runtime = _runtime(tmp_path, minutes=10)
+    await runtime.start()
+    await runtime.stop()
+    assert runtime.running is False
+    with pytest.raises(SuwayomiDeferred):
+        async with runtime.retain(automatic=True):
+            pass
+    assert runtime.running is False
+    assert runtime.in_use == 0
+    with pytest.raises(SuwayomiDeferred):
+        async with runtime.retain(start=False):
+            pass
+    assert runtime._process is None
+
+    async with runtime.retain():
+        assert runtime.running is True
+    await runtime.stop()
+    runtime._stopped_at = time.monotonic() - 601
+    async with runtime.retain(automatic=True):
+        assert runtime.running is True
     await runtime.aclose()
 
 

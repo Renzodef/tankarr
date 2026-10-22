@@ -87,14 +87,21 @@ fetch or monitor pass is using it, and starts it again when one of those needs
 it. A monitor cycle holds it only for the series that are due and read through
 Suwayomi, and only for `TANKARR_MONITOR_CYCLE_BUDGET_SECONDS` (default eight
 minutes), so it starts once per cycle rather than once per series and is free
-again before the next cycle. After that batch, catalogue cleanup runs and, when
-it is due, compaction runs; both happen while the server is stopped and, with
-idle shutdown on, leave it stopped. Cleanup signs in as the database user
-Suwayomi created (a blank user, or `sa` when that is the one that opens the
-file). A database of several hundred megabytes gets a larger cleanup heap and
-a longer pass, chapter scan and compact, so the first pass can finish after
-the file has grown. A cleanup or compaction that fails is listed under
-**Needs attention** on the System page and on the monitor status. Suwayomi's
+again before the next cycle. After a stop, automatic work waits out that same
+interval before it may start the server again. Metadata refresh does not start
+it to fetch a cover: those covers are fetched during the monitor cycle, while
+the server is already up. A download, a search, or an action you start from
+the interface still starts it immediately. After that batch, catalogue cleanup
+runs and, when it is due, compaction runs; both happen while the server is
+stopped and, with idle shutdown on, leave it stopped. Cleanup signs in as the
+database user Suwayomi created (a blank user, or `sa` when that is the one that
+opens the file) and deletes rows from the pinned server's tables by name
+(`MANGA`, `CHAPTER`, `CATEGORYMANGA`, and the page, metadata and tracking rows
+that point at a manga), children first. A database of several hundred
+megabytes gets a larger cleanup heap and a longer pass, chapter scan and
+compact, so the first pass can finish after the file has grown. A cleanup or
+compaction that fails is listed under **Needs attention** on the System page
+and on the monitor status. Suwayomi's
 own web interface is not one of those uses: it is stopped with the server
 after the timeout, so leave the timeout at `0` if you keep that interface
 open. The same cleanup and the optional daily compaction
