@@ -69,23 +69,44 @@ def _secure_url(value: str) -> bool:
         return False
 
 
+def _reject_oidc(settings: Settings, message: str) -> None:
+    """Startup errors stay specific, and name the lockout guard when it applies."""
+
+    if settings.oidc_disable_local_login:
+        message = (
+            "TANKARR_OIDC_DISABLE_LOCAL_LOGIN requires a valid OpenID Connect "
+            f"configuration: {message}"
+        )
+    raise ValueError(message)
+
+
 def validate_oidc_settings(settings: Settings) -> None:
+    if settings.oidc_disable_local_login and not settings.oidc_enabled:
+        raise ValueError(
+            "TANKARR_OIDC_DISABLE_LOCAL_LOGIN requires TANKARR_OIDC_ENABLED "
+            "and a valid OpenID Connect configuration. Tankarr refused to "
+            "start so this setting cannot lock out the login page."
+        )
     if not settings.oidc_enabled:
         return
     if settings.auth_method != "forms" or not settings.auth_required:
-        raise ValueError(
-            "OpenID Connect requires forms authentication and a required login"
+        _reject_oidc(
+            settings,
+            "OpenID Connect requires forms authentication and a required login",
         )
     if (
         not _secure_url(settings.oidc_issuer_url)
         or urlsplit(settings.oidc_issuer_url).query
     ):
-        raise ValueError(
-            "TANKARR_OIDC_ISSUER_URL must be an HTTPS issuer without credentials or query"
+        _reject_oidc(
+            settings,
+            "TANKARR_OIDC_ISSUER_URL must be an HTTPS issuer without "
+            "credentials or query",
         )
     if not settings.oidc_client_id or not settings.oidc_client_secret:
-        raise ValueError(
-            "TANKARR_OIDC_CLIENT_ID and TANKARR_OIDC_CLIENT_SECRET are required"
+        _reject_oidc(
+            settings,
+            "TANKARR_OIDC_CLIENT_ID and TANKARR_OIDC_CLIENT_SECRET are required",
         )
     callback = urlsplit(settings.oidc_redirect_uri)
     if (
@@ -93,17 +114,25 @@ def validate_oidc_settings(settings: Settings) -> None:
         or callback.query
         or callback.path != f"{settings.url_base}/api/auth/oidc/callback"
     ):
-        raise ValueError(
-            "TANKARR_OIDC_REDIRECT_URI must be the HTTPS Tankarr callback URL"
+        _reject_oidc(
+            settings,
+            "TANKARR_OIDC_REDIRECT_URI must be the HTTPS Tankarr callback URL",
         )
     if "openid" not in settings.oidc_scopes.split():
-        raise ValueError("TANKARR_OIDC_SCOPES must include openid")
+        _reject_oidc(settings, "TANKARR_OIDC_SCOPES must include openid")
     if not _csv(settings.oidc_allowed_subjects) and not _csv(
         settings.oidc_allowed_groups
     ):
-        raise ValueError(
-            "Set TANKARR_OIDC_ALLOWED_SUBJECTS or TANKARR_OIDC_ALLOWED_GROUPS"
+        _reject_oidc(
+            settings,
+            "Set TANKARR_OIDC_ALLOWED_SUBJECTS or TANKARR_OIDC_ALLOWED_GROUPS",
         )
+
+
+def _with_local_login(settings: Settings, message: str) -> str:
+    if settings.oidc_disable_local_login:
+        return message
+    return f"{message}; use local login"
 
 
 def _csv(value: str) -> set[str]:
@@ -184,7 +213,8 @@ def register_oidc_routes(
                 "OpenID Connect provider unavailable (%s)", type(exc).__name__
             )
             raise HTTPException(
-                502, "OpenID Connect provider unavailable; use local login"
+                502,
+                _with_local_login(settings, "OpenID Connect provider unavailable"),
             ) from None
 
     @app.get("/api/auth/oidc/callback")
@@ -214,7 +244,8 @@ def register_oidc_routes(
             authentication.throttle.failed(address)
             logger.warning("OpenID Connect sign-in rejected (%s)", type(exc).__name__)
             raise HTTPException(
-                401, "OpenID Connect sign-in failed; use local login"
+                401,
+                _with_local_login(settings, "OpenID Connect sign-in failed"),
             ) from None
         request.session.clear()
         authentication.throttle.succeeded(address)

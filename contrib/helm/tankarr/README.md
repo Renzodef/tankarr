@@ -65,3 +65,7 @@ The full list with comments is in [`values.yaml`](values.yaml).
   [File permissions](https://renzodef.github.io/tankarr/installation/#file-permissions).
 - Backups live in `/config/backups` unless `TANKARR_BACKUP_DIRECTORY` points
   elsewhere; see [Upgrading](https://renzodef.github.io/tankarr/upgrading/).
+- OpenID Connect, including `TANKARR_OIDC_DISABLE_LOCAL_LOGIN`, is set through
+  `env` (and `secretEnv` for `TANKARR_OIDC_CLIENT_SECRET`). The chart has no
+  separate value for authentication; see the
+  [configuration reference](https://renzodef.github.io/tankarr/configuration/).

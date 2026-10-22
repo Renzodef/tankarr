@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { api } from "../api";
 import { Logo } from "../components";
 import type { AuthStatus } from "../types";
@@ -6,22 +6,18 @@ import { t } from "../i18n";
 
 export default function LoginPage({
   onAuthenticated,
+  oidcLoginUrl = null,
+  localLoginEnabled = true,
 }: {
   onAuthenticated: (status: AuthStatus) => void;
+  oidcLoginUrl?: string | null;
+  localLoginEnabled?: boolean;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [oidcLoginUrl, setOidcLoginUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    void api.authStatus().then((status) => {
-      if (active) setOidcLoginUrl(status.oidc_login_url ?? null);
-    }).catch(() => {});
-    return () => { active = false; };
-  }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -46,50 +42,52 @@ export default function LoginPage({
           <h1 id="login-title">tankarr</h1>
         </div>
         {oidcLoginUrl ? <a className="btn btn-primary login-submit" href={oidcLoginUrl}>{t("Sign in with OpenID Connect")}</a> : null}
-        <form onSubmit={(event) => void submit(event)}>
-          <div className="form-row">
-            <label htmlFor="login-username">{t("Username")}</label>
-            <input
-              id="login-username"
-              className="input"
-              type="text"
-              value={username}
-              autoComplete="username"
-              autoCapitalize="none"
-              autoFocus
-              required
-              onChange={(event) => setUsername(event.target.value)}
-            />
-          </div>
-          <div className="form-row">
-            <label htmlFor="login-password">{t("Password")}</label>
-            <input
-              id="login-password"
-              className="input"
-              type="password"
-              value={password}
-              autoComplete="current-password"
-              required
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </div>
-          <label className="login-remember">
-            <input
-              type="checkbox"
-              checked={rememberMe}
-              onChange={(event) => setRememberMe(event.target.checked)}
-            />
-            <span>{t("Remember me")}</span>
-          </label>
-          {error ? (
-            <div className="login-error" role="alert">
-              {error}
+        {localLoginEnabled ? (
+          <form onSubmit={(event) => void submit(event)}>
+            <div className="form-row">
+              <label htmlFor="login-username">{t("Username")}</label>
+              <input
+                id="login-username"
+                className="input"
+                type="text"
+                value={username}
+                autoComplete="username"
+                autoCapitalize="none"
+                autoFocus
+                required
+                onChange={(event) => setUsername(event.target.value)}
+              />
             </div>
-          ) : null}
-          <button className="btn btn-primary login-submit" type="submit" disabled={submitting}>
-            {submitting ? t("Signing in…") : t("Log In")}
-          </button>
-        </form>
+            <div className="form-row">
+              <label htmlFor="login-password">{t("Password")}</label>
+              <input
+                id="login-password"
+                className="input"
+                type="password"
+                value={password}
+                autoComplete="current-password"
+                required
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </div>
+            <label className="login-remember">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+              />
+              <span>{t("Remember me")}</span>
+            </label>
+            {error ? (
+              <div className="login-error" role="alert">
+                {error}
+              </div>
+            ) : null}
+            <button className="btn btn-primary login-submit" type="submit" disabled={submitting}>
+              {submitting ? t("Signing in…") : t("Log In")}
+            </button>
+          </form>
+        ) : null}
       </section>
     </main>
   );

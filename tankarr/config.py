@@ -236,6 +236,9 @@ class Settings(BaseSettings):
     oidc_scopes: str = "openid profile email"
     oidc_allowed_subjects: str = ""
     oidc_allowed_groups: str = ""
+    # Reject the username/password form. Startup fails unless OpenID Connect
+    # is enabled and valid, so the option cannot lock the browser out.
+    oidc_disable_local_login: bool = False
     # Ask GitHub once a day whether a newer release exists (System page).
     update_check_enabled: bool = True
     ntfy_url: str | None = None
@@ -581,7 +584,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_openid_connect(self) -> Settings:
-        if self.oidc_enabled:
+        if self.oidc_enabled or self.oidc_disable_local_login:
             from tankarr.oidc import validate_oidc_settings
 
             validate_oidc_settings(self)

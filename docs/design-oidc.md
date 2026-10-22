@@ -25,7 +25,11 @@ provider error messages, tokens, codes and secrets are never logged.
 Callback queries are removed from application access logs even at debug.
 The cross-origin request check and security headers apply unchanged.
 
-Local login and API-key authentication remain available. Logout revokes the
+The API key and HTTP Basic authentication remain available for other
+applications. The login form stays available unless
+`TANKARR_OIDC_DISABLE_LOCAL_LOGIN` is set. That option hides the form,
+rejects local form sign-in, and refuses to start unless OpenID Connect is
+enabled and valid, so it cannot lock the browser out. Logout revokes the
 local session without logging out the provider; an explicit new OIDC login
 may therefore succeed without a second password prompt. Provider-side logout,
 refresh tokens, user roles and bearer-token API authorization are outside

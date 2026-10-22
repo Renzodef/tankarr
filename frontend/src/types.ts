@@ -57,6 +57,8 @@ export type AuthStatus = {
   authenticated: boolean;
   username: string | null;
   oidc_login_url?: string;
+  /** Absent or true keeps the username/password form. False is OIDC-only mode. */
+  local_login_enabled?: boolean;
 };
 
 export type CountConfidence = "agreed" | "lone" | "conflict" | "unconfirmed";

@@ -58,7 +58,13 @@ export default function AuthGate() {
   }
 
   if (status.configured && status.method === "forms" && !status.authenticated) {
-    return <LoginPage onAuthenticated={setStatus} />;
+    return (
+      <LoginPage
+        onAuthenticated={setStatus}
+        oidcLoginUrl={status.oidc_login_url ?? null}
+        localLoginEnabled={status.local_login_enabled !== false}
+      />
+    );
   }
 
   if (status.configured && status.method === "external" && !status.authenticated) {

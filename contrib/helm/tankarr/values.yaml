@@ -20,6 +20,9 @@ env:
   TANKARR_LOG_LEVEL: info
   # Serve Tankarr under a sub-path (match the Ingress path below):
   # TANKARR_URL_BASE: /tankarr
+  # Hide the local login form once OpenID Connect is enabled and valid.
+  # Put TANKARR_OIDC_CLIENT_SECRET in secretEnv. See the configuration reference.
+  # TANKARR_OIDC_DISABLE_LOCAL_LOGIN: "true"
 
 # Variables that hold secrets: API keys, passwords, tokens. The chart writes
 # them to a Secret of its own and loads it into the container.
