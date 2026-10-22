@@ -81,6 +81,16 @@ installed, 512 is a safer value; raise it if the log shows
 `OutOfMemoryError`. For the memory of the whole container, see
 [Requirements](installation.md#requirements).
 
+The managed server is idle most of the time. `TANKARR_SUWAYOMI_IDLE_SHUTDOWN_MINUTES`
+(default 10; `0` leaves it running) stops it when no download, search, chapter
+fetch or monitor pass is using it, and starts it again when one of those needs
+it. The release monitor holds it for the whole cycle, so it starts once per
+cycle rather than once per series. Suwayomi's own web interface is not one of
+those uses: it is stopped with the server after the timeout, so leave the
+timeout at `0` if you keep that interface open. Catalogue cleanup and the
+optional daily compaction (`TANKARR_SUWAYOMI_CATALOGUE_COMPACT`) run while the
+server is stopped and, with idle shutdown on, leave it stopped.
+
 #### Network access and login
 
 - With a Tankarr login, which is the normal case, the managed server listens

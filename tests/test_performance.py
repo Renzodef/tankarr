@@ -464,18 +464,19 @@ def test_status_reuses_the_orphan_summary_and_the_series_rows(
             alert["key"]
             for alert in first["alerts"]
             if alert["key"] == "library_orphans"
-        ]
+        ] == []
         assert second["alerts"] == first["alerts"]
-        assert scans["count"] == 1, "the alert must reuse the cached orphan summary"
+        assert scans["count"] == 0, "status must not walk the library"
         assert listings["count"] == 1, (
             "the rows must be reused while the library revision is unchanged"
         )
 
         # An explicit scan from the System page is always fresh and refreshes the summary.
         assert client.get("/api/library/orphans").json()["count"] == 1
-        assert scans["count"] == 2
-        client.get("/api/system/status")
-        assert scans["count"] == 2
+        assert scans["count"] == 1
+        third = client.get("/api/system/status").json()
+        assert any(alert["key"] == "library_orphans" for alert in third["alerts"])
+        assert scans["count"] == 1
 
         # A library change invalidates the rows; the orphan summary follows the
         # next organization or deletion, not the row revision.

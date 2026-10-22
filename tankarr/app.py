@@ -12,7 +12,7 @@ import zipfile
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -85,6 +85,7 @@ from tankarr.logs import (
     tail_log,
 )
 from tankarr.maintenance import MaintenanceWorker
+from tankarr.memory import release_native_heap
 from tankarr.metadata import build_metadata_sources
 from tankarr.metadata.service import MAX_ARTWORK_BYTES, MetadataService
 from tankarr.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
@@ -120,7 +121,7 @@ from tankarr.oidc import register_oidc_routes
 from tankarr.operations import register_operations_routes
 from tankarr.operator_map import register_chapter_map_routes
 from tankarr.providers import build_providers, replace_configurable_providers
-from tankarr.providers.suwayomi import suwayomi_id_is_current
+from tankarr.providers.suwayomi import SuwayomiProvider, suwayomi_id_is_current
 from tankarr.prowlarr import ProwlarrClient
 from tankarr.qbittorrent import QBitTorrentClient, QBitTorrentError
 from tankarr.read_model_cache import (
@@ -158,12 +159,24 @@ from tankarr.settings_store import (
     update_settings,
 )
 from tankarr.source_alerts import source_outages
+from tankarr.source_circuit import source_gate_key
 from tankarr.source_numbering import is_not_yet_released
 from tankarr.source_ranking import is_official_release, official_hosts
 from tankarr.stump import StumpLibraryClient
 from tankarr.suwayomi_bootstrap import (
     FLARESOLVERR_EXTENSIONS,
     WEBVIEW_EXTENSIONS,
+)
+from tankarr.suwayomi_catalogue import (
+    COMPACT_SETTING,
+    apply_catalogue_pass,
+    compact_due,
+    execute_h2,
+    jdbc_base,
+    run_while_stopped,
+)
+from tankarr.suwayomi_catalogue import (
+    database_file as suwayomi_database_file,
 )
 from tankarr.suwayomi_runtime import (
     CHALLENGE_PATTERN,
@@ -355,8 +368,12 @@ def _tell_both_counts(
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     settings.ensure_directories()
+    # Two workers for the default executor. A larger pool keeps a glibc
+    # arena per thread after the first library render, which is idle RAM on
+    # a small host. The API pool stays separate so status is not queued
+    # behind that render.
     blocking_executor = ThreadPoolExecutor(
-        max_workers=4, thread_name_prefix="tankarr-blocking"
+        max_workers=2, thread_name_prefix="tankarr-blocking"
     )
     api_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tankarr-api")
     revision_executor = ThreadPoolExecutor(
@@ -428,6 +445,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     retire_stale_suwayomi_identities()
     providers = build_providers(settings)
+
+    def suwayomi_source_blocked(url: str, name: str) -> bool:
+        return (
+            database.source_retry_at(source_gate_key("suwayomi", url, name))
+            > datetime.now(UTC).timestamp()
+        )
+
+    def bind_suwayomi_hooks() -> None:
+        current = providers.get("suwayomi")
+        if isinstance(current, SuwayomiProvider):
+            current.catalogue_touch = database.touch_suwayomi_manga
+            current.source_blocked = suwayomi_source_blocked
+            # Assigned once the runtime exists. The first call during startup
+            # is before that, and external mode never starts a local JVM.
+            current.ensure_runtime = (
+                suwayomi_runtime.retain if settings.suwayomi_managed else None
+            )
+        if settings.suwayomi_managed:
+            monitor.suwayomi_session = suwayomi_runtime.retain
+
     retired_providers = []
     provider_reload_lock = asyncio.Lock()
     provider = providers.get("suwayomi") or providers["local"]
@@ -598,6 +635,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         extension_store=settings.suwayomi_extension_store or None,
         java_executable=default_java_executable(),
     )
+    suwayomi_runtime.configure_idle(settings.suwayomi_idle_shutdown_minutes)
+    suwayomi_runtime.needed_within = monitor.seconds_until_suwayomi
+    bind_suwayomi_hooks()
 
     suwayomi_maintenance: dict[str, Any] = {"last_run_at": None, "result": None}
 
@@ -629,13 +669,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 result["server"]["held"] = "automatic server updates are off"
             elif check.get("update_available"):
                 result["server"]["deferred"] = "downloads in progress"
-            if suwayomi_runtime.running and (
-                force or await suwayomi_runtime.wait_ready(timeout=5)
-            ):
-                result[
-                    "extensions_updated"
-                ] = await suwayomi_runtime.update_installed_extensions()
-                result["catalogue_installed"] = await install_language_catalogue()
+            async with suwayomi_runtime.retain():
+                if force or await suwayomi_runtime.wait_ready(timeout=30):
+                    result[
+                        "extensions_updated"
+                    ] = await suwayomi_runtime.update_installed_extensions()
+                    result["catalogue_installed"] = await install_language_catalogue()
             result["challenged_sources"] = challenged_sources()
         except Exception as exc:  # noqa: BLE001 - maintenance is best effort
             result["error"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -643,7 +682,148 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             timespec="seconds"
         )
         suwayomi_maintenance["result"] = result
+        if not result.get("error"):
+            result["catalogue_compact"] = await compact_managed_suwayomi_catalogue()
         return result
+
+    def suwayomi_work_busy() -> str | None:
+        """Why the managed server must stay up, or None when it is idle."""
+
+        if any(
+            job["status"] in {"running", "downloading", "packaging", "importing"}
+            for job in database.list_jobs(
+                statuses=("running", "downloading", "packaging", "importing"),
+                limit=1,
+            )
+        ):
+            return "downloads"
+        if getattr(monitor, "cycle_active", False):
+            return "monitor"
+        if suwayomi_runtime.in_use:
+            return "in use"
+        wanted = monitor.status().get("wanted_search") or {}
+        if wanted.get("running"):
+            return "wanted"
+        return None
+
+    async def compact_managed_suwayomi_catalogue() -> dict[str, Any]:
+        """SHUTDOWN COMPACT when the file is large and has grown since last time."""
+
+        if not settings.suwayomi_catalogue_compact or not settings.suwayomi_managed:
+            return {"skipped": "disabled"}
+        path = suwayomi_runtime.database_path
+        if not path.is_file():
+            return {"skipped": "no database"}
+        size = path.stat().st_size
+        stored = database.get_setting(COMPACT_SETTING)
+        previous = int(stored) if stored and stored.isdigit() else None
+        if not compact_due(size, previous):
+            return {"skipped": "not due", "bytes": size}
+        busy = suwayomi_work_busy()
+        if busy:
+            return {"deferred": busy, "bytes": size}
+        installed = suwayomi_runtime.installed()
+        if not installed:
+            return {"skipped": "not installed"}
+
+        def compact() -> dict[str, Any]:
+            execute_h2(
+                suwayomi_runtime.java_executable,
+                installed["path"],
+                jdbc_base(path),
+                ["SHUTDOWN COMPACT;"],
+                600,
+            )
+            new_size = path.stat().st_size if path.is_file() else 0
+            database.save_setting(COMPACT_SETTING, str(new_size))
+            return {"compacted": True, "bytes": new_size, "before_bytes": size}
+
+        try:
+            return await run_while_stopped(
+                suwayomi_runtime,
+                lambda: asyncio.to_thread(compact),
+                restart=_restart_after_catalogue_maintenance(),
+            )
+        except Exception as exc:  # noqa: BLE001 - the server is restarted either way
+            logger.warning("Suwayomi catalogue compact failed: %s", exc)
+            return {"error": f"{type(exc).__name__}: {exc}"[:300], "bytes": size}
+
+    async def maintain_suwayomi_catalogue() -> dict[str, Any]:
+        """Delete Suwayomi rows Tankarr does not need, in small offline batches."""
+
+        if not settings.suwayomi_catalogue_cleanup_enabled:
+            result: dict[str, Any] = {"skipped": "disabled"}
+        elif not settings.suwayomi_managed:
+            result = {"skipped": "external"}
+        elif not suwayomi_runtime.installed():
+            result = {"skipped": "not installed"}
+        else:
+            path = suwayomi_database_file(suwayomi_runtime.home)
+            if not path.is_file():
+                result = {"skipped": "no database"}
+            else:
+                busy = suwayomi_work_busy()
+                if busy:
+                    result = {"deferred": busy}
+                else:
+                    installed = suwayomi_runtime.installed()
+                    assert installed is not None
+
+                    def cleanup_sync() -> dict[str, Any]:
+                        protected = database.suwayomi_catalogue_keep_ids(
+                            instance_token=settings.suwayomi_instance_token,
+                            max_age_hours=settings.suwayomi_catalogue_max_age_hours,
+                        )
+
+                        def execute(statements, timeout):
+                            return execute_h2(
+                                suwayomi_runtime.java_executable,
+                                installed["path"],
+                                jdbc_base(path),
+                                statements,
+                                timeout,
+                            )
+
+                        outcome = apply_catalogue_pass(
+                            database_file=path,
+                            protected_ids=protected,
+                            max_age_hours=settings.suwayomi_catalogue_max_age_hours,
+                            execute=execute,
+                        )
+                        if outcome.get("compacted") and path.is_file():
+                            database.save_setting(
+                                COMPACT_SETTING, str(path.stat().st_size)
+                            )
+                        return outcome
+
+                    try:
+                        result = await run_while_stopped(
+                            suwayomi_runtime,
+                            lambda: asyncio.to_thread(cleanup_sync),
+                            restart=_restart_after_catalogue_maintenance(),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - leave the server running
+                        logger.warning("Suwayomi catalogue cleanup failed: %s", exc)
+                        result = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+        suwayomi_maintenance["catalogue"] = {
+            "at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "result": result,
+        }
+        return result
+
+    def _restart_after_catalogue_maintenance() -> bool | None:
+        """Leave Suwayomi stopped when idle shutdown is on and nobody is waiting.
+
+        ``None`` restores the previous rule: start again only if it was running.
+        A retain that arrived during the SQL still starts the server; that
+        check lives in ``run_while_stopped``.
+        """
+
+        if settings.suwayomi_idle_shutdown_minutes <= 0:
+            return None
+        if suwayomi_runtime.in_use:
+            return True
+        return False
 
     def challenged_sources() -> list[str]:
         """Sources that answered with an anti-bot challenge.
@@ -666,9 +846,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await asyncio.sleep(600)  # let startup settle
         await refresh_installed_sources(force=True)
         await install_language_catalogue()
+        next_server = 0.0
+        next_catalogue = 0.0
         while True:
-            await maintain_managed_suwayomi()
-            await asyncio.sleep(24 * 3600)
+            now = monotonic()
+            wait = min(next_server, next_catalogue) - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+                continue
+            now = monotonic()
+            if now >= next_server:
+                await maintain_managed_suwayomi()
+                next_server = monotonic() + 24 * 3600
+            if now >= next_catalogue:
+                outcome = await maintain_suwayomi_catalogue()
+                pause = (
+                    15 * 60
+                    if outcome.get("deferred")
+                    else settings.suwayomi_catalogue_cleanup_interval_hours * 3600
+                )
+                next_catalogue = monotonic() + pause
 
     async def start_managed_suwayomi() -> None:
         try:
@@ -780,8 +977,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and now - installed_sources_cache["at"] < 3600
         ):
             return installed_sources_cache["sources"]
-        if not (settings.suwayomi_managed and suwayomi_runtime.running):
+        if not settings.suwayomi_managed:
             return installed_sources_cache["sources"]
+        try:
+            async with suwayomi_runtime.retain():
+                await _refresh_installed_sources_now(now)
+        except Exception:  # noqa: BLE001 - keep the previous snapshot
+            pass
+        return installed_sources_cache["sources"]
+
+    async def _refresh_installed_sources_now(now: float) -> None:
         try:
             previous = {
                 f"suwayomi:{source['id']}".casefold()
@@ -818,17 +1023,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except Exception:  # noqa: BLE001 - keep the previous snapshot
             pass
-        return installed_sources_cache["sources"]
 
     async def ensure_official_extensions(manga_id: str) -> list[str]:
         """Install the free official platforms' extensions for a work."""
 
-        if not (
-            settings.suwayomi_managed
-            and settings.suwayomi_auto_install_official
-            and suwayomi_runtime.running
-        ):
+        if not (settings.suwayomi_managed and settings.suwayomi_auto_install_official):
             return []
+        try:
+            async with suwayomi_runtime.retain():
+                return await _ensure_official_extensions(manga_id)
+        except SuwayomiRuntimeError:
+            return []
+
+    async def _ensure_official_extensions(manga_id: str) -> list[str]:
         manga = database.get_manga(manga_id)
         metadata_row = database.get_series_metadata(manga_id)
         sources = await refresh_installed_sources()
@@ -860,7 +1067,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rank them last.
         """
 
-        if not (settings.suwayomi_managed and suwayomi_runtime.running):
+        if not settings.suwayomi_managed:
             return []
         if settings.suwayomi_source_id_set:
             # The operator picked the sources by hand (or a measured run did).
@@ -870,9 +1077,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return []
         excluded = set(WEBVIEW_EXTENSIONS) | set(FLARESOLVERR_EXTENSIONS)
         try:
-            installed = await suwayomi_runtime.install_catalogue(
-                settings.search_language_codes, exclude=excluded
-            )
+            async with suwayomi_runtime.retain():
+                installed = await suwayomi_runtime.install_catalogue(
+                    settings.search_language_codes, exclude=excluded
+                )
         except Exception as exc:  # noqa: BLE001 - retried on the next pass
             logger.info("Suwayomi catalogue install failed: %s", exc)
             return []
@@ -1036,16 +1244,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 or library_cards[manga_id]["revision"] != revision
                 or library_cards[manga_id]["expires_at"] <= now
             ]
-            inputs = changed_inputs(database, changed)
-            for manga_id, entry in inputs.items():
-                card = decorate_library_manga(entry["manga"], entry)
-                library_cards[manga_id] = {
-                    "revision": revisions[manga_id],
-                    "expires_at": next_publication(entry["releases"], since=now),
-                    "payload": fastjson.dumps(card),
-                }
+            # One batch of series at a time. A cold library used to decode
+            # every chapter of every series before the first card was freed.
+            for start in range(0, len(changed), 24):
+                inputs = changed_inputs(database, changed[start : start + 24])
+                for manga_id, entry in inputs.items():
+                    card = decorate_library_manga(entry["manga"], entry)
+                    library_cards[manga_id] = {
+                        "revision": revisions[manga_id],
+                        "expires_at": next_publication(entry["releases"], since=now),
+                        "payload": fastjson.dumps(card),
+                    }
+                inputs.clear()
             for manga_id in library_cards.keys() - revisions.keys():
                 del library_cards[manga_id]
+            # Cards are already encoded. Joining them is the response body;
+            # the per-card bytes stay so the next revision can change one series.
             payload = (
                 b"["
                 + b",".join(
@@ -1068,12 +1282,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 and library_cache["payload"] is not None
             ):
                 return library_cache["payload"]
-            payload = await run_api_blocking(render_library_payload)
+            # Drop the previous snapshot before the new one is built so both
+            # multi-megabyte copies are not live together.
+            previous_payload = library_cache.get("payload")
+            library_cache["payload"] = None
+            try:
+                payload = await run_api_blocking(render_library_payload)
+            except Exception:
+                library_cache["payload"] = previous_payload
+                raise
+            previous_payload = None
             # Publish a complete snapshot even if the queue changed while it
             # was rendered. Keeping the starting revision guarantees that the
             # next request notices that race and schedules another refresh.
             library_cache["revision"] = revision
             library_cache["payload"] = payload
+            release_native_heap()
             return payload
 
     def schedule_library_refresh() -> None:
@@ -1649,7 +1873,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logger.warning(
                     "Periodic MangaBaka author refresh failed", exc_info=True
                 )
-            await asyncio.sleep(30)
+            await asyncio.sleep(120)
 
     async def initialization_loop() -> None:
         """Recover and organize in the background until mutation safety is proven.
@@ -1802,7 +2026,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     ),
                 ]
             )
-            if settings.suwayomi_managed and suwayomi_runtime.installed():
+            if (
+                settings.suwayomi_managed
+                and settings.suwayomi_idle_shutdown_minutes > 0
+            ):
+                # Stay down until a download, search, or monitor pass needs it.
+                lifecycle_tasks.append(
+                    asyncio.create_task(
+                        suwayomi_runtime.idle_loop(), name="tankarr-suwayomi-idle"
+                    )
+                )
+            elif settings.suwayomi_managed and suwayomi_runtime.installed():
                 lifecycle_tasks.append(
                     asyncio.create_task(
                         start_managed_suwayomi(), name="tankarr-suwayomi-start"
@@ -3946,7 +4180,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             manga_list, database.list_all_release_sources(), providers
         )
         if outages:
-            wanted_ids = {str(entry["manga"]["id"]) for entry in service.list_wanted()}
+            revision = database.wanted_revision()
+            if wanted_alert_cache.get("revision") != revision:
+                wanted_alert_cache["ids"] = {
+                    str(entry["manga"]["id"]) for entry in service.list_wanted()
+                }
+                wanted_alert_cache["revision"] = revision
+            wanted_ids = wanted_alert_cache["ids"]
             outages = [item for item in outages if str(item["id"]) in wanted_ids]
         if outages:
             alerts.append(
@@ -3963,7 +4203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Files on disk that no Tankarr release claims: the library and the
         # reader must always show the same thing.
         try:
-            orphans = service.library_orphans_summary()
+            orphans = service.library_orphans_summary(refresh=False)
         except Exception:  # noqa: BLE001 - a scan failure is not an alert
             orphans = {"count": 0, "folders": []}
         if orphans.get("count"):
@@ -4021,10 +4261,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
             except OSError:
                 pass
+        suwayomi_activity = (
+            suwayomi_runtime.activity() if settings.suwayomi_managed else ""
+        )
         if (
             settings.suwayomi_managed
             and suwayomi_runtime.installed()
-            and not suwayomi_runtime.running
+            and (
+                suwayomi_activity == "crashed"
+                or (
+                    suwayomi_activity == "stopped"
+                    and settings.suwayomi_idle_shutdown_minutes <= 0
+                )
+            )
         ):
             alerts.append(
                 {
@@ -4102,6 +4351,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
 
     status_rows_cache: dict[str, Any] = {"revision": None, "rows": []}
+    wanted_alert_cache: dict[str, Any] = {"revision": None, "ids": frozenset()}
 
     @app.get("/api/system/status")
     async def system_status():
@@ -4372,11 +4622,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not settings.suwayomi_managed:
                 if suwayomi_runtime.running:
                     await suwayomi_runtime.stop()
-            elif suwayomi_runtime.installed() and (
-                changed or not suwayomi_runtime.running
+            elif suwayomi_runtime.installed() and changed and suwayomi_runtime.running:
+                await suwayomi_runtime.stop()
+                asyncio.create_task(
+                    start_managed_suwayomi(), name="tankarr-suwayomi-restart"
+                )
+            elif (
+                suwayomi_runtime.installed()
+                and settings.suwayomi_idle_shutdown_minutes <= 0
+                and not suwayomi_runtime.running
             ):
-                if suwayomi_runtime.running:
-                    await suwayomi_runtime.stop()
                 asyncio.create_task(
                     start_managed_suwayomi(), name="tankarr-suwayomi-restart"
                 )
@@ -4394,6 +4649,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if provider_fields.intersection(applied):
             async with provider_reload_lock:
                 retired, discarded = replace_configurable_providers(providers, settings)
+                bind_suwayomi_hooks()
                 if {"suwayomi_mode", "suwayomi_url"} & set(applied):
                     retire_stale_suwayomi_identities()
                 # Retired adapters may still belong to an in-flight chapter
@@ -4602,6 +4858,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ),
             )
 
+    def _managed_suwayomi_session():
+        """Start the managed server for one request. Status does not use this."""
+
+        if not settings.suwayomi_managed:
+            return nullcontext()
+
+        @asynccontextmanager
+        async def _session():
+            try:
+                async with suwayomi_runtime.retain():
+                    yield
+            except SuwayomiRuntimeBusy as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except SuwayomiRuntimeError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        return _session()
+
     async def _adopt_managed_suwayomi() -> None:
         """After a successful install, Tankarr becomes the Suwayomi owner."""
 
@@ -4615,6 +4889,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         update_settings(settings, database, changes)
         async with provider_reload_lock:
             retired, discarded = replace_configurable_providers(providers, settings)
+            bind_suwayomi_hooks()
             retired_providers.extend(retired)
             for item in discarded:
                 await item.aclose()
@@ -4660,7 +4935,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/system/suwayomi/stop")
     async def suwayomi_stop():
         _require_managed_suwayomi()
-        await suwayomi_runtime.stop()
+        await suwayomi_runtime.stop(operator=True)
         return _suwayomi_runtime_status()
 
     @app.get("/api/system/suwayomi/extensions")
@@ -4669,8 +4944,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         refresh: bool = Query(default=False),
     ):
         _require_managed_suwayomi()
-        if not suwayomi_runtime.running:
-            raise HTTPException(status_code=409, detail="Suwayomi is not running")
         if language == "*":
             languages: tuple[str, ...] | None = None
         elif language:
@@ -4678,9 +4951,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             languages = settings.search_language_codes
         try:
-            extensions = await suwayomi_runtime.list_extensions(
-                languages=languages, refresh=refresh
-            )
+            async with _managed_suwayomi_session():
+                extensions = await suwayomi_runtime.list_extensions(
+                    languages=languages, refresh=refresh
+                )
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001 - surface the engine's error
             raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
         return {"extensions": extensions, "count": len(extensions)}
@@ -4688,12 +4964,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/system/suwayomi/languages")
     async def suwayomi_languages():
         _require_managed_suwayomi()
-        if not suwayomi_runtime.running:
-            raise HTTPException(status_code=409, detail="Suwayomi is not running")
         try:
-            return {"languages": await suwayomi_runtime.list_languages()}
+            async with _managed_suwayomi_session():
+                languages = await suwayomi_runtime.list_languages()
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
+        return {"languages": languages}
 
     @app.post("/api/system/suwayomi/update")
     async def suwayomi_update_now():
@@ -4706,21 +4984,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/system/suwayomi/extensions/{pkg_name}/icon")
     async def suwayomi_extension_icon(pkg_name: str):
         try:
-            items = await suwayomi_runtime.list_extensions()
-        except Exception as exc:  # noqa: BLE001 - the store may be unreachable
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        icon_path = next(
-            (
-                str(item.get("icon_path") or "")
-                for item in items
-                if item.get("pkg_name") == pkg_name
-            ),
-            "",
-        )
-        if not icon_path:
-            raise HTTPException(status_code=404, detail="No icon for this extension")
-        try:
-            content, media_type = await suwayomi_runtime.fetch_icon(icon_path)
+            async with _managed_suwayomi_session():
+                items = await suwayomi_runtime.list_extensions()
+                icon_path = next(
+                    (
+                        str(item.get("icon_path") or "")
+                        for item in items
+                        if item.get("pkg_name") == pkg_name
+                    ),
+                    "",
+                )
+                if not icon_path:
+                    raise HTTPException(
+                        status_code=404, detail="No icon for this extension"
+                    )
+                content, media_type = await suwayomi_runtime.fetch_icon(icon_path)
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001 - a missing icon is not a fault
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         # Only raster images are served from Tankarr's origin: an extension
@@ -4739,12 +5019,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pkg_name = str(payload.get("pkg_name") or "").strip()
         if not pkg_name.startswith("eu.kanade.tachiyomi.extension."):
             raise HTTPException(status_code=400, detail="Unknown extension package")
-        if not suwayomi_runtime.running:
-            raise HTTPException(status_code=409, detail="Suwayomi is not running")
         try:
-            result = await suwayomi_runtime.set_extension(
-                pkg_name, installed=bool(payload.get("installed", True))
-            )
+            async with _managed_suwayomi_session():
+                result = await suwayomi_runtime.set_extension(
+                    pkg_name, installed=bool(payload.get("installed", True))
+                )
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001 - surface the engine's error
             raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
         return result
@@ -4760,11 +5041,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
 
         _require_managed_suwayomi()
-        if not suwayomi_runtime.running:
-            raise HTTPException(status_code=409, detail="Suwayomi is not running")
         language = str((payload or {}).get("language") or settings.default_language)
         try:
-            sources = await suwayomi_runtime.list_sources()
+            async with _managed_suwayomi_session():
+                sources = await suwayomi_runtime.list_sources()
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
         selected_ids = {str(item) for item in settings.suwayomi_source_id_set}
@@ -4776,24 +5058,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
 
         async def stream():
-            yield (
-                json.dumps(
-                    {"type": "start", "language": language, "count": len(candidates)}
+            async with suwayomi_runtime.retain():
+                yield (
+                    json.dumps(
+                        {
+                            "type": "start",
+                            "language": language,
+                            "count": len(candidates),
+                        }
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
-            async for item in suwayomi_runtime.test_sources_iter(
-                candidates,
-                language=language,
-                timeout=float(settings.suwayomi_search_timeout_seconds),
-            ):
-                database.record_source_health(
-                    f"suwayomi:{item['id']}",
-                    ok=item["verdict"] != "unreachable",
-                    reason=str(item.get("error") or ""),
-                )
-                yield json.dumps({"type": "result", **item}) + "\n"
-            yield json.dumps({"type": "done"}) + "\n"
+                async for item in suwayomi_runtime.test_sources_iter(
+                    candidates,
+                    language=language,
+                    timeout=float(settings.suwayomi_search_timeout_seconds),
+                ):
+                    database.record_source_health(
+                        f"suwayomi:{item['id']}",
+                        ok=item["verdict"] != "unreachable",
+                        reason=str(item.get("error") or ""),
+                    )
+                    yield json.dumps({"type": "result", **item}) + "\n"
+                yield json.dumps({"type": "done"}) + "\n"
 
         return StreamingResponse(stream(), media_type="application/x-ndjson")
 

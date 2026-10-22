@@ -107,17 +107,21 @@ export function SuwayomiManager({
     void loadStatus();
   }, [loadStatus]);
 
-  // Poll while something is in flight so the card follows the JVM.
+  // A local status read does not start the JVM. Poll quickly only while it
+  // is actually changing; otherwise once a minute is enough to show Idle.
   useEffect(() => {
-    const busy = action !== null || status?.installing || (status?.running && !status?.ready);
-    if (!busy) return;
-    const timer = window.setInterval(() => void loadStatus(), 3000);
+    const busy =
+      action !== null ||
+      extensionsLoading ||
+      Boolean(status?.installing) ||
+      Boolean(status?.running && !status?.ready);
+    const timer = window.setInterval(() => void loadStatus(), busy ? 3000 : 60000);
     return () => window.clearInterval(timer);
-  }, [action, status?.installing, status?.running, status?.ready, loadStatus]);
+  }, [action, extensionsLoading, status?.installing, status?.running, status?.ready, loadStatus]);
 
   const loadExtensions = useCallback(
-    async (refresh = false) => {
-      if (!managed || !status?.ready) return;
+    async (refresh = false, force = false) => {
+      if (!managed || (!force && !status?.ready)) return;
       setExtensionsLoading(true);
       setExtensionsError(null);
       try {
@@ -279,7 +283,17 @@ export function SuwayomiManager({
         <div className="setting-field-actions">
           <StatusPill
             kind={
-              status?.ready ? "success" : status?.running ? "warn" : status?.installed ? "warn" : status ? "muted" : "muted"
+              status?.ready
+                ? "success"
+                : status?.activity === "crashed"
+                  ? "danger"
+                  : status?.running || status?.activity === "maintenance"
+                    ? "warn"
+                    : status?.activity === "idle"
+                      ? "muted"
+                      : status?.installed
+                        ? "warn"
+                        : "muted"
             }
           >
             {status === null
@@ -292,9 +306,15 @@ export function SuwayomiManager({
                   ? t("Running") + (status.version ? ` · ${status.version}` : "")
                   : status.running
                     ? t("Starting…")
-                    : status.installed
-                      ? t("Stopped") + (status.version ? ` · ${status.version}` : "")
-                      : t("Not installed")}
+                    : status.activity === "maintenance"
+                      ? t("Maintenance")
+                      : status.activity === "idle"
+                        ? t("Idle") + (status.version ? ` · ${status.version}` : "")
+                        : status.activity === "crashed"
+                          ? t("Not running") + (status.version ? ` · ${status.version}` : "")
+                          : status.installed
+                            ? t("Stopped") + (status.version ? ` · ${status.version}` : "")
+                            : t("Not installed")}
           </StatusPill>
           {status?.installed ? (
             <span className="muted small">
@@ -366,7 +386,12 @@ export function SuwayomiManager({
             {t("The Tankarr config directory is not writable; Suwayomi cannot be installed.")}
           </p>
         ) : null}
-        {status?.last_error && !status.ready ? (
+        {status?.activity === "idle" ? (
+          <p className="muted small setting-test-result">
+            {t("Suwayomi is stopped to save memory. It starts when a download, a source search, a chapter fetch, or the release monitor needs it, then stops again after {minutes} minutes with nothing in progress.", { minutes: status.idle_shutdown_minutes ?? 10 })}
+          </p>
+        ) : null}
+        {status?.last_error && !status.ready && status.activity !== "idle" ? (
           <p className="warn-text setting-test-result">{status.last_error}</p>
         ) : null}
         {actionResult ? <p className="muted small setting-test-result">{actionResult}</p> : null}
@@ -434,7 +459,22 @@ export function SuwayomiManager({
         </div>
         {!status?.ready ? (
           <p className="muted small setting-test-result">
-            {t("Extensions can be managed once Suwayomi is installed and running.")}
+            {status?.activity === "idle"
+              ? t("Suwayomi is idle. Showing extensions starts it; it stops again once you leave it unused.")
+              : t("Extensions can be managed once Suwayomi is installed and running.")}
+            {status?.installed && status.activity === "idle" ? (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={extensionsLoading}
+                  onClick={() => void loadExtensions(false, true)}
+                >
+                  {extensionsLoading ? t("Starting…") : t("Show extensions")}
+                </button>
+              </>
+            ) : null}
           </p>
         ) : extensionsError ? (
           <p className="warn-text setting-test-result">{extensionsError}</p>

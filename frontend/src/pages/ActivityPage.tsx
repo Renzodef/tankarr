@@ -144,7 +144,7 @@ export default function ActivityPage() {
       await refreshTorrents();
       polling = false;
       if (!stopped) {
-        timer = window.setTimeout(poll, document.hidden ? 30000 : 5000);
+        timer = window.setTimeout(poll, document.hidden ? 60000 : 15000);
       }
     };
     const visibilityChanged = () => {

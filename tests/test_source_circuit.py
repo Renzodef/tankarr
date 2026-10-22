@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 
 from tankarr.database import Database
-from tankarr.source_circuit import source_gate_key
+from tankarr.providers.suwayomi import BACKOFF_MESSAGE
+from tankarr.source_circuit import circuit_delay_seconds, http_overload, source_gate_key
 from tests.test_queue_management import seed_manga
 
 
@@ -45,3 +46,19 @@ def test_cooldown_caps_and_success_resets_streak(tmp_path):
     assert 590 < deadline - datetime.now(UTC).timestamp() <= 600
     database.record_source_circuit("a")
     assert database.record_source_circuit("a", error="TimeoutError") == 0
+
+
+def test_an_overload_waits_longer_than_a_timeout_and_the_backoff_text_does_not_retrigger():
+    assert circuit_delay_seconds(1, "TimeoutError") == 0
+    assert circuit_delay_seconds(2, "TimeoutError") == 30
+    assert http_overload("upstream answered HTTP 429")
+    assert http_overload("HTTP 522 from the source")
+    assert http_overload("Too many requests")
+    assert not http_overload("cloudflare challenge")
+    assert circuit_delay_seconds(1, "HTTP 429") == 15 * 60
+    assert circuit_delay_seconds(2, "503") == 3600
+    assert circuit_delay_seconds(4, "500") == 12 * 3600
+    assert not http_overload(BACKOFF_MESSAGE)
+    detail = "429 Too Many Requests"
+    database_delay = circuit_delay_seconds(1, f"ProviderRequestError\n{detail}")
+    assert database_delay == 15 * 60

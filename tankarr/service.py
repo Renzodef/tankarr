@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from tankarr import page_quality
+from tankarr import __version__, page_quality
 from tankarr.archive import (
     IMAGE_SUFFIXES,
     ImportDurabilityError,
@@ -5588,12 +5588,13 @@ class TankarrService:
 
     ORPHAN_SUMMARY_MAX_AGE_SECONDS = 600.0
 
-    def library_orphans_summary(self) -> dict[str, Any]:
+    def library_orphans_summary(self, *, refresh: bool = True) -> dict[str, Any]:
         """The orphan scan for alerts, at most once every ten minutes.
 
         The full scan stats every tracked file (about a second per 15,000
-        files) and the System page polls the status that carries the alert.
-        An explicit scan or a change to the library refreshes it at once.
+        files). Status polling must not start that walk: it reads a fresh
+        cache, otherwise the last result, otherwise a pending placeholder.
+        ``/api/library/orphans`` still scans and fills the cache.
         """
 
         cached = self._orphan_summary
@@ -5601,6 +5602,17 @@ class TankarrService:
             self.ORPHAN_SUMMARY_MAX_AGE_SECONDS
         ):
             return cached[1]
+        if not refresh:
+            if cached is not None:
+                return cached[1]
+            return {
+                "available": True,
+                "count": 0,
+                "folders": [],
+                "bytes": 0,
+                "truncated": False,
+                "pending": True,
+            }
         return self.library_orphans(folder_limit=5)
 
     def invalidate_orphan_summary(self) -> None:
@@ -5953,6 +5965,11 @@ class TankarrService:
                 ],
                 deferred=True,
             )
+
+        if manga_ids is None and not dry_run and not pending_jobs:
+            skipped = self._organization_skip(root)
+            if skipped is not None:
+                return skipped
 
         chapters_scanned = self.database.count_chapters(manga_ids)
         downloaded_files = 0
@@ -6466,7 +6483,7 @@ class TankarrService:
                     f"Unable to remove empty legacy directories: {exc}"
                 )
 
-        return self._organization_report(
+        report = self._organization_report(
             chapters_scanned=chapters_scanned,
             replacement_files_deferred=replacement_files_deferred,
             downloaded_files=downloaded_files,
@@ -6480,6 +6497,52 @@ class TankarrService:
             scan_required=bool(moved or adopted or duplicates_removed),
             warnings=execution_warnings,
             organization_blocked=blocked_by_failure,
+        )
+        if (
+            manga_ids is None
+            and not dry_run
+            and not blocked_by_failure
+            and not execution_warnings
+        ):
+            self.database.save_setting(
+                "__library_organization_stamp", self._organization_stamp()
+            )
+        return report
+
+    def _organization_stamp(self) -> str:
+        revision = ",".join(self.database.library_revision())
+        return f"{LIBRARY_NAMING_VERSION}|{__version__}|{revision}"
+
+    def _organization_skip(self, root: Path) -> dict[str, Any] | None:
+        """Skip the startup walk when the library has not changed since the last one.
+
+        The stamp is the naming rules, this Tankarr version and the library
+        revision. Recorded files are only stat'd: a missing file falls through
+        to the full pass. Content that already has a stored hash is not hashed
+        again on later startups either way.
+        """
+
+        if self.database.get_setting("__library_organization_stamp") != (
+            self._organization_stamp()
+        ):
+            return None
+        present = 0
+        for chapter in self.database.list_downloaded_chapters():
+            recorded = chapter.get("library_path")
+            if not recorded:
+                return None
+            try:
+                path = self._recorded_library_path(str(recorded), root)
+            except (UnsafeLibraryPath, ValueError):
+                return None
+            if not path.is_file():
+                return None
+            present += 1
+        return self._organization_report(
+            chapters_scanned=present,
+            downloaded_files=present,
+            unchanged=present,
+            skipped=True,
         )
 
     @staticmethod
@@ -8663,6 +8726,7 @@ class TankarrService:
                         chapter.get("source_name"),
                     ),
                     error=type(exc).__name__,
+                    detail=failure_detail,
                 )
             failed_detail: str | None = None
             try:

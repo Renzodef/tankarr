@@ -16,7 +16,8 @@ Responsibilities:
   against the published SHA-256 checksums, swap it into place atomically and
   keep the previous JAR for rollback;
 * **supervise** — start the JVM with a bounded heap, restart it with backoff
-  when it dies, stop it cleanly on shutdown;
+  when it dies, stop it cleanly on shutdown, and, when idle shutdown is on,
+  leave it stopped until a download, search, or monitor pass needs it;
 * **manage sources** — list/install/uninstall extensions and probe the
   enabled sources for coverage and latency, so Settings → Sources can show
   what actually works from where Tankarr runs.
@@ -88,6 +89,10 @@ def release_order(tag: str) -> tuple[int, ...]:
 DEFAULT_PORT = 4567
 READY_TIMEOUT_SECONDS = 180.0
 STOP_TIMEOUT_SECONDS = 25.0
+# How often the idle loop looks, not how long the server stays up.
+IDLE_CHECK_SECONDS = 30.0
+# Stopping and starting again inside this window costs more than it saves.
+IDLE_GAP_GRACE_SECONDS = 180.0
 MAX_LOG_BYTES = 4 * 1024 * 1024
 MAX_CONSECUTIVE_CRASHES = 6
 RESTART_BACKOFF_CAP_SECONDS = 120.0
@@ -460,6 +465,18 @@ class SuwayomiRuntime:
         self._lock = asyncio.Lock()
         self._installing = False
         self._stopping = False
+        # Set while catalogue cleanup holds the database file. start() refuses
+        # so the supervisor cannot relaunch the server into a locked file.
+        self._catalogue_cleanup = False
+        # In-flight Tankarr work that needs the JVM. Idle shutdown waits
+        # until this is zero. A separate lock from ``_lock``: ``start`` takes
+        # ``_lock`` and must not be called while ``_lock`` is already held.
+        self._users = 0
+        self._use_lock = asyncio.Lock()
+        self._last_used = time.monotonic()
+        self.idle_shutdown_minutes = 0
+        self._operator_stopped = False
+        self.needed_within: Callable[[], float | None] | None = None
         self._started_at: float | None = None
         self._consecutive_crashes = 0
         self._restarts = 0
@@ -498,6 +515,36 @@ class SuwayomiRuntime:
             changed = True
         return changed
 
+    def configure_idle(self, minutes: int) -> None:
+        """``0`` keeps the server running; a positive value stops it when idle."""
+
+        self.idle_shutdown_minutes = max(0, int(minutes))
+
+    @property
+    def in_use(self) -> int:
+        return self._users
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    def activity(self) -> str:
+        """``running``, ``starting``, ``idle``, ``stopped``, ``maintenance``, ``crashed`` or ``absent``."""
+
+        if self._catalogue_cleanup:
+            return "maintenance"
+        if self.running and self._ready:
+            return "running"
+        if self.running:
+            return "starting"
+        if self.installed() is None:
+            return "absent"
+        if not self._stopping and self._consecutive_crashes:
+            return "crashed"
+        if self.idle_shutdown_minutes > 0 and not self._operator_stopped:
+            return "idle"
+        return "stopped"
+
     def installed(self) -> dict[str, Any] | None:
         try:
             state = json.loads(self.state_path.read_text())
@@ -530,6 +577,9 @@ class SuwayomiRuntime:
             "jar_size_bytes": jar.stat().st_size if jar else 0,
             "running": self.running,
             "ready": self._ready and self.running,
+            "activity": self.activity(),
+            "idle_shutdown_minutes": self.idle_shutdown_minutes,
+            "in_use": self._users,
             "pid": self._process.pid if self.running and self._process else None,
             "uptime_seconds": int(uptime) if uptime and self.running else None,
             "restarts": self._restarts,
@@ -892,6 +942,8 @@ class SuwayomiRuntime:
         return [self.java_executable, *argv[1:]]
 
     async def start(self) -> dict[str, Any]:
+        self._operator_stopped = False
+        self._last_used = time.monotonic()
         state = self.installed()
         if not self.running and state and state.get("pending_update"):
             if state["pending_update"].get("attempted"):
@@ -903,6 +955,10 @@ class SuwayomiRuntime:
 
     async def _start_process(self) -> dict[str, Any]:
         async with self._lock:
+            if self._catalogue_cleanup:
+                raise SuwayomiRuntimeBusy(
+                    "Suwayomi catalogue cleanup is using the database"
+                )
             if self.running:
                 return self.status()
             self._stopping = False
@@ -917,6 +973,12 @@ class SuwayomiRuntime:
     @property
     def server_conf_path(self) -> Path:
         return self.home / ".local" / "share" / "Tachidesk" / "server.conf"
+
+    @property
+    def database_path(self) -> Path:
+        """H2 file next to server.conf (``jdbc:h2:${dataRoot}/database``)."""
+
+        return self.server_conf_path.parent / "database.mv.db"
 
     def write_server_conf(self) -> Path:
         """Persist Tankarr's settings into Suwayomi's own configuration file."""
@@ -1052,8 +1114,10 @@ class SuwayomiRuntime:
                 self._last_error = f"Restart failed: {type(exc).__name__}: {exc}"
                 logger.error(self._last_error)
 
-    async def stop(self) -> dict[str, Any]:
+    async def stop(self, *, operator: bool = False) -> dict[str, Any]:
         async with self._lock:
+            if operator:
+                self._operator_stopped = True
             self._stopping = True
             process = self._process
             if process is not None and process.returncode is None:
@@ -1078,6 +1142,65 @@ class SuwayomiRuntime:
     async def restart(self) -> dict[str, Any]:
         await self.stop()
         return await self.start()
+
+    @contextlib.asynccontextmanager
+    async def retain(self) -> AsyncIterator[None]:
+        """Start the server if it is down, and keep it up until the caller finishes.
+
+        Nested and overlapping calls share one process. The idle loop will
+        not stop it while the count is above zero. Status reads do not call
+        this, so a stopped server stays stopped until real work needs it.
+        """
+
+        async with self._use_lock:
+            self._users += 1
+            self._operator_stopped = False
+        try:
+            if not self.running:
+                await self.start()
+            if not (self.running and self._ready):
+                ready = await self.wait_ready()
+                if not ready:
+                    raise SuwayomiRuntimeError(
+                        self._last_error or "Suwayomi did not become ready"
+                    )
+            yield
+        finally:
+            async with self._use_lock:
+                self._users = max(0, self._users - 1)
+                if self._users == 0:
+                    self._last_used = time.monotonic()
+
+    async def stop_if_idle(self) -> bool:
+        """Stop the server after the idle timeout when nothing is using it."""
+
+        if self.idle_shutdown_minutes <= 0:
+            return False
+        async with self._use_lock:
+            if self._users > 0 or not self.running or self._catalogue_cleanup:
+                return False
+            limit = self.idle_shutdown_minutes * 60
+            if time.monotonic() - self._last_used < limit:
+                return False
+            if self.needed_within is not None:
+                try:
+                    gap = self.needed_within()
+                except Exception:  # noqa: BLE001 - a schedule hint must not stop the loop
+                    gap = None
+                if gap is not None and gap <= limit + IDLE_GAP_GRACE_SECONDS:
+                    return False
+            await self.stop()
+            return True
+
+    async def idle_loop(self) -> None:
+        """Stop the managed server once it has been unused for the timeout."""
+
+        while True:
+            await self._sleep(IDLE_CHECK_SECONDS)
+            try:
+                await self.stop_if_idle()
+            except Exception:  # noqa: BLE001 - the next pass retries
+                logger.warning("Suwayomi idle check failed", exc_info=True)
 
     async def aclose(self) -> None:
         with contextlib.suppress(Exception):

@@ -4,7 +4,8 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +61,15 @@ class ReleaseMonitor:
         self.release_sources = release_sources
         self.translations = None
         self.task: asyncio.Task | None = None
+        # True only while a cycle is inside run_cycle, not while the task
+        # sleeps until the next interval. Catalogue cleanup uses this so a
+        # running monitor does not mean "never clean".
+        self.cycle_active = False
+        # Managed Suwayomi: one hold for a whole monitor pass or Wanted pass,
+        # so the server starts once per pass instead of once per series.
+        self.suwayomi_session: (
+            Callable[[], AbstractAsyncContextManager[None]] | None
+        ) = None
         self._wanted_scheduler_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._wanted_search_lock = asyncio.Lock()
@@ -187,16 +197,29 @@ class ReleaseMonitor:
             )
             # Settings are hot-reloaded; observe a shorter interval or newly
             # enabled recovery without waiting for the previous long deadline.
-            delay = min(delay, 60.0)
+            # A settings change is noticed within five minutes. Waking every
+            # minute only to find the search is still hours away is idle work.
+            delay = min(delay, 60.0 if failed else 300.0)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
             except TimeoutError:
                 continue
 
     async def run_cycle(self, *, include_wanted: bool = True) -> dict[str, Any]:
-        from tankarr.database import utc_now
+        from tankarr.memory import release_native_heap
 
         self.service.assert_mutations_allowed()
+        self.cycle_active = True
+        try:
+            async with self._suwayomi_hold():
+                return await self._run_cycle(include_wanted=include_wanted)
+        finally:
+            self.cycle_active = False
+            release_native_heap()
+
+    async def _run_cycle(self, *, include_wanted: bool) -> dict[str, Any]:
+        from tankarr.database import utc_now
+
         checked = 0
         queued = 0
         errors: list[dict[str, str]] = []
@@ -262,6 +285,59 @@ class ReleaseMonitor:
         return (
             last + timedelta(seconds=self.settings.wanted_search_interval_seconds)
         ).isoformat()
+
+    def _suwayomi_hold(self) -> AbstractAsyncContextManager[None]:
+        if (
+            self.suwayomi_session is not None
+            and self.settings.suwayomi_enabled
+            and self.settings.suwayomi_managed
+        ):
+            return self.suwayomi_session()
+        return nullcontext()
+
+    def seconds_until_suwayomi(self) -> float | None:
+        """Seconds until the next pass that starts the managed server.
+
+        Idle shutdown uses this so it does not stop the JVM moments before
+        that pass would start it again.
+        """
+
+        if not (self.settings.suwayomi_enabled and self.settings.suwayomi_managed):
+            return None
+        gaps: list[float] = []
+        if self.settings.monitor_enabled:
+            gaps.append(self._seconds_until_cycle())
+        if self.settings.wanted_search_enabled:
+            gaps.append(self._seconds_until_wanted())
+        if not gaps:
+            return None
+        return min(gaps)
+
+    def _seconds_until_cycle(self) -> float:
+        if self.cycle_active or self.last_cycle_at is None:
+            return 0.0
+        try:
+            last = datetime.fromisoformat(self.last_cycle_at)
+        except ValueError:
+            return 0.0
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        nxt = last + timedelta(seconds=self.settings.monitor_interval_seconds)
+        return (nxt - datetime.now(UTC)).total_seconds()
+
+    def _seconds_until_wanted(self) -> float:
+        if self._wanted_search_task is not None and not self._wanted_search_task.done():
+            return 0.0
+        due = self._next_wanted_search_at()
+        if due is None:
+            return 0.0
+        try:
+            when = datetime.fromisoformat(due)
+        except ValueError:
+            return 0.0
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        return (when - datetime.now(UTC)).total_seconds()
 
     async def search_wanted(self, *, trigger: str = "manual") -> dict[str, Any]:
         """Join an in-flight Wanted pass instead of repeating every source query."""
@@ -354,6 +430,10 @@ class ReleaseMonitor:
     async def _search_wanted_once(self, *, trigger: str) -> dict[str, Any]:
         """Queue every monitored missing release, independently of RSS refresh."""
 
+        async with self._suwayomi_hold():
+            return await self._search_wanted_holding(trigger=trigger)
+
+    async def _search_wanted_holding(self, *, trigger: str) -> dict[str, Any]:
         from datetime import UTC, datetime
 
         from tankarr.database import utc_now

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import gc
 import hashlib
 import json
 import math
@@ -82,20 +80,13 @@ ARTWORK_NORMALIZATION_VERSION = 2
 ARTWORK_SELECTION_VERSION = 4
 READER_ARTWORK_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
-try:
-    _MALLOC_TRIM = ctypes.CDLL(None).malloc_trim
-    _MALLOC_TRIM.argtypes = [ctypes.c_size_t]
-    _MALLOC_TRIM.restype = ctypes.c_int
-except AttributeError:  # pragma: no cover - available in the Linux image
-    _MALLOC_TRIM = None
-
 
 def _release_process_memory() -> None:
     """Return native Pillow buffers between series in long bulk refreshes."""
 
-    gc.collect()
-    if _MALLOC_TRIM is not None:
-        _MALLOC_TRIM(0)
+    from tankarr.memory import release_native_heap
+
+    release_native_heap()
 
 
 @dataclass(frozen=True)
