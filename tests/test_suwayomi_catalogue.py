@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from tankarr.suwayomi_catalogue import (
     CatalogueHeapError,
     CatalogueSchemaError,
     apply_catalogue_pass,
+    catalogue_pass_is_recent,
     chapter_keep_sql,
     compact_due,
     csvwrite,
@@ -142,6 +144,32 @@ class _Runtime:
             raise AssertionError("start during cleanup")
         self.running = True
         self.starts += 1
+
+
+def test_a_finished_catalogue_pass_is_recent_until_the_interval_elapses():
+    now = datetime(2026, 10, 22, tzinfo=UTC)
+    finished = {
+        "at": (now - timedelta(hours=1)).isoformat(),
+        "result": {"deleted": 3, "remaining": 0},
+    }
+    assert catalogue_pass_is_recent(finished, now=now, interval_seconds=6 * 3600)
+    assert not catalogue_pass_is_recent(
+        finished, now=now + timedelta(hours=6), interval_seconds=6 * 3600
+    )
+    deferred = {"at": now.isoformat(), "result": {"deferred": "monitor"}}
+    failed = {"at": now.isoformat(), "result": {"error": "boom"}}
+    aborted = {
+        "at": now.isoformat(),
+        "result": {"deleted": 0, "aborted": "chapter scan ran out of memory"},
+    }
+    assert not catalogue_pass_is_recent(deferred, now=now, interval_seconds=3600)
+    assert not catalogue_pass_is_recent(failed, now=now, interval_seconds=3600)
+    assert not catalogue_pass_is_recent(aborted, now=now, interval_seconds=3600)
+    assert not catalogue_pass_is_recent(
+        {"at": now.isoformat(), "result": {"skipped": "disabled"}},
+        now=now,
+        interval_seconds=3600,
+    )
 
 
 @pytest.mark.asyncio

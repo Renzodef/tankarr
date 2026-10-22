@@ -170,6 +170,7 @@ from tankarr.suwayomi_bootstrap import (
 from tankarr.suwayomi_catalogue import (
     COMPACT_SETTING,
     apply_catalogue_pass,
+    catalogue_pass_is_recent,
     compact_due,
     execute_h2,
     jdbc_base,
@@ -697,7 +698,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         ):
             return "downloads"
-        if getattr(monitor, "cycle_active", False):
+        if getattr(monitor, "suwayomi_batch_active", False):
             return "monitor"
         if suwayomi_runtime.in_use:
             return "in use"
@@ -751,6 +752,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def maintain_suwayomi_catalogue() -> dict[str, Any]:
         """Delete Suwayomi rows Tankarr does not need, in small offline batches."""
 
+        if (
+            settings.suwayomi_catalogue_cleanup_enabled
+            and settings.suwayomi_managed
+            and catalogue_pass_is_recent(
+                suwayomi_maintenance.get("catalogue"),
+                now=datetime.now(UTC),
+                interval_seconds=(
+                    settings.suwayomi_catalogue_cleanup_interval_hours * 3600
+                ),
+            )
+        ):
+            # Leave the stored timestamp alone: this was not a new pass.
+            return {"skipped": "recent"}
         if not settings.suwayomi_catalogue_cleanup_enabled:
             result: dict[str, Any] = {"skipped": "disabled"}
         elif not settings.suwayomi_managed:
@@ -824,6 +838,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if suwayomi_runtime.in_use:
             return True
         return False
+
+    async def after_monitor_suwayomi_batch() -> None:
+        """Clean and compact once the monitor has released Suwayomi.
+
+        The batch flag is already clear, so this is the window idle shutdown
+        and the catalogue pass both need. A pass younger than the cleanup
+        interval does nothing, and daily extension updates are not repeated
+        here.
+        """
+
+        if not settings.suwayomi_managed:
+            return
+        await maintain_suwayomi_catalogue()
+        await compact_managed_suwayomi_catalogue()
+
+    monitor.after_suwayomi_batch = after_monitor_suwayomi_batch
 
     def challenged_sources() -> list[str]:
         """Sources that answered with an anti-bot challenge.

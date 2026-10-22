@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -1329,3 +1332,224 @@ async def test_source_recovery_recognizes_a_job_for_an_expected_slot(tmp_path):
     assert len(attempts) == 1
     assert attempts[0]["channel"] == "sources"
     assert attempts[0]["outcome"] == "queued"
+
+
+def _budget_settings(tmp_path: Path, **overrides: object) -> Settings:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        wanted_search_enabled=False,
+    )
+    return settings.model_copy(update=overrides)
+
+
+@pytest.mark.asyncio
+async def test_cycle_budget_checks_hot_series_first_and_a_restart_resumes(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "hot",
+            "title": "Hot",
+            "status": "ongoing",
+            "provider": "mangadex",
+        },
+        "en",
+        "all",
+    )
+    database.upsert_chapters(
+        "hot",
+        [{**chapter("hot-1", "10"), "publish_at": datetime.now(UTC).isoformat()}],
+    )
+    database.upsert_manga(
+        {
+            "id": "cold",
+            "title": "Cold",
+            "status": "completed",
+            "provider": "mangadex",
+        },
+        "en",
+        "all",
+    )
+    database.upsert_chapters(
+        "cold",
+        [{**chapter("cold-1", "1"), "publish_at": "2000-01-01T00:00:00+00:00"}],
+    )
+    settings = _budget_settings(tmp_path, monitor_cycle_budget_seconds=0)
+    service = FakeService(database, [[], []])
+    refreshed: list[str] = []
+    refresh_manga = service.refresh_manga
+
+    async def tracking(manga_id: str, language: str) -> dict:
+        refreshed.append(manga_id)
+        return await refresh_manga(manga_id, language)
+
+    service.refresh_manga = tracking  # type: ignore[method-assign]
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+
+    first = await monitor.run_cycle()
+
+    assert first["checked"] == 1
+    assert first["deferred"] == 1
+    assert refreshed == ["hot"]
+    assert database.get_manga("cold")["last_checked_at"] is None
+    assert database.get_manga("hot")["last_check_error"] is None
+
+    restarted = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+    second = await restarted.run_cycle()
+
+    assert second["checked"] == 1
+    assert second["deferred"] == 0
+    assert refreshed == ["hot", "cold"]
+    assert database.get_manga("cold")["last_checked_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_series_backs_off_for_six_hours(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {"id": "slow", "title": "Slow", "status": "ongoing", "provider": "mangadex"},
+        "en",
+        "all",
+    )
+    database.upsert_chapters(
+        "slow",
+        [{**chapter("slow-1", "3"), "publish_at": datetime.now(UTC).isoformat()}],
+    )
+    settings = _budget_settings(tmp_path, monitor_series_timeout_seconds=0.05)
+    service = FakeService(database, [])
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+    calls = 0
+
+    async def slow(manga_id: str) -> dict:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(2)
+        return {"queued": 0}
+
+    monitor.refresh_one = slow  # type: ignore[method-assign]
+    result = await monitor.run_cycle()
+    assert result["checked"] == 1
+    assert "TimeoutError" in database.get_manga("slow")["last_check_error"]
+
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE manga SET last_checked_at=? WHERE id=?",
+            ((datetime.now(UTC) - timedelta(hours=2)).isoformat(), "slow"),
+        )
+    await monitor.run_cycle()
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_mode_records_the_check_so_the_next_cycle_skips_it(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {"id": "shelf", "title": "Shelf", "provider": "mangadex"},
+        "en",
+        "existing",
+    )
+    settings = _budget_settings(tmp_path)
+    service = FakeService(database, [])
+    service.refresh_metadata = AsyncMock()  # type: ignore[attr-defined]
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+
+    assert (await monitor.run_cycle())["checked"] == 1
+    service.refresh_metadata.assert_awaited_once_with("shelf")
+    assert database.get_manga("shelf")["last_checked_at"] is not None
+    assert not database.get_manga("shelf")["monitor_initialized"]
+
+    assert (await monitor.run_cycle())["checked"] == 0
+    service.refresh_metadata.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_suwayomi_is_held_only_for_series_that_read_through_it(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {"id": "plain", "title": "Plain", "provider": "mangadex", "status": "ongoing"},
+        "en",
+        "all",
+    )
+    settings = _budget_settings(
+        tmp_path,
+        suwayomi_enabled=True,
+        suwayomi_mode="managed",
+    )
+    service = FakeService(database, [[], []])
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+    entered = 0
+    order: list[str] = []
+
+    @asynccontextmanager
+    async def session():
+        nonlocal entered
+        entered += 1
+        order.append("open")
+        yield
+        order.append("close")
+
+    async def hook() -> None:
+        order.append("hook")
+        assert monitor.suwayomi_batch_active is False
+
+    monitor.suwayomi_session = session
+    monitor.after_suwayomi_batch = hook
+
+    await monitor.run_cycle()
+    assert entered == 0
+    assert order == []
+
+    database.upsert_manga(
+        {
+            "id": "mapped",
+            "title": "Mapped",
+            "provider": "catalogue",
+            "status": "ongoing",
+        },
+        "en",
+        "all",
+    )
+    database.upsert_release_source(
+        "mapped",
+        provider="suwayomi",
+        provider_manga_id="suwayomi-42",
+        title="Mapped",
+        source_url="https://example.test/mapped",
+        source_name="Example",
+        language="en",
+        match_confidence=1,
+        match_reason="test",
+    )
+    await monitor.run_cycle()
+    assert entered == 1
+    assert order == ["open", "close", "hook"]
+    assert database.get_manga("mapped")["last_checked_at"] is not None
