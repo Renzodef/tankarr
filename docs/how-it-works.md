@@ -323,7 +323,8 @@ tuned in **Settings → General**:
   are refreshed. Catalogue cleanup and compaction then run while it is
   stopped. Refreshing a series fetches that series only; it does not add
   other catalogue rows. The file still grows while chapter lists are
-  rewritten, and compaction after the batch returns that space.
+  rewritten, and compaction after the batch returns that space. A cleanup or
+  compaction that fails is reported on the System page.
 - **Scheduled Wanted recovery** (`TANKARR_WANTED_SEARCH_INTERVAL_SECONDS`,
   default 21600, every 6 hours): retries what is still missing. One pass looks
   at no more than 25 series (`TANKARR_WANTED_SEARCH_BUDGET`), the most overdue

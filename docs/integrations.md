@@ -89,11 +89,17 @@ Suwayomi, and only for `TANKARR_MONITOR_CYCLE_BUDGET_SECONDS` (default eight
 minutes), so it starts once per cycle rather than once per series and is free
 again before the next cycle. After that batch, catalogue cleanup runs and, when
 it is due, compaction runs; both happen while the server is stopped and, with
-idle shutdown on, leave it stopped. Suwayomi's own web interface is not one of
-those uses: it is stopped with the server after the timeout, so leave the
-timeout at `0` if you keep that interface open. The same cleanup and the
-optional daily compaction (`TANKARR_SUWAYOMI_CATALOGUE_COMPACT`) also run from
-the maintenance schedule while the server is stopped.
+idle shutdown on, leave it stopped. Cleanup signs in as the database user
+Suwayomi created (a blank user, or `sa` when that is the one that opens the
+file). A database of several hundred megabytes gets a larger cleanup heap and
+a longer pass, chapter scan and compact, so the first pass can finish after
+the file has grown. A cleanup or compaction that fails is listed under
+**Needs attention** on the System page and on the monitor status. Suwayomi's
+own web interface is not one of those uses: it is stopped with the server
+after the timeout, so leave the timeout at `0` if you keep that interface
+open. The same cleanup and the optional daily compaction
+(`TANKARR_SUWAYOMI_CATALOGUE_COMPACT`) also run from the maintenance schedule
+while the server is stopped.
 
 #### Network access and login
 

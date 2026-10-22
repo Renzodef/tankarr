@@ -1802,6 +1802,77 @@ class Database:
                 self._attach_logical_chapter_counts(connection, result)
         return result
 
+    def manga_totals(self) -> dict[str, int]:
+        """Series counts for the System page. No chapter join."""
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS series,
+                       COALESCE(SUM(monitored), 0) AS monitored
+                FROM manga
+                """
+            ).fetchone()
+        return {"series": int(row["series"]), "monitored": int(row["monitored"])}
+
+    def chapter_totals(self) -> dict[str, int]:
+        """The same distinct chapter counts as ``list_manga``, without its rows.
+
+        The per-series ``COUNT DISTINCT`` is summed so two series that share a
+        volume and chapter number are not collapsed into one. The System page
+        runs this off the request: selecting every manga column beside the
+        join is what made that page take half a minute.
+        """
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COALESCE(SUM(chapter_count), 0) AS chapters,
+                       COALESCE(SUM(downloaded_count), 0) AS downloaded
+                FROM (
+                    SELECT
+                        COUNT(DISTINCT CASE WHEN c.id IS NOT NULL THEN
+                            COALESCE(c.volume, '') || ':' ||
+                            COALESCE(c.chapter, c.id)
+                        END) AS chapter_count,
+                        COUNT(DISTINCT CASE WHEN c.downloaded = 1 THEN
+                            COALESCE(c.volume, '') || ':' ||
+                            COALESCE(c.chapter, c.id)
+                        END) AS downloaded_count
+                    FROM manga m
+                    LEFT JOIN chapter_release c
+                      ON c.manga_id = m.id
+                     AND c.language = m.preferred_language
+                    GROUP BY m.id
+                )
+                """
+            ).fetchone()
+        return {
+            "chapters": int(row["chapters"]),
+            "downloaded": int(row["downloaded"]),
+        }
+
+    def list_status_alert_rows(self) -> list[dict[str, Any]]:
+        """The manga fields a source-outage alert needs. No chapter join."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id,
+                       COALESCE(
+                           NULLIF(trim(title_override), ''),
+                           NULLIF(trim(metadata_title), ''),
+                           title
+                       ) AS title,
+                       preferred_language,
+                       provider,
+                       primary_source_error,
+                       primary_source_error_since
+                FROM manga
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_monitor_candidates(self) -> list[dict[str, Any]]:
         """Rows the release monitor needs to decide what is due.
 
