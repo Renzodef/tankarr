@@ -8,6 +8,7 @@ import mimetypes
 import platform
 import shutil
 import sqlite3
+import threading
 import zipfile
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -170,6 +171,8 @@ from tankarr.suwayomi_bootstrap import (
 from tankarr.suwayomi_catalogue import (
     COMPACT_SETTING,
     apply_catalogue_pass,
+    catalogue_failure_message,
+    catalogue_limits,
     catalogue_pass_is_recent,
     compact_due,
     execute_h2,
@@ -642,6 +645,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     suwayomi_maintenance: dict[str, Any] = {"last_run_at": None, "result": None}
 
+    def _publish_catalogue_status() -> None:
+        monitor.suwayomi_catalogue_status = {
+            "cleanup": suwayomi_maintenance.get("catalogue"),
+            "compact": suwayomi_maintenance.get("compact"),
+        }
+
+    # Chapter counts scan every release. That is the slow part of system
+    # status, so it runs on a daemon thread and the request serves the last
+    # snapshot. A miss, including the first one after startup, shows zeroes
+    # until the thread finishes rather than holding the page.
+    chapter_headline: dict[str, Any] = {
+        "chapters": 0,
+        "downloaded": 0,
+        "revision": None,
+        "running": False,
+    }
+    chapter_headline_lock = threading.Lock()
+    chapter_totals_stop = threading.Event()
+    chapter_totals_threads: list[threading.Thread] = []
+
+    def schedule_chapter_totals() -> None:
+        if chapter_totals_stop.is_set():
+            return
+        revision = database._read_model_revision(("manga", "chapter_release"))
+        with chapter_headline_lock:
+            if chapter_headline["running"]:
+                return
+            if chapter_headline["revision"] == revision:
+                return
+            chapter_headline["running"] = True
+
+        def work() -> None:
+            failed = False
+            try:
+                totals = database.chapter_totals()
+                seen = database._read_model_revision(("manga", "chapter_release"))
+                with chapter_headline_lock:
+                    chapter_headline["chapters"] = int(totals["chapters"])
+                    chapter_headline["downloaded"] = int(totals["downloaded"])
+                    chapter_headline["revision"] = seen
+            except Exception:
+                failed = True
+                logger.warning("Chapter totals refresh failed", exc_info=True)
+                with chapter_headline_lock:
+                    chapter_headline["revision"] = None
+            finally:
+                with chapter_headline_lock:
+                    chapter_headline["running"] = False
+            if not failed and not chapter_totals_stop.is_set():
+                schedule_chapter_totals()
+
+        thread = threading.Thread(
+            target=work, name="tankarr-chapter-totals", daemon=True
+        )
+        chapter_totals_threads.clear()
+        chapter_totals_threads.append(thread)
+        thread.start()
+
     async def maintain_managed_suwayomi(*, force: bool = False) -> dict[str, Any]:
         """Daily: report a newer server release, install it only when
         automatic updates are on (or the operator asked, ``force``), then
@@ -710,6 +771,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def compact_managed_suwayomi_catalogue() -> dict[str, Any]:
         """SHUTDOWN COMPACT when the file is large and has grown since last time."""
 
+        result = await _compact_managed_suwayomi_catalogue()
+        suwayomi_maintenance["compact"] = {
+            "at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "result": result,
+        }
+        _publish_catalogue_status()
+        return result
+
+    async def _compact_managed_suwayomi_catalogue() -> dict[str, Any]:
         if not settings.suwayomi_catalogue_compact or not settings.suwayomi_managed:
             return {"skipped": "disabled"}
         path = suwayomi_runtime.database_path
@@ -726,6 +796,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         installed = suwayomi_runtime.installed()
         if not installed:
             return {"skipped": "not installed"}
+        _pass_budget, _round_timeout, compact_timeout = catalogue_limits(size)
 
         def compact() -> dict[str, Any]:
             execute_h2(
@@ -733,7 +804,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 installed["path"],
                 jdbc_base(path),
                 ["SHUTDOWN COMPACT;"],
-                600,
+                compact_timeout,
             )
             new_size = path.stat().st_size if path.is_file() else 0
             database.save_setting(COMPACT_SETTING, str(new_size))
@@ -823,6 +894,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
             "result": result,
         }
+        _publish_catalogue_status()
         return result
 
     def _restart_after_catalogue_maintenance() -> bool | None:
@@ -2088,6 +2160,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await importer.stop()
         await worker.stop()
         await suwayomi_runtime.aclose()
+        chapter_totals_stop.set()
+        for thread in chapter_totals_threads:
+            thread.join(timeout=1)
         closed: set[int] = set()
         for registered in [*providers.values(), *retired_providers]:
             if id(registered) in closed:
@@ -4192,7 +4267,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return monitor.status()
 
     def system_alerts(
-        manga_list: list[dict[str, Any]], jobs: list[dict[str, Any]]
+        manga_list: list[dict[str, Any]],
+        jobs: list[dict[str, Any]],
+        metadata_status: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Faults only a person can fix, worst first.
 
@@ -4330,6 +4407,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "href": "#/settings?tab=sources",
                 }
             )
+        catalogue_state = getattr(monitor, "suwayomi_catalogue_status", None)
+        if isinstance(catalogue_state, dict):
+            for key, title, kind in (
+                (
+                    "suwayomi_catalogue",
+                    "Suwayomi catalogue cleanup failed",
+                    "cleanup",
+                ),
+                (
+                    "suwayomi_catalogue_compact",
+                    "Suwayomi catalogue compact failed",
+                    "compact",
+                ),
+            ):
+                message = catalogue_failure_message(catalogue_state.get(kind))
+                if not message:
+                    continue
+                alerts.append(
+                    {
+                        "level": "danger",
+                        "key": key,
+                        "title": title,
+                        "detail": message,
+                        "href": "#/system",
+                        "signature": f"{title}: {message}",
+                    }
+                )
         challenged = challenged_sources()
         if challenged:
             alerts.append(
@@ -4341,16 +4445,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     + ", ".join(challenged)[:160],
                 }
             )
-        metadata_status = metadata.status() if hasattr(metadata, "status") else {}
-        if isinstance(metadata_status, dict) and metadata_status.get(
-            "last_cycle_error"
-        ):
+        metadata_state = metadata_status
+        if metadata_state is None:
+            metadata_state = metadata.status() if hasattr(metadata, "status") else {}
+        if isinstance(metadata_state, dict) and metadata_state.get("last_cycle_error"):
             alerts.append(
                 {
                     "level": "warn",
                     "key": "metadata",
                     "title": "Metadata refresh reported errors",
-                    "detail": str(metadata_status.get("last_cycle_error"))[:200],
+                    "detail": str(metadata_state.get("last_cycle_error"))[:200],
                 }
             )
         update = updates.status()
@@ -4380,8 +4484,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if dismissed.get(str(alert["key"])) != alert["signature"]
         ]
 
-    status_rows_cache: dict[str, Any] = {"revision": None, "rows": []}
+    alert_rows_cache: dict[str, Any] = {"revision": None, "rows": []}
     wanted_alert_cache: dict[str, Any] = {"revision": None, "ids": frozenset()}
+
+    def _status_alert_rows() -> list[dict[str, Any]]:
+        revision = database._read_model_revision(("manga", "manga_release_source"))
+        if alert_rows_cache.get("revision") != revision:
+            alert_rows_cache["rows"] = database.list_status_alert_rows()
+            alert_rows_cache["revision"] = revision
+        return alert_rows_cache["rows"]
 
     @app.get("/api/system/status")
     async def system_status():
@@ -4403,18 +4514,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "used": None,
                     }
 
-            # Totals and alerts need the rows and the raw counts, not the
-            # canonical coverage that decodes every release. The rows are
-            # reused until the library changes: the aggregate over every
-            # release costs half a second per 1,500 series.
-            revision = database.library_revision()
-            if status_rows_cache.get("revision") != revision:
-                status_rows_cache["rows"] = database.list_manga(
-                    with_logical_counts=False
-                )
-                status_rows_cache["revision"] = revision
-            manga_list = status_rows_cache["rows"]
+            # Series totals and source-outage rows stay on the request: they
+            # do not join chapters. The distinct chapter counts are the last
+            # background snapshot; this call starts a refresh when they are
+            # stale and does not wait for it.
+            schedule_chapter_totals()
+            manga_totals = database.manga_totals()
+            with chapter_headline_lock:
+                chapter_count = int(chapter_headline["chapters"])
+                downloaded_count = int(chapter_headline["downloaded"])
             jobs = database.list_jobs(500)
+            metadata_state = metadata.status() if hasattr(metadata, "status") else {}
             return {
                 "version": __version__,
                 "update": updates.status(),
@@ -4432,10 +4542,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "library": disk(settings.library_dir),
                 },
                 "totals": {
-                    "series": len(manga_list),
-                    "monitored": sum(1 for item in manga_list if item["monitored"]),
-                    "chapters": sum(item["chapter_count"] for item in manga_list),
-                    "downloaded": sum(item["downloaded_count"] for item in manga_list),
+                    "series": manga_totals["series"],
+                    "monitored": manga_totals["monitored"],
+                    "chapters": chapter_count,
+                    "downloaded": downloaded_count,
                     "jobs": len(jobs),
                     "failed_jobs": sum(1 for job in jobs if job["status"] == "failed"),
                 },
@@ -4447,7 +4557,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }
                     for item in providers.values()
                 ],
-                "alerts": system_alerts(manga_list, jobs),
+                "alerts": system_alerts(_status_alert_rows(), jobs, metadata_state),
                 "library_alignment": reader_alignment_status(),
                 "suwayomi": (
                     {
@@ -4462,7 +4572,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "ntfy_configured": service.notifier.configured,
                 "notifications": service.notifier.configured_channels(),
                 "monitor": monitor.status(),
-                "metadata": metadata.status(),
+                "metadata": metadata_state,
                 "torrents": torrents.status(),
                 "library": service.library_status(),
                 "backups": _list_backups(),
@@ -4869,7 +4979,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await discover_local_reader(settings)
 
     def _suwayomi_runtime_status() -> dict[str, Any]:
-        return {
+        payload = {
             **suwayomi_runtime.status(),
             "mode": settings.suwayomi_mode,
             "enabled": settings.suwayomi_enabled,
@@ -4877,6 +4987,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "public_url": settings.suwayomi_public_url,
             "external_url": settings.suwayomi_url,
         }
+        catalogue_state = getattr(monitor, "suwayomi_catalogue_status", None)
+        if isinstance(catalogue_state, dict):
+            cleanup_error = catalogue_failure_message(catalogue_state.get("cleanup"))
+            compact_error = catalogue_failure_message(catalogue_state.get("compact"))
+            if cleanup_error:
+                payload["catalogue_error"] = cleanup_error
+            if compact_error:
+                payload["compact_error"] = compact_error
+        return payload
 
     def _require_managed_suwayomi() -> None:
         if not settings.suwayomi_managed:
@@ -6361,4 +6480,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return FileResponse(requested, headers=headers)
             return FileResponse(frontend_dist / "index.html", headers=spa_headers)
 
+    schedule_chapter_totals()
     return app

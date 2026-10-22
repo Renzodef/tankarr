@@ -81,6 +81,10 @@ class ReleaseMonitor:
         # Set by the application once catalogue maintenance exists. Called
         # after the Suwayomi batch, with the batch flag already clear.
         self.after_suwayomi_batch: Callable[[], Any] | None = None
+        # Last catalogue cleanup and compact, including a failure. The System
+        # page turns an error here into an alert; the value is None until a
+        # pass has run in this process.
+        self.suwayomi_catalogue_status: dict[str, Any] | None = None
         # Managed Suwayomi: one hold for the series that need it, or for a
         # Wanted pass, so the server starts once per pass instead of once
         # per series.
@@ -2192,6 +2196,7 @@ class ReleaseMonitor:
             "last_cycle_checked": self.last_cycle_checked,
             "last_cycle_deferred": self.last_cycle_deferred,
             "last_cycle_error": self.last_cycle_error,
+            "suwayomi_catalogue": self.suwayomi_catalogue_status,
             "wanted_search": {
                 "enabled": self.settings.wanted_search_enabled,
                 "interval_seconds": self.settings.wanted_search_interval_seconds,

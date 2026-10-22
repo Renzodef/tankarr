@@ -17,6 +17,7 @@ import csv
 import inspect
 import io
 import logging
+import math
 import re
 import subprocess
 import tempfile
@@ -274,6 +275,85 @@ def catalogue_pass_is_recent(
     return (now - when).total_seconds() < float(interval_seconds)
 
 
+def catalogue_limits(size: int) -> tuple[int, int, int]:
+    """Pass, round and compact timeouts for a database of ``size`` bytes.
+
+    A file of a few dozen megabytes keeps the short limits. Past that, each
+    extra 256 MiB adds time, up to one hour for the pass, twenty minutes for
+    one script (the chapter scan) and forty-five minutes for compaction.
+    A file of several hundred megabytes needs that scan and ``SHUTDOWN
+    COMPACT`` to finish; the short limits kill both.
+    """
+
+    if size <= LARGE_DATABASE_BYTES:
+        return (
+            SMALL_PASS_BUDGET_SECONDS,
+            ROUND_TIMEOUT_SECONDS,
+            COMPACT_TIMEOUT_SECONDS,
+        )
+    steps = math.ceil((size - LARGE_DATABASE_BYTES) / (256 * 1024 * 1024))
+    return (
+        min(LARGE_PASS_BUDGET_SECONDS + steps * 10 * 60, 60 * 60),
+        min(ROUND_TIMEOUT_SECONDS + steps * 180, 20 * 60),
+        min(COMPACT_TIMEOUT_SECONDS + steps * 600, 45 * 60),
+    )
+
+
+def cleanup_jvm(base: Path) -> tuple[str, ...]:
+    """Heap for one cleanup JVM. A large file does not fit in 192 MiB."""
+
+    try:
+        size = Path(f"{base}.mv.db").stat().st_size
+    except OSError:
+        size = 0
+    if size >= 512 * 1024 * 1024:
+        heap = "-Xmx512m"
+    elif size > LARGE_DATABASE_BYTES:
+        heap = "-Xmx320m"
+    else:
+        heap = "-Xmx192m"
+    return (heap, *CLEANUP_JVM[1:])
+
+
+# JDBC base path to the user that last opened it. Process-local: a wrong
+# guess only costs one rejected login, then the other user is tried.
+_h2_users: dict[str, str] = {}
+
+
+def _h2_auth_failure(message: str) -> bool:
+    folded = message.casefold()
+    return "28000" in message or "wrong user name or password" in folded
+
+
+def _h2_user_candidates(base: Path) -> list[str]:
+    """The user that worked here, then a blank user, then ``sa``.
+
+    Suwayomi creates the database with an empty user. Older files, and the
+    H2 default, use ``sa``. A wrong user fails before any SQL, with state
+    28000, and ``IFEXISTS`` means the attempt does not create a user.
+    """
+
+    remembered = _h2_users.get(str(base))
+    defaults = ["", "sa"]
+    if remembered in defaults:
+        return [remembered, *[item for item in defaults if item != remembered]]
+    return defaults
+
+
+def catalogue_failure_message(stored: object) -> str | None:
+    """The error or abort text from one stored cleanup or compact result."""
+
+    if not isinstance(stored, dict):
+        return None
+    result = stored.get("result")
+    if not isinstance(result, dict):
+        return None
+    error = result.get("error") or result.get("aborted")
+    if not error:
+        return None
+    return str(error)[:300]
+
+
 def compact_due(size: int, previous: int | None) -> bool:
     """Compact a large file once, then only after it has grown again.
 
@@ -300,6 +380,55 @@ def _csv_path(statement: str) -> Path | None:
     return Path(statement[start:end].replace("''", "'"))
 
 
+def _run_h2_script(
+    java: str,
+    jar: Path,
+    base: Path,
+    script_path: Path,
+    user: str,
+    timeout: float,
+) -> str:
+    escaped = str(script_path).replace("'", "''")
+    command = [
+        java,
+        *cleanup_jvm(base),
+        "-cp",
+        str(jar),
+        "org.h2.tools.Shell",
+        "-url",
+        f"jdbc:h2:{base};IFEXISTS=TRUE",
+        "-user",
+        user,
+        "-password",
+        "",
+        "-sql",
+        f"RUNSCRIPT FROM '{escaped}'",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CatalogueCommandError(
+            f"H2 cleanup script exceeded {int(timeout)}s"
+        ) from exc
+    output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+    if completed.returncode != 0:
+        if "ClassNotFoundException" in output and "org.h2.tools.Shell" in output:
+            raise CatalogueCommandError(
+                "Suwayomi's server JAR does not expose org.h2.tools.Shell; "
+                "catalogue cleanup cannot run"
+            )
+        if "OutOfMemoryError" in output or completed.returncode == 3:
+            raise CatalogueHeapError(output[-500:])
+        raise CatalogueCommandError(output[-500:])
+    return output
+
+
 def execute_h2(
     java: str,
     jar: Path,
@@ -307,7 +436,12 @@ def execute_h2(
     statements: Sequence[str],
     timeout: float,
 ) -> str:
-    """Run one H2 script. ``IFEXISTS`` refuses to create a new database."""
+    """Run one H2 script. ``IFEXISTS`` refuses to create a new database.
+
+    The user is the one that last opened this file, or a blank user and then
+    ``sa``. Only a rejected login (SQL state 28000) tries the next user. A
+    lock, a syntax error or a timeout is reported as itself.
+    """
 
     script = "\n".join(statements)
     if "CACHE_SIZE" in script.upper():
@@ -318,45 +452,21 @@ def execute_h2(
         handle.write(script)
         script_path = Path(handle.name)
     try:
-        escaped = str(script_path).replace("'", "''")
-        command = [
-            java,
-            *CLEANUP_JVM,
-            "-cp",
-            str(jar),
-            "org.h2.tools.Shell",
-            "-url",
-            f"jdbc:h2:{base};IFEXISTS=TRUE",
-            "-user",
-            "sa",
-            "-password",
-            "",
-            "-sql",
-            f"RUNSCRIPT FROM '{escaped}'",
-        ]
-        try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise CatalogueCommandError(
-                f"H2 cleanup script exceeded {int(timeout)}s"
-            ) from exc
-        output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
-        if completed.returncode != 0:
-            if "ClassNotFoundException" in output and "org.h2.tools.Shell" in output:
-                raise CatalogueCommandError(
-                    "Suwayomi's server JAR does not expose org.h2.tools.Shell; "
-                    "catalogue cleanup cannot run"
-                )
-            if "OutOfMemoryError" in output or completed.returncode == 3:
-                raise CatalogueHeapError(output[-500:])
-            raise CatalogueCommandError(output[-500:])
-        return output
+        candidates = _h2_user_candidates(base)
+        last_error: CatalogueCommandError | None = None
+        for index, user in enumerate(candidates):
+            try:
+                output = _run_h2_script(java, jar, base, script_path, user, timeout)
+            except CatalogueCommandError as exc:
+                if _h2_auth_failure(str(exc)) and index + 1 < len(candidates):
+                    _h2_users.pop(str(base), None)
+                    logger.info("Suwayomi H2 user was rejected; trying the next one")
+                    last_error = exc
+                    continue
+                raise
+            _h2_users[str(base)] = user
+            return output
+        raise last_error or CatalogueCommandError("H2 login failed")
     finally:
         script_path.unlink(missing_ok=True)
 
@@ -388,17 +498,13 @@ def apply_catalogue_pass(
     if not database_file.is_file():
         return {"skipped": "no database"}
     size = database_file.stat().st_size
-    budget = (
-        LARGE_PASS_BUDGET_SECONDS
-        if size > LARGE_DATABASE_BYTES
-        else SMALL_PASS_BUDGET_SECONDS
-    )
+    budget, round_timeout, compact_timeout = catalogue_limits(size)
     deadline = clock() + budget
     with tempfile.TemporaryDirectory(prefix="tankarr-suwayomi-") as temporary:
         schema_csv = Path(temporary) / "schema.csv"
         execute(
             [csvwrite(schema_csv, SCHEMA_QUERY)],
-            min(ROUND_TIMEOUT_SECONDS, budget),
+            min(round_timeout, budget),
         )
         columns = parse_columns(schema_csv.read_text(encoding="utf-8"))
         manga_table = resolve_table(columns, MANGA_REQUIRED, "mangatable")
@@ -418,7 +524,7 @@ def apply_catalogue_pass(
         count_csv = Path(temporary) / "count.csv"
         prepare.append(csvwrite(count_csv, count_query(manga_table, manga_fields)))
         try:
-            execute(prepare, min(ROUND_TIMEOUT_SECONDS, max(1.0, deadline - clock())))
+            execute(prepare, min(round_timeout, max(1.0, deadline - clock())))
         except CatalogueHeapError:
             # The chapter scan is in this script and no delete has run.
             _drop_keep(execute)
@@ -440,9 +546,7 @@ def apply_catalogue_pass(
             script = [delete_sql(manga_table, manga_fields, batch)] * repeats
             script.append(csvwrite(count_csv, count_query(manga_table, manga_fields)))
             try:
-                execute(
-                    script, min(ROUND_TIMEOUT_SECONDS, max(1.0, deadline - clock()))
-                )
+                execute(script, min(round_timeout, max(1.0, deadline - clock())))
             except CatalogueHeapError:
                 if batch == 1:
                     aborted = "a single-row delete ran out of memory"
@@ -455,7 +559,7 @@ def apply_catalogue_pass(
         if remaining == 0 and deleted > 0 and aborted is None:
             execute(
                 ["DROP TABLE IF EXISTS TANKARR_KEEP;", "SHUTDOWN COMPACT;"],
-                COMPACT_TIMEOUT_SECONDS,
+                compact_timeout,
             )
             compacted = True
         else:

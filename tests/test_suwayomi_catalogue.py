@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from tankarr import suwayomi_catalogue as catalogue
 from tankarr.suwayomi_catalogue import (
     BATCH_ROWS,
+    CatalogueCommandError,
     CatalogueHeapError,
     CatalogueSchemaError,
     apply_catalogue_pass,
+    catalogue_failure_message,
+    catalogue_limits,
     catalogue_pass_is_recent,
     chapter_keep_sql,
+    cleanup_jvm,
     compact_due,
     csvwrite,
     delete_sql,
+    execute_h2,
     parse_count,
     quote_ident,
     run_while_stopped,
@@ -80,6 +87,141 @@ def _script_writes(statements: list[str], text: str) -> None:
         start = statement.find("CSVWRITE('") + len("CSVWRITE('")
         end = statement.find("'", start)
         Path(statement[start:end]).write_text(text, encoding="utf-8")
+
+
+def test_a_930_mebibyte_catalogue_gets_room_to_scan_and_compact():
+    size = 930 * 1024 * 1024
+    pass_seconds, round_seconds, compact_seconds = catalogue_limits(size)
+    assert round_seconds >= 10 * 60
+    assert pass_seconds >= round_seconds
+    assert compact_seconds >= 20 * 60
+    assert (pass_seconds, round_seconds, compact_seconds) == (60 * 60, 15 * 60, 45 * 60)
+    assert catalogue_limits(1024) == (8 * 60, 180, 600)
+
+
+def test_cleanup_heap_grows_with_the_database(tmp_path: Path):
+    database = tmp_path / "database.mv.db"
+    database.write_bytes(b"x")
+    base = tmp_path / "database"
+    assert cleanup_jvm(base)[0] == "-Xmx192m"
+    with database.open("wb") as handle:
+        handle.truncate(65 * 1024 * 1024)
+    assert cleanup_jvm(base)[0] == "-Xmx320m"
+    with database.open("wb") as handle:
+        handle.truncate(512 * 1024 * 1024)
+    assert cleanup_jvm(base)[0] == "-Xmx512m"
+
+
+def test_h2_login_tries_a_blank_user_before_sa(tmp_path: Path, monkeypatch):
+    catalogue._h2_users.clear()
+    calls: list[str] = []
+
+    def fake_run(command, **_kwargs):
+        user = command[command.index("-user") + 1]
+        calls.append(user)
+        assert "-Xmx192m" in command
+        if user == "":
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                "",
+                "Wrong user name or password [28000]",
+            )
+        return subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(catalogue.subprocess, "run", fake_run)
+    base = tmp_path / "database"
+    (tmp_path / "database.mv.db").write_bytes(b"x")
+    output = execute_h2("java", tmp_path / "server.jar", base, ["SELECT 1;"], 5)
+    assert calls == ["", "sa"]
+    assert "ok" in output
+
+    calls.clear()
+    again = execute_h2("java", tmp_path / "server.jar", base, ["SELECT 1;"], 5)
+    assert calls == ["sa"]
+    assert "ok" in again
+
+    def blank_works(command, **_kwargs):
+        user = command[command.index("-user") + 1]
+        calls.append(user)
+        if user == "sa":
+            return subprocess.CompletedProcess(
+                command, 1, "", "Wrong user name or password [28000]"
+            )
+        return subprocess.CompletedProcess(command, 0, "blank\n", "")
+
+    calls.clear()
+    monkeypatch.setattr(catalogue.subprocess, "run", blank_works)
+    switched = execute_h2("java", tmp_path / "server.jar", base, ["SELECT 1;"], 5)
+    assert calls == ["sa", ""]
+    assert "blank" in switched
+    calls.clear()
+    execute_h2("java", tmp_path / "server.jar", base, ["SELECT 1;"], 5)
+    assert calls == [""]
+
+
+def test_h2_login_does_not_retry_anything_but_a_rejected_user(
+    tmp_path: Path, monkeypatch
+):
+    catalogue._h2_users.clear()
+    calls: list[str] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command[command.index("-user") + 1])
+        return subprocess.CompletedProcess(
+            command, 1, "", "Syntax error in SQL statement"
+        )
+
+    monkeypatch.setattr(catalogue.subprocess, "run", fake_run)
+    base = tmp_path / "database"
+    (tmp_path / "database.mv.db").write_bytes(b"x")
+    with pytest.raises(CatalogueCommandError, match="Syntax error"):
+        execute_h2("java", tmp_path / "server.jar", base, ["SELECT 1;"], 5)
+    assert calls == [""]
+
+
+def test_a_bloated_catalogue_pass_keeps_the_chapter_scan_alive(tmp_path: Path):
+    database = tmp_path / "database.mv.db"
+    with database.open("wb") as handle:
+        handle.truncate(930 * 1024 * 1024)
+    seen: list[float] = []
+
+    def execute(statements, timeout):
+        seen.append(timeout)
+        joined = "\n".join(statements)
+        if "INFORMATION_SCHEMA" in joined:
+            _script_writes(statements, SCHEMA)
+            return ""
+        raise CatalogueHeapError("stop after the chapter scan is scheduled")
+
+    outcome = apply_catalogue_pass(
+        database_file=database,
+        protected_ids=[7],
+        max_age_hours=24,
+        execute=execute,
+    )
+    assert seen[0] >= 10 * 60
+    assert seen[1] >= 10 * 60
+    assert outcome["aborted"]
+    assert outcome["deleted"] == 0
+
+
+def test_catalogue_failure_text_is_the_stored_error_or_abort():
+    assert catalogue_failure_message(None) is None
+    assert catalogue_failure_message({"result": {"skipped": "recent"}}) is None
+    message = catalogue_failure_message(
+        {
+            "result": {
+                "error": "CatalogueCommandError: Wrong user name or password [28000]"
+            }
+        }
+    )
+    assert message is not None
+    assert "28000" in message
+    aborted = catalogue_failure_message(
+        {"result": {"aborted": "chapter scan ran out of memory"}}
+    )
+    assert aborted == "chapter scan ran out of memory"
 
 
 def test_a_finished_pass_compacts_and_a_chapter_scan_oom_deletes_nothing(tmp_path):

@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import json
 import threading
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -418,12 +419,12 @@ def test_compact_wanted_omits_the_boilerplate_verdict_of_unsearched_slots(
     assert set(compact_chapters[0]) >= {"id", "chapter", "volume", "title", "slot_key"}
 
 
-def test_status_reuses_the_orphan_summary_and_the_series_rows(
+def test_status_does_not_scan_series_rows_or_wait_for_chapter_totals(
     tmp_path: Path, monkeypatch
 ):
-    """The System page polls the status; at 1,500 series the orphan scan
-    (a stat per tracked file) and the release aggregate behind the series
-    rows cost two seconds per call. Both are reused until something changes."""
+    """The System page used to join every chapter and decode every series on
+    the request. Totals are a count plus a background snapshot, and the
+    orphan summary stays the one already stored."""
 
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -441,6 +442,29 @@ def test_status_reuses_the_orphan_summary_and_the_series_rows(
     with TestClient(app) as client:
         service = app.state.service
         database = app.state.database
+        database.upsert_manga(manga(), "en", "all")
+        database.upsert_chapters(
+            "performance-work",
+            [
+                chapter(),
+                {**chapter(), "id": "same-slot", "provider": "other"},
+                {**chapter(), "id": "chapter-2", "chapter": "2"},
+            ],
+        )
+        database.mark_chapter_downloaded(
+            "performance-chapter", tmp_path / "chapter.cbz"
+        )
+        rows = database.list_manga(with_logical_counts=False)
+        totals = database.chapter_totals()
+        assert totals == {
+            "chapters": sum(item["chapter_count"] for item in rows),
+            "downloaded": sum(item["downloaded_count"] for item in rows),
+        }
+        assert totals == {"chapters": 2, "downloaded": 1}
+        headline = database.manga_totals()
+        assert headline["series"] == len(rows) == 1
+        assert headline["monitored"] == 1
+
         scans = {"count": 0}
         original_scan = service.library_orphans
 
@@ -450,39 +474,96 @@ def test_status_reuses_the_orphan_summary_and_the_series_rows(
 
         monkeypatch.setattr(service, "library_orphans", counted_scan)
         listings = {"count": 0}
-        original_list = database.list_manga
 
-        def counted_list(*args, **kwargs):
+        def counted_list(*_args, **_kwargs):
             listings["count"] += 1
-            return original_list(*args, **kwargs)
+            raise AssertionError("status must not list every series")
 
         monkeypatch.setattr(database, "list_manga", counted_list)
+        release = threading.Event()
 
-        first = client.get("/api/system/status").json()
-        second = client.get("/api/system/status").json()
-        assert [
-            alert["key"]
-            for alert in first["alerts"]
-            if alert["key"] == "library_orphans"
-        ] == []
-        assert second["alerts"] == first["alerts"]
-        assert scans["count"] == 0, "status must not walk the library"
-        assert listings["count"] == 1, (
-            "the rows must be reused while the library revision is unchanged"
+        def blocking_totals():
+            assert release.wait(5)
+            return {"chapters": 2, "downloaded": 1}
+
+        monkeypatch.setattr(database, "chapter_totals", blocking_totals)
+        database.upsert_chapters(
+            "performance-work",
+            [{**chapter(), "id": "chapter-3", "chapter": "3"}],
         )
 
-        # An explicit scan from the System page is always fresh and refreshes the summary.
-        assert client.get("/api/library/orphans").json()["count"] == 1
-        assert scans["count"] == 1
-        third = client.get("/api/system/status").json()
-        assert any(alert["key"] == "library_orphans" for alert in third["alerts"])
-        assert scans["count"] == 1
+        try:
+            started = time.monotonic()
+            first = client.get("/api/system/status").json()
+            elapsed = time.monotonic() - started
+            second = client.get("/api/system/status").json()
+            assert elapsed < 2
+            assert [
+                alert["key"]
+                for alert in first["alerts"]
+                if alert["key"] == "library_orphans"
+            ] == []
+            assert second["alerts"] == first["alerts"]
+            assert scans["count"] == 0, "status must not walk the library"
+            assert listings["count"] == 0
+            assert first["totals"]["series"] == 1
+            assert isinstance(first["totals"]["chapters"], int)
 
-        # A library change invalidates the rows; the orphan summary follows the
-        # next organization or deletion, not the row revision.
-        database.upsert_manga(manga(), "en", "all")
-        client.get("/api/system/status")
-        assert listings["count"] == 2
+            assert client.get("/api/library/orphans").json()["count"] == 1
+            assert scans["count"] == 1
+            third = client.get("/api/system/status").json()
+            assert any(alert["key"] == "library_orphans" for alert in third["alerts"])
+            assert scans["count"] == 1
+
+            database.upsert_manga(
+                {**manga(), "id": "second-work", "title": "Second Work"},
+                "en",
+                "none",
+            )
+            fourth = client.get("/api/system/status").json()
+            assert listings["count"] == 0
+            assert fourth["totals"]["series"] == 2
+            assert fourth["totals"]["monitored"] == 1
+        finally:
+            release.set()
+
+
+def test_a_catalogue_failure_is_visible_on_system_and_monitor_status(
+    tmp_path: Path,
+):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        auth_required=False,
+        restored_safe_mode=True,
+    )
+    provision_library_identity(settings)
+    app = create_app(settings)
+    error = "CatalogueCommandError: Wrong user name or password [28000]"
+    app.state.monitor.suwayomi_catalogue_status = {
+        "cleanup": {
+            "at": "2026-10-22T00:00:00+00:00",
+            "result": {"error": error},
+        },
+        "compact": {
+            "at": "2026-10-22T00:00:00+00:00",
+            "result": {"error": "CatalogueCommandError: compact failed"},
+        },
+    }
+    with TestClient(app) as client:
+        body = client.get("/api/system/status").json()
+        monitor = client.get("/api/monitor/status").json()
+    by_key = {alert["key"]: alert for alert in body["alerts"]}
+    assert "28000" in by_key["suwayomi_catalogue"]["detail"]
+    assert by_key["suwayomi_catalogue"]["level"] == "danger"
+    assert "compact failed" in by_key["suwayomi_catalogue_compact"]["detail"]
+    assert body["monitor"]["suwayomi_catalogue"]["cleanup"]["result"]["error"] == error
+    assert monitor["suwayomi_catalogue"]["compact"]["result"]["error"].endswith(
+        "compact failed"
+    )
+    assert body["suwayomi"]["catalogue_error"] == error
+    assert "compact failed" in body["suwayomi"]["compact_error"]
 
 
 def test_calendar_windows_of_one_revision_share_the_decoded_snapshot(
