@@ -5233,7 +5233,20 @@ class Database:
     def suwayomi_catalogue_keep_ids(
         self, *, instance_token: str | None, max_age_hours: int
     ) -> set[int]:
-        """Suwayomi ids Tankarr still needs: mappings, open reviews, recent touches."""
+        """Suwayomi manga ids cleanup must not delete.
+
+        Permanent, for this Suwayomi instance only:
+
+        * a library series whose own id is a Suwayomi id
+        * every mapped Suwayomi source, monitored or not, including a
+          disabled mapping
+        * a series with a download or import still in progress
+        * a series that already has an imported library file from that source
+
+        Search touches are kept only inside the age window. An id minted by
+        another Suwayomi instance is not a row in this database, so it is
+        left out. Chapter ids are never treated as manga ids.
+        """
 
         from datetime import timedelta
 
@@ -5241,6 +5254,13 @@ class Database:
 
         cutoff = (datetime.now(UTC) - timedelta(hours=int(max_age_hours))).isoformat()
         ids: set[int] = set()
+        active_jobs = (
+            "queued",
+            "running",
+            "downloading",
+            "packaging",
+            "importing",
+        )
 
         def take(value: object) -> None:
             if not suwayomi_id_is_current(value, instance_token):
@@ -5255,7 +5275,50 @@ class Database:
         for review in self.list_match_reviews(open_only=True):
             if str(review.get("provider") or "") == "suwayomi":
                 take(review.get("candidate_id"))
+                payload = review.get("payload") or {}
+                if isinstance(payload, dict):
+                    take(payload.get("provider_manga_id"))
         with self.connect() as connection:
+            for row in connection.execute("SELECT id FROM manga"):
+                take(row[0])
+            placeholders = ",".join("?" * len(active_jobs))
+            for row in connection.execute(
+                f"SELECT manga_id FROM download_job WHERE status IN ({placeholders})",
+                active_jobs,
+            ):
+                take(row[0])
+            for row in connection.execute(
+                f"""
+                SELECT source.provider_manga_id
+                FROM manga_release_source AS source
+                JOIN download_job AS job ON job.manga_id = source.manga_id
+                WHERE source.provider='suwayomi'
+                  AND job.status IN ({placeholders})
+                """,
+                active_jobs,
+            ):
+                take(row[0])
+            for row in connection.execute(
+                """
+                SELECT manga_id FROM chapter_release
+                WHERE NULLIF(local_import_sha256, '') IS NOT NULL
+                   OR NULLIF(library_path, '') IS NOT NULL
+                """
+            ):
+                take(row[0])
+            for row in connection.execute(
+                """
+                SELECT source.provider_manga_id
+                FROM manga_release_source AS source
+                JOIN chapter_release AS chapter ON chapter.manga_id = source.manga_id
+                WHERE source.provider='suwayomi'
+                  AND (
+                    NULLIF(chapter.local_import_sha256, '') IS NOT NULL
+                    OR NULLIF(chapter.library_path, '') IS NOT NULL
+                  )
+                """
+            ):
+                take(row[0])
             connection.execute(
                 "DELETE FROM suwayomi_catalogue_touch WHERE seen_at < ?",
                 (cutoff,),
