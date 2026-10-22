@@ -1802,6 +1802,52 @@ class Database:
                 self._attach_logical_chapter_counts(connection, result)
         return result
 
+    def list_monitor_candidates(self) -> list[dict[str, Any]]:
+        """Rows the release monitor needs to decide what is due.
+
+        This stays a light query: the library list decodes every chapter to
+        count logical releases, which a scheduling pass must not do.
+        """
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT m.id, m.provider, m.monitor_mode, m.status,
+                       m.status_override, m.last_checked_at, m.last_check_error,
+                       m.monitor_initialized,
+                       EXISTS (
+                           SELECT 1 FROM manga_release_source AS source
+                           WHERE source.manga_id = m.id
+                             AND source.provider = 'suwayomi'
+                             AND source.enabled = 1
+                       ) AS suwayomi_source,
+                       (
+                           SELECT MAX(chapter.publish_at)
+                           FROM chapter_release AS chapter
+                           WHERE chapter.manga_id = m.id
+                             AND chapter.language = m.preferred_language
+                             AND chapter.publish_at IS NOT NULL
+                             AND trim(chapter.publish_at) <> ''
+                       ) AS newest_publish_at
+                FROM manga AS m
+                """
+            ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "provider": str(row["provider"] or ""),
+                "monitor_mode": str(row["monitor_mode"] or "none"),
+                "status": row["status"],
+                "status_override": row["status_override"],
+                "last_checked_at": row["last_checked_at"],
+                "last_check_error": row["last_check_error"],
+                "monitor_initialized": bool(row["monitor_initialized"]),
+                "suwayomi_source": bool(row["suwayomi_source"]),
+                "newest_publish_at": row["newest_publish_at"],
+            }
+            for row in rows
+        ]
+
     def library_revision(self) -> tuple[str, ...]:
         """Cheap fingerprint for every table used by the Library summary."""
         return self._read_model_revision(LIBRARY_REVISION_TABLES)

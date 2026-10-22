@@ -22,6 +22,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -234,6 +235,43 @@ def count_query(manga_table: str, fields: dict[str, str]) -> str:
         f"SELECT COUNT(*) AS N FROM {quote_ident(manga_table)} "
         f"WHERE {_col(fields, 'id')} NOT IN (SELECT ID FROM TANKARR_KEEP)"
     )
+
+
+def catalogue_pass_is_recent(
+    stored: dict[str, Any] | None,
+    *,
+    now: datetime,
+    interval_seconds: float,
+) -> bool:
+    """True when the last finished cleanup is still inside its interval.
+
+    A deferred, failed or aborted pass is not recent, so the next caller
+    retries. Callers that skip for this reason must not rewrite the stored
+    timestamp: that would push a real pass further away without doing one.
+    """
+
+    if not isinstance(stored, dict):
+        return False
+    result = stored.get("result")
+    if not isinstance(result, dict):
+        return False
+    if result.get("error") or result.get("deferred") or result.get("aborted"):
+        return False
+    if "deleted" not in result:
+        return False
+    raw = stored.get("at")
+    if not raw:
+        return False
+    text = str(raw).strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        when = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return (now - when).total_seconds() < float(interval_seconds)
 
 
 def compact_due(size: int, previous: int | None) -> bool:

@@ -304,9 +304,26 @@ Two independent schedules drive the automation. Both can be switched off and
 tuned in **Settings → General**:
 
 - **Release monitoring** (`TANKARR_MONITOR_INTERVAL_SECONDS`, default 1800, every
-  30 minutes): every series monitored for new chapters (All or Future) has its
-  sources refreshed and new chapters queued. Existing and None series only have
-  their metadata refreshed, and series imported locally are not polled.
+  30 minutes): each cycle refreshes only the series that are due, and stops
+  once it has used `TANKARR_MONITOR_CYCLE_BUDGET_SECONDS` (default 480, eight
+  minutes). A series with a chapter in the last 14 days is due every monitor
+  interval, including one marked completed or on hiatus, so a series that is
+  actually publishing is not left for a day. An ongoing series, or one with
+  no publication status, is due once a day when it has no dated chapter or
+  its newest is between 14 and 90 days old, and once a week after that. A
+  completed, cancelled or paused series is due once a week unless a chapter
+  landed in the last 14 days. A series that has never been checked is due
+  immediately, and a
+  restart continues with the ones still due instead of starting over. One
+  series that does not answer within `TANKARR_MONITOR_SERIES_TIMEOUT_SECONDS`
+  (default 90) is recorded and left for six hours. All and Future series have
+  new chapters queued; Existing and None series only have their metadata
+  refreshed, on that same schedule. Series imported locally are not polled.
+  The managed Suwayomi server is held only while series that read through it
+  are refreshed. Catalogue cleanup and compaction then run while it is
+  stopped. Refreshing a series fetches that series only; it does not add
+  other catalogue rows. The file still grows while chapter lists are
+  rewritten, and compaction after the batch returns that space.
 - **Scheduled Wanted recovery** (`TANKARR_WANTED_SEARCH_INTERVAL_SECONDS`,
   default 21600, every 6 hours): retries what is still missing. One pass looks
   at no more than 25 series (`TANKARR_WANTED_SEARCH_BUDGET`), the most overdue

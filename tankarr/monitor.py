@@ -7,11 +7,20 @@ import re
 from collections.abc import Callable, Iterable
 from contextlib import AbstractAsyncContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from tankarr.catalogue import NO_REMOTE_PROVIDERS
 from tankarr.config import Settings
 from tankarr.database import Database
+from tankarr.monitor_schedule import (
+    effective_status,
+    is_due,
+    is_hot,
+    parse_timestamp,
+    series_interval_seconds,
+    should_defer,
+)
 from tankarr.monitoring import (
     BACKLOG_MONITOR_MODES,
     FUTURE_MONITOR_MODES,
@@ -62,11 +71,19 @@ class ReleaseMonitor:
         self.translations = None
         self.task: asyncio.Task | None = None
         # True only while a cycle is inside run_cycle, not while the task
-        # sleeps until the next interval. Catalogue cleanup uses this so a
-        # running monitor does not mean "never clean".
+        # sleeps until the next interval. Idle shutdown treats that as "the
+        # next pass is now" so it does not stop the server mid-cycle.
         self.cycle_active = False
-        # Managed Suwayomi: one hold for a whole monitor pass or Wanted pass,
-        # so the server starts once per pass instead of once per series.
+        # True only while this cycle is inside the Suwayomi refresh batch.
+        # Catalogue cleanup waits for this, not for the whole cycle: the
+        # batch is released before cleanup runs.
+        self.suwayomi_batch_active = False
+        # Set by the application once catalogue maintenance exists. Called
+        # after the Suwayomi batch, with the batch flag already clear.
+        self.after_suwayomi_batch: Callable[[], Any] | None = None
+        # Managed Suwayomi: one hold for the series that need it, or for a
+        # Wanted pass, so the server starts once per pass instead of once
+        # per series.
         self.suwayomi_session: (
             Callable[[], AbstractAsyncContextManager[None]] | None
         ) = None
@@ -76,6 +93,8 @@ class ReleaseMonitor:
         self._wanted_search_task: asyncio.Task[dict[str, Any]] | None = None
         self.last_cycle_at: str | None = None
         self.last_cycle_error: str | None = None
+        self.last_cycle_checked = 0
+        self.last_cycle_deferred = 0
         self.last_wanted_search_at: str | None = None
         self.last_wanted_search_result: dict[str, Any] | None = None
         self.last_wanted_search_error: str | None = None
@@ -211,51 +230,175 @@ class ReleaseMonitor:
         self.service.assert_mutations_allowed()
         self.cycle_active = True
         try:
-            async with self._suwayomi_hold():
-                return await self._run_cycle(include_wanted=include_wanted)
+            return await self._run_cycle(include_wanted=include_wanted)
         finally:
             self.cycle_active = False
+            self.suwayomi_batch_active = False
             release_native_heap()
+
+    def _due_series(self, now: datetime | None = None) -> list[dict[str, Any]]:
+        """Series this cycle may refresh, hot ones and the oldest first."""
+
+        now = now or datetime.now(UTC)
+        interval = float(self.settings.monitor_interval_seconds)
+        due: list[dict[str, Any]] = []
+        for row in self.database.list_monitor_candidates():
+            if str(row.get("provider") or "").casefold() == "local":
+                continue
+            if automatic_updates_paused(row):
+                continue
+            status = effective_status(row.get("status"), row.get("status_override"))
+            newest = parse_timestamp(row.get("newest_publish_at"))
+            every = series_interval_seconds(status, newest, now, interval)
+            last = parse_timestamp(row.get("last_checked_at"))
+            if not is_due(
+                last,
+                every,
+                now,
+                error=bool(row.get("last_check_error")),
+            ):
+                continue
+            provider = str(row.get("provider") or "").casefold()
+            due.append(
+                {
+                    "id": str(row["id"]),
+                    "monitor_mode": row.get("monitor_mode"),
+                    "monitor_initialized": bool(row.get("monitor_initialized")),
+                    "hot": is_hot(every, interval),
+                    "needs_suwayomi": provider == "suwayomi"
+                    or bool(row.get("suwayomi_source")),
+                    "last_checked_at": last,
+                }
+            )
+        due.sort(
+            key=lambda item: (
+                0 if item["hot"] else 1,
+                item["last_checked_at"] is not None,
+                item["last_checked_at"] or datetime.min.replace(tzinfo=UTC),
+                item["id"],
+            )
+        )
+        return due
+
+    async def _refresh_budget(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Refresh due series until the cycle budget is spent.
+
+        A refresh asks one mapped source for chapters of one series. It does
+        not search, so it does not create catalogue rows for anything else.
+        """
+
+        started_at = monotonic()
+        budget = float(self.settings.monitor_cycle_budget_seconds)
+        timeout = float(self.settings.monitor_series_timeout_seconds)
+        reserve_for_cold = any(not item["hot"] for item in items)
+        checked = 0
+        queued = 0
+        deferred = 0
+        started = False
+        errors: list[dict[str, str]] = []
+        for item in items:
+            elapsed = monotonic() - started_at
+            if should_defer(
+                elapsed,
+                budget,
+                hot=bool(item["hot"]),
+                started=started,
+                reserve_for_cold=reserve_for_cold,
+            ):
+                deferred += 1
+                continue
+            started = True
+            manga_id = str(item["id"])
+            try:
+                async with asyncio.timeout(timeout):
+                    if item["monitor_mode"] in FUTURE_MONITOR_MODES:
+                        result = await self.refresh_one(manga_id)
+                    else:
+                        await self.service.refresh_metadata(manga_id)
+                        self.database.record_monitor_result(
+                            manga_id,
+                            initialized=bool(item["monitor_initialized"]),
+                        )
+                        result = {"queued": 0}
+                checked += 1
+                queued += int(result.get("queued") or 0)
+            except TimeoutError:
+                checked += 1
+                message = f"TimeoutError: series refresh exceeded {timeout:g}s"
+                self._record_refresh_failure(item, message)
+                errors.append({"manga_id": manga_id, "error": message})
+                logger.warning("Unable to refresh manga %s: %s", manga_id, message)
+            except Exception as exc:  # noqa: BLE001 - one title must not stop the cycle
+                checked += 1
+                message = f"{type(exc).__name__}: {exc}"
+                self._record_refresh_failure(item, message)
+                errors.append({"manga_id": manga_id, "error": message})
+                logger.warning("Unable to refresh manga %s: %s", manga_id, message)
+        if deferred:
+            logger.info(
+                "Monitor deferred %s series after checking %s (budget %ss)",
+                deferred,
+                checked,
+                budget,
+            )
+        return {
+            "checked": checked,
+            "queued": queued,
+            "deferred": deferred,
+            "errors": errors,
+        }
+
+    def _record_refresh_failure(self, item: dict[str, Any], message: str) -> None:
+        self.database.record_monitor_result(
+            str(item["id"]),
+            error=message,
+            initialized=bool(item["monitor_initialized"]),
+        )
 
     async def _run_cycle(self, *, include_wanted: bool) -> dict[str, Any]:
         from tankarr.database import utc_now
 
+        due = self._due_series()
+        suwayomi = [item for item in due if item["needs_suwayomi"]]
+        other = [item for item in due if not item["needs_suwayomi"]]
         checked = 0
         queued = 0
+        deferred = 0
         errors: list[dict[str, str]] = []
-        for manga in self.database.list_manga():
-            if automatic_updates_paused(manga):
-                continue
-            if manga.get("provider") == "local":
-                continue  # Local series have no remote source to poll.
-            try:
-                if manga["monitor_mode"] in FUTURE_MONITOR_MODES:
-                    result = await self.refresh_one(manga["id"])
-                else:
-                    await self.service.refresh_metadata(manga["id"])
-                    result = {"queued": 0}
-                checked += 1
-                queued += result["queued"]
-            except Exception as exc:  # noqa: BLE001 - one title must not stop the cycle
-                checked += 1
-                message = f"{type(exc).__name__}: {exc}"
-                self.database.record_monitor_result(
-                    manga["id"],
-                    error=message,
-                    initialized=manga["monitor_initialized"],
-                )
-                errors.append({"manga_id": manga["id"], "error": message})
-                logger.warning("Unable to refresh manga %s: %s", manga["id"], message)
+        if suwayomi:
+            async with self._suwayomi_hold():
+                self.suwayomi_batch_active = True
+                try:
+                    part = await self._refresh_budget(suwayomi)
+                finally:
+                    self.suwayomi_batch_active = False
+            checked += part["checked"]
+            queued += part["queued"]
+            deferred += part["deferred"]
+            errors.extend(part["errors"])
+            # Cleanup runs after the hold is released. The server can stop
+            # for the SQL, and a later Wanted pass starts it on its own.
+            if self.after_suwayomi_batch is not None:
+                await self.after_suwayomi_batch()
+        if other:
+            part = await self._refresh_budget(other)
+            checked += part["checked"]
+            queued += part["queued"]
+            deferred += part["deferred"]
+            errors.extend(part["errors"])
         wanted_search = None
         if include_wanted and self._wanted_search_due():
             wanted_search = await self.search_wanted(trigger="scheduled")
             if wanted_search["errors"]:
                 errors.extend(wanted_search["errors"])
         self.last_cycle_at = utc_now()
+        self.last_cycle_checked = checked
+        self.last_cycle_deferred = deferred
         self.last_cycle_error = errors[0]["error"] if errors else None
         return {
             "checked": checked,
             "queued": queued + int((wanted_search or {}).get("queued", 0)),
+            "deferred": deferred,
             "errors": errors,
             "wanted_search": wanted_search,
         }
@@ -2046,6 +2189,8 @@ class ReleaseMonitor:
             "interval_seconds": self.settings.monitor_interval_seconds,
             "running": self.task is not None and not self.task.done(),
             "last_cycle_at": self.last_cycle_at,
+            "last_cycle_checked": self.last_cycle_checked,
+            "last_cycle_deferred": self.last_cycle_deferred,
             "last_cycle_error": self.last_cycle_error,
             "wanted_search": {
                 "enabled": self.settings.wanted_search_enabled,

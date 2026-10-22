@@ -223,6 +223,13 @@ class Settings(BaseSettings):
     # 30 minutes: long enough that a managed Suwayomi stopped after its idle
     # timeout is not started again a moment later by the next monitor pass.
     monitor_interval_seconds: float = Field(default=1800.0, ge=5.0, le=86400.0)
+    # One cycle refreshes only series that are due, and stops after this
+    # many seconds. The rest wait for later cycles, so a large library
+    # cannot hold the managed Suwayomi server past the pause above.
+    monitor_cycle_budget_seconds: float = Field(default=480.0, ge=30.0, le=3600.0)
+    # A series that does not answer in time is recorded as a failure and
+    # left until its backoff, instead of stalling the rest of the cycle.
+    monitor_series_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0)
     wanted_search_enabled: bool = True
     wanted_search_interval_seconds: float = Field(
         default=21600.0, ge=900.0, le=604800.0
