@@ -5,7 +5,9 @@ server has no API that deletes a manga. Listing the whole catalogue through
 GraphQL loads every row into a 256 MB heap and crashes the process, so
 cleanup never asks GraphQL for the list. It stops the managed server, then
 deletes unneeded rows in small SQL batches with a separate, smaller JVM.
-Chapters, pages and metadata follow the manga row through foreign keys.
+Pages, chapter metadata, category links, manga metadata and tracking rows
+are deleted before the manga row. The pinned server also cascades those
+deletes; the explicit order still works when a foreign key is RESTRICT.
 
 An external Suwayomi server is not rewritten: its database is not ours, and
 it has the same lack of a delete API.
@@ -136,20 +138,33 @@ def parse_columns(text: str) -> dict[str, dict[str, str]]:
     return tables
 
 
-def resolve_table(
-    columns: dict[str, dict[str, str]],
-    required: frozenset[str],
-    preferred: str,
-) -> str | None:
-    matches = [name for name, fields in columns.items() if required <= set(fields)]
+def named_table(columns: dict[str, dict[str, str]], name: str) -> str | None:
+    """The table with this name, ignoring case.
+
+    Exposed's ``IntIdTable()`` stores ``ChapterTable`` as ``CHAPTER``. A
+    column match is not a name: ``CATEGORYMANGA`` also has a ``MANGA`` column,
+    and treating every such table as the chapter table is ambiguous.
+    """
+
+    matches = [item for item in columns if item.casefold() == name.casefold()]
     if not matches:
         return None
-    preferred_matches = [name for name in matches if name.casefold() == preferred]
-    if len(preferred_matches) == 1:
-        return preferred_matches[0]
-    if len(matches) == 1:
-        return matches[0]
-    raise CatalogueSchemaError(f"ambiguous {preferred} table: {matches}")
+    if len(matches) != 1:
+        raise CatalogueSchemaError(f"ambiguous {name} table: {matches}")
+    return matches[0]
+
+
+# Children of a manga in the pinned Suwayomi schema (v2.4.2366), deleted
+# before the manga row. Pages and chapter metadata point at CHAPTER.
+# (table, foreign-key column, "chapter" or "manga")
+MANGA_CHILD_DELETES: tuple[tuple[str, str, str], ...] = (
+    ("PAGE", "chapter", "chapter"),
+    ("CHAPTERMETA", "chapter_ref", "chapter"),
+    ("CHAPTER", "manga", "manga"),
+    ("CATEGORYMANGA", "manga", "manga"),
+    ("MANGAMETA", "manga_ref", "manga"),
+    ("TRACKRECORD", "manga_id", "manga"),
+)
 
 
 def _col(fields: dict[str, str], name: str) -> str:
@@ -229,6 +244,63 @@ def delete_sql(manga_table: str, fields: dict[str, str], batch: int) -> str:
         f"WHERE {_col(fields, 'id')} NOT IN (SELECT ID FROM TANKARR_KEEP) "
         f"LIMIT {int(batch)};"
     )
+
+
+def batch_delete_statements(
+    columns: dict[str, dict[str, str]],
+    manga_table: str,
+    manga_fields: dict[str, str],
+    chapter_table: str,
+    batch: int,
+) -> list[str]:
+    """Remove one batch of manga ids and the rows that point at them.
+
+    ``TANKARR_BATCH`` already exists. Children go first so a RESTRICT foreign
+    key still succeeds. A child table this database does not have is skipped.
+    """
+
+    if batch < 1:
+        raise CatalogueSchemaError("delete batch must be at least 1")
+    chapter_fields = columns[chapter_table]
+    chapter_ids = (
+        f"SELECT c.{_col(chapter_fields, 'id')} "
+        f"FROM {quote_ident(chapter_table)} AS c "
+        f"WHERE c.{_col(chapter_fields, 'manga')} IN (SELECT ID FROM TANKARR_BATCH)"
+    )
+    manga_ids = "SELECT ID FROM TANKARR_BATCH"
+    statements = [
+        "DELETE FROM TANKARR_BATCH;",
+        (
+            "INSERT INTO TANKARR_BATCH (ID) "
+            f"SELECT m.{_col(manga_fields, 'id')} "
+            f"FROM {quote_ident(manga_table)} AS m "
+            f"WHERE m.{_col(manga_fields, 'id')} NOT IN (SELECT ID FROM TANKARR_KEEP) "
+            f"LIMIT {int(batch)};"
+        ),
+    ]
+    for table_name, column, via in MANGA_CHILD_DELETES:
+        if table_name.casefold() == "chapter":
+            table = chapter_table
+            fields = chapter_fields
+        else:
+            table = named_table(columns, table_name)
+            if table is None:
+                continue
+            fields = columns[table]
+        if column not in fields:
+            continue
+        if via == "chapter" and "id" not in chapter_fields:
+            continue
+        target = chapter_ids if via == "chapter" else manga_ids
+        statements.append(
+            f"DELETE FROM {quote_ident(table)} "
+            f"WHERE {_col(fields, column)} IN ({target});"
+        )
+    statements.append(
+        f"DELETE FROM {quote_ident(manga_table)} "
+        f"WHERE {_col(manga_fields, 'id')} IN ({manga_ids});"
+    )
+    return statements
 
 
 def count_query(manga_table: str, fields: dict[str, str]) -> str:
@@ -507,20 +579,22 @@ def apply_catalogue_pass(
             min(round_timeout, budget),
         )
         columns = parse_columns(schema_csv.read_text(encoding="utf-8"))
-        manga_table = resolve_table(columns, MANGA_REQUIRED, "mangatable")
-        if manga_table is None:
+        manga_table = named_table(columns, "MANGA")
+        if manga_table is None or not MANGA_REQUIRED <= set(columns[manga_table]):
             raise CatalogueSchemaError("Suwayomi manga table was not found")
-        chapter_table = resolve_table(columns, frozenset({"manga"}), "chaptertable")
+        chapter_table = named_table(columns, "CHAPTER")
+        if chapter_table is None:
+            raise CatalogueSchemaError("Suwayomi chapter table was not found")
         manga_fields = columns[manga_table]
         cutoff = int(now()) - int(max_age_hours) * 3600
         prepare = [
+            "DROP TABLE IF EXISTS TANKARR_BATCH;",
             "DROP TABLE IF EXISTS TANKARR_KEEP;",
             "CREATE TABLE TANKARR_KEEP(ID BIGINT PRIMARY KEY);",
             *keep_id_statements(protected_ids),
             timestamp_keep_sql(manga_table, manga_fields, cutoff),
+            chapter_keep_sql(chapter_table, columns[chapter_table]),
         ]
-        if chapter_table is not None:
-            prepare.append(chapter_keep_sql(chapter_table, columns[chapter_table]))
         count_csv = Path(temporary) / "count.csv"
         prepare.append(csvwrite(count_csv, count_query(manga_table, manga_fields)))
         try:
@@ -543,7 +617,17 @@ def apply_catalogue_pass(
             repeats = min(
                 STATEMENTS_PER_ROUND, max(1, (remaining + batch - 1) // batch)
             )
-            script = [delete_sql(manga_table, manga_fields, batch)] * repeats
+            script = [
+                "DROP TABLE IF EXISTS TANKARR_BATCH;",
+                "CREATE TABLE TANKARR_BATCH(ID BIGINT PRIMARY KEY);",
+            ]
+            for _repeat in range(repeats):
+                script.extend(
+                    batch_delete_statements(
+                        columns, manga_table, manga_fields, chapter_table, batch
+                    )
+                )
+            script.append("DROP TABLE IF EXISTS TANKARR_BATCH;")
             script.append(csvwrite(count_csv, count_query(manga_table, manga_fields)))
             try:
                 execute(script, min(round_timeout, max(1.0, deadline - clock())))
@@ -558,7 +642,11 @@ def apply_catalogue_pass(
         compacted = False
         if remaining == 0 and deleted > 0 and aborted is None:
             execute(
-                ["DROP TABLE IF EXISTS TANKARR_KEEP;", "SHUTDOWN COMPACT;"],
+                [
+                    "DROP TABLE IF EXISTS TANKARR_BATCH;",
+                    "DROP TABLE IF EXISTS TANKARR_KEEP;",
+                    "SHUTDOWN COMPACT;",
+                ],
                 compact_timeout,
             )
             compacted = True
@@ -576,7 +664,13 @@ def apply_catalogue_pass(
 
 def _drop_keep(execute: Callable[[Sequence[str], float], str]) -> None:
     try:
-        execute(["DROP TABLE IF EXISTS TANKARR_KEEP;"], 30)
+        execute(
+            [
+                "DROP TABLE IF EXISTS TANKARR_BATCH;",
+                "DROP TABLE IF EXISTS TANKARR_KEEP;",
+            ],
+            30,
+        )
     except CatalogueError:
         logger.warning("Could not drop the temporary Suwayomi keep table")
 

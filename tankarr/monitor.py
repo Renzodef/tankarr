@@ -32,6 +32,7 @@ from tankarr.service import (
     RecoveryBlocked,
     TankarrService,
 )
+from tankarr.suwayomi_runtime import SuwayomiDeferred
 from tankarr.worker import DownloadWorker
 
 if TYPE_CHECKING:
@@ -81,6 +82,10 @@ class ReleaseMonitor:
         # Set by the application once catalogue maintenance exists. Called
         # after the Suwayomi batch, with the batch flag already clear.
         self.after_suwayomi_batch: Callable[[], Any] | None = None
+        # Called inside the Suwayomi hold, after the series refresh and before
+        # the server is released. Metadata uses it to fetch covers that were
+        # skipped while the server was down.
+        self.during_suwayomi_hold: Callable[[], Any] | None = None
         # Last catalogue cleanup and compact, including a failure. The System
         # page turns an error here into an alert; the value is None until a
         # pass has run in this process.
@@ -370,20 +375,41 @@ class ReleaseMonitor:
         deferred = 0
         errors: list[dict[str, str]] = []
         if suwayomi:
-            async with self._suwayomi_hold():
-                self.suwayomi_batch_active = True
+            hold = self._suwayomi_hold()
+            try:
+                await hold.__aenter__()
+            except SuwayomiDeferred:
+                # Minimum off, or the hold refused to start the server. The
+                # series stay due: recording a failure would push them out.
+                deferred += len(suwayomi)
+                logger.info(
+                    "Monitor left %s Suwayomi series for a later cycle",
+                    len(suwayomi),
+                )
+            else:
                 try:
-                    part = await self._refresh_budget(suwayomi)
+                    self.suwayomi_batch_active = True
+                    try:
+                        part = await self._refresh_budget(suwayomi)
+                        if self.during_suwayomi_hold is not None:
+                            try:
+                                await self.during_suwayomi_hold()
+                            except Exception:
+                                logger.warning(
+                                    "Suwayomi cover batch failed", exc_info=True
+                                )
+                    finally:
+                        self.suwayomi_batch_active = False
+                    checked += part["checked"]
+                    queued += part["queued"]
+                    deferred += part["deferred"]
+                    errors.extend(part["errors"])
                 finally:
-                    self.suwayomi_batch_active = False
-            checked += part["checked"]
-            queued += part["queued"]
-            deferred += part["deferred"]
-            errors.extend(part["errors"])
-            # Cleanup runs after the hold is released. The server can stop
-            # for the SQL, and a later Wanted pass starts it on its own.
-            if self.after_suwayomi_batch is not None:
-                await self.after_suwayomi_batch()
+                    await hold.__aexit__(None, None, None)
+                # Cleanup runs after the hold is released. The server can stop
+                # for the SQL, and a later Wanted pass starts it on its own.
+                if self.after_suwayomi_batch is not None:
+                    await self.after_suwayomi_batch()
         if other:
             part = await self._refresh_budget(other)
             checked += part["checked"]

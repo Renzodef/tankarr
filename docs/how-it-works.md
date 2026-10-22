@@ -320,11 +320,16 @@ tuned in **Settings → General**:
   new chapters queued; Existing and None series only have their metadata
   refreshed, on that same schedule. Series imported locally are not polled.
   The managed Suwayomi server is held only while series that read through it
-  are refreshed. Catalogue cleanup and compaction then run while it is
+  are refreshed. Covers that metadata refresh deferred are fetched in that
+  same hold. Catalogue cleanup and compaction then run while it is
   stopped. Refreshing a series fetches that series only; it does not add
   other catalogue rows. The file still grows while chapter lists are
-  rewritten, and compaction after the batch returns that space. A cleanup or
-  compaction that fails is reported on the System page.
+  rewritten, and compaction after the batch returns that space. Cleanup
+  deletes unneeded rows from the pinned server's tables by name, children
+  before the manga row. A cleanup or compaction that fails is reported on
+  the System page. Metadata refresh does not start Suwayomi on its own, and
+  after a stop the monitor waits out the idle-shutdown interval before
+  starting it again.
 - **Scheduled Wanted recovery** (`TANKARR_WANTED_SEARCH_INTERVAL_SECONDS`,
   default 21600, every 6 hours): retries what is still missing. One pass looks
   at no more than 25 series (`TANKARR_WANTED_SEARCH_BUDGET`), the most overdue

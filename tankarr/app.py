@@ -184,6 +184,7 @@ from tankarr.suwayomi_catalogue import (
 )
 from tankarr.suwayomi_runtime import (
     CHALLENGE_PATTERN,
+    SuwayomiDeferred,
     SuwayomiRuntime,
     SuwayomiRuntimeBusy,
     SuwayomiRuntimeError,
@@ -257,6 +258,23 @@ def _public_match_review(review: dict) -> dict:
 
 
 logger = logging.getLogger(__name__)
+
+# How long a finished system-status snapshot is reused. The request itself
+# never runs the chapter scan, the metadata overview, or the job list.
+STATUS_SNAPSHOT_SECONDS = 30.0
+EMPTY_METADATA_COVERAGE: dict[str, int] = {
+    "series_total": 0,
+    "series_enriched": 0,
+    "series_with_external_metadata": 0,
+    "series_with_artwork": 0,
+    "series_synced": 0,
+    "series_errors": 0,
+    "volumes_enriched": 0,
+    "volumes_with_artwork": 0,
+    "source_records": 0,
+    "sync_errors": 0,
+    "series_without_external_metadata": 0,
+}
 
 
 class VersionedStaticFiles(StaticFiles):
@@ -467,7 +485,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 suwayomi_runtime.retain if settings.suwayomi_managed else None
             )
         if settings.suwayomi_managed:
-            monitor.suwayomi_session = suwayomi_runtime.retain
+            # The monitor is automatic: it waits out the minimum off time.
+            # Downloads and searches call retain() themselves and start now.
+            monitor.suwayomi_session = lambda: suwayomi_runtime.retain(automatic=True)
 
     retired_providers = []
     provider_reload_lock = asyncio.Lock()
@@ -651,57 +671,77 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "compact": suwayomi_maintenance.get("compact"),
         }
 
-    # Chapter counts scan every release. That is the slow part of system
-    # status, so it runs on a daemon thread and the request serves the last
-    # snapshot. A miss, including the first one after startup, shows zeroes
-    # until the thread finishes rather than holding the page.
-    chapter_headline: dict[str, Any] = {
-        "chapters": 0,
-        "downloaded": 0,
-        "revision": None,
-        "running": False,
+    # Everything slow on the System page (chapter counts, metadata coverage,
+    # job totals, alert rows, release sources) is computed here. The request
+    # serves the last snapshot, including the first one after startup, which
+    # is zeroes until this thread finishes.
+    status_snapshot: dict[str, Any] = {
+        "ready": False,
+        "manga": {"series": 0, "monitored": 0},
+        "chapters": {"chapters": 0, "downloaded": 0},
+        "jobs": {"jobs": 0, "failed": 0},
+        "coverage": dict(EMPTY_METADATA_COVERAGE),
+        "alert_rows": [],
+        "release_sources": [],
     }
-    chapter_headline_lock = threading.Lock()
-    chapter_totals_stop = threading.Event()
-    chapter_totals_threads: list[threading.Thread] = []
+    status_snapshot_lock = threading.Lock()
+    status_snapshot_stop = threading.Event()
+    status_snapshot_threads: list[threading.Thread] = []
 
-    def schedule_chapter_totals() -> None:
-        if chapter_totals_stop.is_set():
-            return
-        revision = database._read_model_revision(("manga", "chapter_release"))
-        with chapter_headline_lock:
-            if chapter_headline["running"]:
-                return
-            if chapter_headline["revision"] == revision:
-                return
-            chapter_headline["running"] = True
+    def _refresh_status_snapshot() -> None:
+        manga = database.manga_totals()
+        chapters = database.chapter_totals()
+        jobs = database.job_counts()
+        coverage = database.metadata_overview()
+        alert_rows = database.list_status_alert_rows()
+        release_sources = database.list_all_release_sources()
+        with status_snapshot_lock:
+            status_snapshot["manga"] = manga
+            status_snapshot["chapters"] = chapters
+            status_snapshot["jobs"] = jobs
+            status_snapshot["coverage"] = coverage
+            status_snapshot["alert_rows"] = alert_rows
+            status_snapshot["release_sources"] = release_sources
+            status_snapshot["ready"] = True
 
-        def work() -> None:
-            failed = False
+    def _status_snapshot_loop() -> None:
+        while not status_snapshot_stop.is_set():
             try:
-                totals = database.chapter_totals()
-                seen = database._read_model_revision(("manga", "chapter_release"))
-                with chapter_headline_lock:
-                    chapter_headline["chapters"] = int(totals["chapters"])
-                    chapter_headline["downloaded"] = int(totals["downloaded"])
-                    chapter_headline["revision"] = seen
+                _refresh_status_snapshot()
+                pause = STATUS_SNAPSHOT_SECONDS
             except Exception:
-                failed = True
-                logger.warning("Chapter totals refresh failed", exc_info=True)
-                with chapter_headline_lock:
-                    chapter_headline["revision"] = None
-            finally:
-                with chapter_headline_lock:
-                    chapter_headline["running"] = False
-            if not failed and not chapter_totals_stop.is_set():
-                schedule_chapter_totals()
+                logger.warning("System status snapshot failed", exc_info=True)
+                pause = min(5.0, STATUS_SNAPSHOT_SECONDS)
+            if status_snapshot_stop.wait(pause):
+                return
 
+    def start_status_snapshot() -> None:
+        if status_snapshot_stop.is_set() or status_snapshot_threads:
+            return
         thread = threading.Thread(
-            target=work, name="tankarr-chapter-totals", daemon=True
+            target=_status_snapshot_loop,
+            name="tankarr-status-snapshot",
+            daemon=True,
         )
-        chapter_totals_threads.clear()
-        chapter_totals_threads.append(thread)
+        status_snapshot_threads.append(thread)
         thread.start()
+
+    def status_snapshot_view() -> dict[str, Any]:
+        with status_snapshot_lock:
+            return {
+                "ready": bool(status_snapshot["ready"]),
+                "manga": dict(status_snapshot["manga"]),
+                "chapters": dict(status_snapshot["chapters"]),
+                "jobs": dict(status_snapshot["jobs"]),
+                "coverage": dict(status_snapshot["coverage"]),
+                "alert_rows": list(status_snapshot["alert_rows"]),
+                "release_sources": list(status_snapshot["release_sources"]),
+            }
+
+    def cached_metadata_status() -> dict[str, Any]:
+        if not hasattr(metadata, "status"):
+            return {}
+        return metadata.status(coverage=status_snapshot_view()["coverage"])
 
     async def maintain_managed_suwayomi(*, force: bool = False) -> dict[str, Any]:
         """Daily: report a newer server release, install it only when
@@ -731,12 +771,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 result["server"]["held"] = "automatic server updates are off"
             elif check.get("update_available"):
                 result["server"]["deferred"] = "downloads in progress"
-            async with suwayomi_runtime.retain():
-                if force or await suwayomi_runtime.wait_ready(timeout=30):
-                    result[
-                        "extensions_updated"
-                    ] = await suwayomi_runtime.update_installed_extensions()
-                    result["catalogue_installed"] = await install_language_catalogue()
+            try:
+                async with suwayomi_runtime.retain(automatic=not force):
+                    if force or await suwayomi_runtime.wait_ready(timeout=30):
+                        result[
+                            "extensions_updated"
+                        ] = await suwayomi_runtime.update_installed_extensions()
+                        result[
+                            "catalogue_installed"
+                        ] = await install_language_catalogue()
+            except SuwayomiDeferred:
+                result["extensions_updated"] = "deferred"
             result["challenged_sources"] = challenged_sources()
         except Exception as exc:  # noqa: BLE001 - maintenance is best effort
             result["error"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -925,9 +970,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await maintain_suwayomi_catalogue()
         await compact_managed_suwayomi_catalogue()
 
-    monitor.after_suwayomi_batch = after_monitor_suwayomi_batch
+    async def during_monitor_suwayomi_hold() -> None:
+        """Fetch covers that metadata skipped, while this cycle holds Suwayomi."""
 
-    def challenged_sources() -> list[str]:
+        await metadata.refresh_deferred_suwayomi_covers()
+
+    monitor.after_suwayomi_batch = after_monitor_suwayomi_batch
+    monitor.during_suwayomi_hold = during_monitor_suwayomi_hold
+
+    def challenged_sources(
+        release_sources: list[dict[str, Any]] | None = None,
+    ) -> list[str]:
         """Sources that answered with an anti-bot challenge.
 
         The managed runtime has no bypass: a Chromium solver does not fit
@@ -938,7 +991,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
 
         names = list(suwayomi_runtime.challenged_sources)
-        for mapping in database.list_all_release_sources():
+        mappings = (
+            release_sources
+            if release_sources is not None
+            else database.list_all_release_sources()
+        )
+        for mapping in mappings:
             error = str(mapping.get("last_error") or "")
             if CHALLENGE_PATTERN.search(error) and mapping.get("source_name"):
                 names.append(str(mapping["source_name"]))
@@ -1082,7 +1140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not settings.suwayomi_managed:
             return installed_sources_cache["sources"]
         try:
-            async with suwayomi_runtime.retain():
+            async with suwayomi_runtime.retain(automatic=True):
                 await _refresh_installed_sources_now(now)
         except Exception:  # noqa: BLE001 - keep the previous snapshot
             pass
@@ -1132,7 +1190,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not (settings.suwayomi_managed and settings.suwayomi_auto_install_official):
             return []
         try:
-            async with suwayomi_runtime.retain():
+            async with suwayomi_runtime.retain(automatic=True):
                 return await _ensure_official_extensions(manga_id)
         except SuwayomiRuntimeError:
             return []
@@ -1179,10 +1237,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return []
         excluded = set(WEBVIEW_EXTENSIONS) | set(FLARESOLVERR_EXTENSIONS)
         try:
-            async with suwayomi_runtime.retain():
+            async with suwayomi_runtime.retain(automatic=True):
                 installed = await suwayomi_runtime.install_catalogue(
                     settings.search_language_codes, exclude=excluded
                 )
+        except SuwayomiDeferred:
+            return []
         except Exception as exc:  # noqa: BLE001 - retried on the next pass
             logger.info("Suwayomi catalogue install failed: %s", exc)
             return []
@@ -2160,8 +2220,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await importer.stop()
         await worker.stop()
         await suwayomi_runtime.aclose()
-        chapter_totals_stop.set()
-        for thread in chapter_totals_threads:
+        status_snapshot_stop.set()
+        for thread in status_snapshot_threads:
             thread.join(timeout=1)
         closed: set[int] = set()
         for registered in [*providers.values(), *retired_providers]:
@@ -2344,7 +2404,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 else None
             ),
             "monitor": monitor.status(),
-            "metadata": metadata.status(),
+            "metadata": cached_metadata_status(),
             "torrents": torrents.status(),
         }
 
@@ -2790,7 +2850,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/metadata/status")
     async def metadata_status():
-        return metadata.status()
+        return cached_metadata_status()
 
     @app.get("/api/manga/{manga_id}/metadata")
     async def get_manga_metadata(manga_id: str):
@@ -4270,6 +4330,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         manga_list: list[dict[str, Any]],
         jobs: list[dict[str, Any]],
         metadata_status: dict[str, Any] | None = None,
+        release_sources: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Faults only a person can fix, worst first.
 
@@ -4283,9 +4344,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dismissed = database.dismissed_alerts()
         # An individual source failure feeds ranking and retries. Only a
         # persistent outage of every source for work still Wanted is actionable.
-        outages = source_outages(
-            manga_list, database.list_all_release_sources(), providers
+        sources = (
+            release_sources
+            if release_sources is not None
+            else database.list_all_release_sources()
         )
+        outages = source_outages(manga_list, sources, providers)
         if outages:
             revision = database.wanted_revision()
             if wanted_alert_cache.get("revision") != revision:
@@ -4434,7 +4498,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "signature": f"{title}: {message}",
                     }
                 )
-        challenged = challenged_sources()
+        challenged = challenged_sources(sources)
         if challenged:
             alerts.append(
                 {
@@ -4447,7 +4511,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         metadata_state = metadata_status
         if metadata_state is None:
-            metadata_state = metadata.status() if hasattr(metadata, "status") else {}
+            metadata_state = cached_metadata_status()
         if isinstance(metadata_state, dict) and metadata_state.get("last_cycle_error"):
             alerts.append(
                 {
@@ -4484,15 +4548,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if dismissed.get(str(alert["key"])) != alert["signature"]
         ]
 
-    alert_rows_cache: dict[str, Any] = {"revision": None, "rows": []}
     wanted_alert_cache: dict[str, Any] = {"revision": None, "ids": frozenset()}
-
-    def _status_alert_rows() -> list[dict[str, Any]]:
-        revision = database._read_model_revision(("manga", "manga_release_source"))
-        if alert_rows_cache.get("revision") != revision:
-            alert_rows_cache["rows"] = database.list_status_alert_rows()
-            alert_rows_cache["revision"] = revision
-        return alert_rows_cache["rows"]
 
     @app.get("/api/system/status")
     async def system_status():
@@ -4514,17 +4570,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "used": None,
                     }
 
-            # Series totals and source-outage rows stay on the request: they
-            # do not join chapters. The distinct chapter counts are the last
-            # background snapshot; this call starts a refresh when they are
-            # stale and does not wait for it.
-            schedule_chapter_totals()
-            manga_totals = database.manga_totals()
-            with chapter_headline_lock:
-                chapter_count = int(chapter_headline["chapters"])
-                downloaded_count = int(chapter_headline["downloaded"])
-            jobs = database.list_jobs(500)
-            metadata_state = metadata.status() if hasattr(metadata, "status") else {}
+            # Counts, coverage and alert rows are the last background
+            # snapshot. This request does not scan chapters or jobs, including
+            # the first call after startup.
+            snap = status_snapshot_view()
+            metadata_state = (
+                metadata.status(coverage=snap["coverage"])
+                if hasattr(metadata, "status")
+                else {}
+            )
             return {
                 "version": __version__,
                 "update": updates.status(),
@@ -4542,12 +4596,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "library": disk(settings.library_dir),
                 },
                 "totals": {
-                    "series": manga_totals["series"],
-                    "monitored": manga_totals["monitored"],
-                    "chapters": chapter_count,
-                    "downloaded": downloaded_count,
-                    "jobs": len(jobs),
-                    "failed_jobs": sum(1 for job in jobs if job["status"] == "failed"),
+                    "series": snap["manga"]["series"],
+                    "monitored": snap["manga"]["monitored"],
+                    "chapters": snap["chapters"]["chapters"],
+                    "downloaded": snap["chapters"]["downloaded"],
+                    "jobs": snap["jobs"]["jobs"],
+                    "failed_jobs": snap["jobs"]["failed"],
                 },
                 "providers": [
                     {
@@ -4557,13 +4611,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }
                     for item in providers.values()
                 ],
-                "alerts": system_alerts(_status_alert_rows(), jobs, metadata_state),
+                "alerts": system_alerts(
+                    snap["alert_rows"],
+                    [],
+                    metadata_state,
+                    snap["release_sources"],
+                ),
                 "library_alignment": reader_alignment_status(),
                 "suwayomi": (
                     {
                         **_suwayomi_runtime_status(),
                         "maintenance": suwayomi_maintenance,
-                        "challenged_sources": challenged_sources(),
+                        "challenged_sources": challenged_sources(
+                            snap["release_sources"]
+                        ),
                     }
                     if settings.suwayomi_managed
                     else None
@@ -6254,7 +6315,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     def _metadata_status() -> dict[str, Any]:
-        status = metadata.status()
+        status = cached_metadata_status()
         return {
             "enabled": bool(status["enabled"]),
             "running": bool(status["running"]),
@@ -6480,5 +6541,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return FileResponse(requested, headers=headers)
             return FileResponse(frontend_dist / "index.html", headers=spa_headers)
 
-    schedule_chapter_totals()
+    start_status_snapshot()
     return app

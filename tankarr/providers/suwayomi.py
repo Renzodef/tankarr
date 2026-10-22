@@ -228,7 +228,7 @@ class SuwayomiProvider(Provider):
         self.source_blocked: Callable[[str, str], bool] | None = None
         # Managed mode: start the local server and hold it for one operation.
         # External mode leaves this unset and talks to the operator's server.
-        self.ensure_runtime: Callable[[], AbstractAsyncContextManager[None]] | None = (
+        self.ensure_runtime: Callable[..., AbstractAsyncContextManager[None]] | None = (
             None
         )
         self._overload_failures: dict[str, int] = {}
@@ -321,10 +321,20 @@ class SuwayomiProvider(Provider):
             priority=priority,
         )
 
-    def _engine(self) -> AbstractAsyncContextManager[None]:
-        if self.ensure_runtime is not None:
-            return self.ensure_runtime()
-        return nullcontext()
+    def _engine(self, *, start: bool = True) -> AbstractAsyncContextManager[None]:
+        """Hold the managed server for one operation.
+
+        ``start=False`` joins a server that is already up and does not launch
+        one. A test double that takes no arguments is called without them.
+        """
+
+        ensure = self.ensure_runtime
+        if ensure is None:
+            return nullcontext()
+        try:
+            return ensure(start=start, automatic=False)
+        except TypeError:
+            return ensure()
 
     async def _graphql(
         self,
@@ -332,8 +342,9 @@ class SuwayomiProvider(Provider):
         variables: dict[str, Any],
         *,
         priority: int | None = None,
+        start: bool = True,
     ) -> dict[str, Any]:
-        async with self._engine():
+        async with self._engine(start=start):
             return await self._graphql_request(query, variables, priority=priority)
 
     async def _graphql_request(
@@ -660,7 +671,9 @@ class SuwayomiProvider(Provider):
         except Exception:  # noqa: BLE001 - a touch must not fail the fetch
             logger.debug("Suwayomi catalogue touch failed", exc_info=True)
 
-    async def _detail(self, manga_id: str, *, fetch_chapters: bool) -> dict[str, Any]:
+    async def _detail(
+        self, manga_id: str, *, fetch_chapters: bool, start: bool = True
+    ) -> dict[str, Any]:
         identifier = self._numeric_id(manga_id, "manga")
         data = await self._graphql(
             DETAIL_MUTATION,
@@ -671,6 +684,7 @@ class SuwayomiProvider(Provider):
                     "fetchChapters": fetch_chapters,
                 }
             },
+            start=start,
         )
         payload = data.get("fetchMangaAndChapters")
         if not isinstance(payload, dict) or not isinstance(payload.get("manga"), dict):
@@ -707,10 +721,14 @@ class SuwayomiProvider(Provider):
         chapters.sort(key=lambda item: self._chapter_sort_key(item["chapter"]))
         return chapters
 
-    async def get_cover(self, manga_id: str, filename: str) -> tuple[bytes, str]:
+    async def get_cover(
+        self, manga_id: str, filename: str, *, wake: bool = True
+    ) -> tuple[bytes, str]:
         if filename != "cover":
             raise ValueError("Invalid Suwayomi cover identifier")
-        payload = await self._detail(manga_id, fetch_chapters=False)
+        # Metadata passes wake=False so a cover does not start the JVM.
+        # The library cover route and a download leave the default.
+        payload = await self._detail(manga_id, fetch_chapters=False, start=wake)
         thumbnail = str(payload["manga"].get("thumbnailUrl") or "")
         if not thumbnail:
             raise FileNotFoundError(f"Suwayomi manga has no cover: {manga_id}")

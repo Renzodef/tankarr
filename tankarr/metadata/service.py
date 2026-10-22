@@ -842,6 +842,9 @@ class MetadataService:
         self._refresh_lock = asyncio.Lock()
         self._series_locks: dict[str, asyncio.Lock] = {}
         self.current_manga_id: str | None = None
+        # Series whose Suwayomi cover was skipped because the server was down.
+        # The monitor fetches a bounded batch while it already holds the JVM.
+        self._deferred_suwayomi_covers: set[str] = set()
         self.last_cycle_at: str | None = None
         self.last_cycle_error: str | None = None
         self.last_cycle_result: dict[str, Any] | None = None
@@ -2833,10 +2836,98 @@ class MetadataService:
             origin_id != manga["id"] and origin_id not in mapped_ids
         ):
             raise ValueError("Origin cover provider or series does not match")
-        content, _ = await provider.get_cover(origin_id, match.group("file"))
+        filename = match.group("file")
+        try:
+            if provider_name == "suwayomi":
+                # Do not start the managed server for a cover. A monitor cycle
+                # that already holds it fetches the deferred ones.
+                content, _ = await provider.get_cover(origin_id, filename, wake=False)
+            else:
+                content, _ = await provider.get_cover(origin_id, filename)
+        except TypeError:
+            content, _ = await provider.get_cover(origin_id, filename)
+        except Exception as exc:
+            if provider_name == "suwayomi" and type(exc).__name__ == "SuwayomiDeferred":
+                self._deferred_suwayomi_covers.add(str(manga["id"]))
+            raise
         return await asyncio.to_thread(
             self.artwork.prepare_bytes, content, trusted_local=True
         )
+
+    def note_deferred_suwayomi_cover(self, manga_id: str) -> None:
+        self._deferred_suwayomi_covers.add(str(manga_id))
+
+    async def refresh_deferred_suwayomi_covers(self, *, limit: int = 16) -> int:
+        """Fetch Suwayomi covers that were skipped, while the server is up.
+
+        This does not enrich the series. It only stores the cover image so
+        the chooser has it. A series that still cannot be fetched stays
+        queued for the next hold.
+        """
+
+        pending = list(self._deferred_suwayomi_covers)[:limit]
+        stored = 0
+        for manga_id in pending:
+            self._deferred_suwayomi_covers.discard(manga_id)
+            try:
+                if await self._store_suwayomi_cover(manga_id):
+                    stored += 1
+                else:
+                    self._deferred_suwayomi_covers.add(manga_id)
+            except Exception:  # noqa: BLE001 - one cover must not stop the hold
+                self._deferred_suwayomi_covers.add(manga_id)
+        return stored
+
+    async def _store_suwayomi_cover(self, manga_id: str) -> bool:
+        try:
+            manga = await asyncio.to_thread(self.database.get_manga, manga_id)
+        except KeyError:
+            return True
+        candidates = [
+            item
+            for item in self._release_source_cover_candidates(manga)
+            if str(item.get("origin_url") or "").startswith("/api/covers/suwayomi/")
+        ]
+        if not candidates:
+            return True
+        saved = False
+        work_type = self._resolve_work_type(manga, [])
+        for candidate in candidates:
+            prepared = await self._prepare_origin_cover(
+                manga, str(candidate["origin_url"])
+            )
+            quality = self._artwork_quality(
+                str(candidate["source"]),
+                prepared,
+                work_type=work_type,
+                entity_kind="series",
+            )
+            candidate_id = _json_hash(
+                {
+                    "source": str(candidate["source"]),
+                    "identifier": str(candidate["identifier"]),
+                }
+            )[:24]
+            stored = await asyncio.to_thread(
+                self.artwork.store_prepared,
+                manga["id"],
+                f"series-candidate-{candidate_id}",
+                prepared,
+            )
+            await asyncio.to_thread(
+                self.database.upsert_series_artwork_candidate,
+                manga["id"],
+                {
+                    **candidate,
+                    **stored,
+                    "candidate_id": candidate_id,
+                    "score": round(float(quality["score"]), 3),
+                    "source_priority": int(quality["source_priority"]),
+                    "source_url": str(candidate["identifier"]),
+                },
+            )
+            saved = True
+        return saved
 
     def _local_volume_cover_candidate(
         self, manga: dict[str, Any], volume: str
@@ -4244,13 +4335,15 @@ class MetadataService:
             else None
         )
 
-    def status(self) -> dict[str, Any]:
+    def status(self, coverage: dict[str, Any] | None = None) -> dict[str, Any]:
         monitor_active = bool(self.task is not None and not self.task.done())
         running = bool(
             self.current_manga_id
             or self._refresh_lock.locked()
             or (self.bulk_task is not None and not self.bulk_task.done())
         )
+        if coverage is None:
+            coverage = self.database.metadata_overview()
         return {
             "enabled": self.settings.metadata_enabled,
             "running": running,
@@ -4264,7 +4357,7 @@ class MetadataService:
             "match_policy_version": MATCH_POLICY_VERSION,
             "match_policy_refresh_pending": self._policy_refresh_required,
             "queued_refresh": self._bulk_refresh_pending,
-            "coverage": self.database.metadata_overview(),
+            "coverage": coverage,
             "sources": [source.status() for source in self.sources],
         }
 

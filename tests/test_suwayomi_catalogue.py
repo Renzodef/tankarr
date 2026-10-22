@@ -28,17 +28,49 @@ from tankarr.suwayomi_catalogue import (
     timestamp_keep_sql,
 )
 
+# Information schema of the pinned Suwayomi server (v2.4.2366). Exposed stores
+# ChapterTable as CHAPTER and CategoryMangaTable as CATEGORYMANGA. Both have
+# a MANGA column; cleanup must not treat that as the chapter table.
 SCHEMA = """TABLE_NAME,COLUMN_NAME
-MangaTable,id
-MangaTable,in_library
-MangaTable,last_fetched_at
-MangaTable,chapters_last_fetched_at
-MangaTable,last_modified_at
-ChapterTable,manga
-ChapterTable,is_downloaded
-ChapterTable,read
-ChapterTable,bookmark
-ChapterTable,last_read_at
+MANGA,ID
+MANGA,URL
+MANGA,TITLE
+MANGA,IN_LIBRARY
+MANGA,SOURCE
+MANGA,LAST_FETCHED_AT
+MANGA,CHAPTERS_LAST_FETCHED_AT
+MANGA,LAST_MODIFIED_AT
+CHAPTER,ID
+CHAPTER,URL
+CHAPTER,NAME
+CHAPTER,READ
+CHAPTER,BOOKMARK
+CHAPTER,LAST_READ_AT
+CHAPTER,IS_DOWNLOADED
+CHAPTER,MANGA
+PAGE,ID
+PAGE,INDEX
+PAGE,URL
+PAGE,CHAPTER
+CHAPTERMETA,ID
+CHAPTERMETA,META_KEY
+CHAPTERMETA,VALUE
+CHAPTERMETA,CHAPTER_REF
+CATEGORYMANGA,ID
+CATEGORYMANGA,CATEGORY
+CATEGORYMANGA,MANGA
+MANGAMETA,ID
+MANGAMETA,META_KEY
+MANGAMETA,VALUE
+MANGAMETA,MANGA_REF
+TRACKRECORD,ID
+TRACKRECORD,MANGA_ID
+TRACKRECORD,SYNC_ID
+TRACKRECORD,TITLE
+SOURCE,ID
+SOURCE,NAME
+SOURCEMETA,ID
+SOURCEMETA,SOURCE_REF
 """
 FIELDS = {
     "id": "id",
@@ -66,6 +98,50 @@ def test_identifiers_and_deletes_stay_bounded():
     with pytest.raises(CatalogueSchemaError):
         csvwrite(Path("/tmp/wide.csv"), "SELECT * FROM MangaTable")
     assert parse_count("remaining\n4\n") == 4
+
+
+def test_cleanup_deletes_the_pinned_child_tables_before_manga(tmp_path: Path):
+    database = tmp_path / "database.mv.db"
+    database.write_bytes(b"x" * 64)
+    scripts: list[str] = []
+
+    def execute(statements, _timeout):
+        joined = "\n".join(statements)
+        scripts.append(joined)
+        if "INFORMATION_SCHEMA" in joined:
+            _script_writes(statements, SCHEMA)
+            return ""
+        if any(item.startswith("DELETE FROM") for item in statements):
+            _script_writes(statements, "remaining\n0\n")
+            return ""
+        _script_writes(statements, "remaining\n3\n")
+        return ""
+
+    outcome = apply_catalogue_pass(
+        database_file=database,
+        protected_ids=[7],
+        max_age_hours=24,
+        execute=execute,
+    )
+    assert outcome["deleted"] == 3
+    assert outcome["compacted"] is True
+    prepare = scripts[1]
+    assert 'FROM "CHAPTER" AS c' in prepare
+    assert "CATEGORYMANGA" not in prepare
+    deletes = [
+        line.split("DELETE FROM ", 1)[1].split(" ", 1)[0].rstrip(";")
+        for line in scripts[2].splitlines()
+        if line.startswith('DELETE FROM "')
+    ]
+    assert deletes[:7] == [
+        '"PAGE"',
+        '"CHAPTERMETA"',
+        '"CHAPTER"',
+        '"CATEGORYMANGA"',
+        '"MANGAMETA"',
+        '"TRACKRECORD"',
+        '"MANGA"',
+    ]
 
 
 def test_a_chapter_table_without_flags_deletes_nothing():

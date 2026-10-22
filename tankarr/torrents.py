@@ -436,10 +436,8 @@ class TorrentManager:
             (source_status["prowlarr"] and self.qbittorrent.configured)
             or source_status[DIRECT_PROVIDER]
         )
-        active = self.database.list_torrent_downloads(
-            statuses=POLLABLE_STATUSES, limit=500
-        )
-        review = self.database.list_torrent_downloads(statuses=("review",), limit=500)
+        active = self.database.count_torrent_downloads(statuses=POLLABLE_STATUSES)
+        review = self.database.count_torrent_downloads(statuses=("review",))
         return {
             "enabled": any(source_status.values()),
             "configured": configured,
@@ -447,8 +445,8 @@ class TorrentManager:
             "running": bool(self.task is not None and not self.task.done()),
             "import_mount": self.qbittorrent.import_ready,
             "category": self.settings.qbittorrent_category,
-            "active": len(active),
-            "review": len(review),
+            "active": active,
+            "review": review,
             "completed_action": self.completed_action,
             "sabnzbd_configured": bool(
                 self.sabnzbd is not None and self.sabnzbd.configured

@@ -1815,6 +1815,25 @@ class Database:
             ).fetchone()
         return {"series": int(row["series"]), "monitored": int(row["monitored"])}
 
+    def job_counts(self) -> dict[str, int]:
+        """How many download jobs exist, and how many of those failed.
+
+        The System page shows the failed count. Counting is enough: loading
+        the latest jobs and their payloads is what made that page slow.
+        """
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS jobs,
+                       COALESCE(
+                           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0
+                       ) AS failed
+                FROM download_job
+                """
+            ).fetchone()
+        return {"jobs": int(row["jobs"]), "failed": int(row["failed"])}
+
     def chapter_totals(self) -> dict[str, int]:
         """The same distinct chapter counts as ``list_manga``, without its rows.
 
@@ -9866,6 +9885,21 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [self._decode_torrent_download(row) for row in rows]
+
+    def count_torrent_downloads(self, *, statuses: Iterable[str] | None = None) -> int:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        selected = [status for status in statuses or [] if status in TORRENT_STATUSES]
+        if selected:
+            placeholders = ",".join("?" for _ in selected)
+            clauses.append(f"status IN ({placeholders})")
+            parameters.extend(selected)
+        query = "SELECT COUNT(*) AS n FROM torrent_download"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        with self.connect() as connection:
+            row = connection.execute(query, parameters).fetchone()
+        return int(row["n"] or 0)
 
     def iter_torrent_cleanup(self) -> Iterator[dict[str, Any]]:
         """Walk retained imports in bounded pages, even while rows are removed."""

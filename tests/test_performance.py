@@ -422,10 +422,12 @@ def test_compact_wanted_omits_the_boilerplate_verdict_of_unsearched_slots(
 def test_status_does_not_scan_series_rows_or_wait_for_chapter_totals(
     tmp_path: Path, monkeypatch
 ):
-    """The System page used to join every chapter and decode every series on
-    the request. Totals are a count plus a background snapshot, and the
-    orphan summary stays the one already stored."""
+    """The System page serves the last snapshot. The request does not list
+    series, scan chapters, or wait for that work, even on the first call."""
 
+    from tankarr import app as app_module
+
+    monkeypatch.setattr(app_module, "STATUS_SNAPSHOT_SECONDS", 0.05)
     settings = Settings(
         data_dir=tmp_path / "data",
         library_dir=tmp_path / "library",
@@ -480,52 +482,70 @@ def test_status_does_not_scan_series_rows_or_wait_for_chapter_totals(
             raise AssertionError("status must not list every series")
 
         monkeypatch.setattr(database, "list_manga", counted_list)
-        release = threading.Event()
+        heavy: list[str] = []
 
-        def blocking_totals():
-            assert release.wait(5)
-            return {"chapters": 2, "downloaded": 1}
+        def on_snapshot_thread(original):
+            def wrapped(*args, **kwargs):
+                name = threading.current_thread().name
+                heavy.append(name)
+                if name != "tankarr-status-snapshot":
+                    raise AssertionError(f"status work ran on {name}")
+                return original(*args, **kwargs)
 
-        monkeypatch.setattr(database, "chapter_totals", blocking_totals)
-        database.upsert_chapters(
-            "performance-work",
-            [{**chapter(), "id": "chapter-3", "chapter": "3"}],
+            return wrapped
+
+        monkeypatch.setattr(
+            database, "chapter_totals", on_snapshot_thread(database.chapter_totals)
+        )
+        monkeypatch.setattr(
+            database, "manga_totals", on_snapshot_thread(database.manga_totals)
+        )
+        monkeypatch.setattr(
+            database,
+            "metadata_overview",
+            on_snapshot_thread(database.metadata_overview),
+        )
+        monkeypatch.setattr(
+            database, "job_counts", on_snapshot_thread(database.job_counts)
+        )
+        monkeypatch.setattr(
+            database,
+            "list_all_release_sources",
+            on_snapshot_thread(database.list_all_release_sources),
         )
 
-        try:
-            started = time.monotonic()
-            first = client.get("/api/system/status").json()
-            elapsed = time.monotonic() - started
-            second = client.get("/api/system/status").json()
-            assert elapsed < 2
-            assert [
-                alert["key"]
-                for alert in first["alerts"]
-                if alert["key"] == "library_orphans"
-            ] == []
-            assert second["alerts"] == first["alerts"]
-            assert scans["count"] == 0, "status must not walk the library"
-            assert listings["count"] == 0
-            assert first["totals"]["series"] == 1
-            assert isinstance(first["totals"]["chapters"], int)
+        started = time.monotonic()
+        first = client.get("/api/system/status").json()
+        elapsed = time.monotonic() - started
+        second = client.get("/api/system/status").json()
+        assert elapsed < 1
+        assert [
+            alert["key"]
+            for alert in first["alerts"]
+            if alert["key"] == "library_orphans"
+        ] == []
+        assert second["alerts"] == first["alerts"]
+        assert scans["count"] == 0, "status must not walk the library"
+        assert listings["count"] == 0
+        assert isinstance(first["totals"]["chapters"], int)
+        assert isinstance(first["totals"]["series"], int)
 
-            assert client.get("/api/library/orphans").json()["count"] == 1
-            assert scans["count"] == 1
-            third = client.get("/api/system/status").json()
-            assert any(alert["key"] == "library_orphans" for alert in third["alerts"])
-            assert scans["count"] == 1
+        deadline = time.monotonic() + 5
+        seen = first
+        while seen["totals"]["series"] != 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
+            seen = client.get("/api/system/status").json()
+        assert seen["totals"]["series"] == 1
+        assert seen["totals"]["monitored"] == 1
+        assert seen["totals"]["chapters"] == 2
+        assert seen["totals"]["downloaded"] == 1
+        assert listings["count"] == 0
 
-            database.upsert_manga(
-                {**manga(), "id": "second-work", "title": "Second Work"},
-                "en",
-                "none",
-            )
-            fourth = client.get("/api/system/status").json()
-            assert listings["count"] == 0
-            assert fourth["totals"]["series"] == 2
-            assert fourth["totals"]["monitored"] == 1
-        finally:
-            release.set()
+        assert client.get("/api/library/orphans").json()["count"] == 1
+        assert scans["count"] == 1
+        third = client.get("/api/system/status").json()
+        assert any(alert["key"] == "library_orphans" for alert in third["alerts"])
+        assert scans["count"] == 1
 
 
 def test_a_catalogue_failure_is_visible_on_system_and_monitor_status(

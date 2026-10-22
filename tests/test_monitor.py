@@ -1553,3 +1553,64 @@ async def test_suwayomi_is_held_only_for_series_that_read_through_it(tmp_path):
     assert entered == 1
     assert order == ["open", "close", "hook"]
     assert database.get_manga("mapped")["last_checked_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_minimum_off_defers_suwayomi_series_without_a_failure(tmp_path):
+    from tankarr.suwayomi_runtime import SuwayomiDeferred
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "mapped",
+            "title": "Mapped",
+            "provider": "catalogue",
+            "status": "ongoing",
+        },
+        "en",
+        "all",
+    )
+    database.upsert_release_source(
+        "mapped",
+        provider="suwayomi",
+        provider_manga_id="suwayomi-42",
+        title="Mapped",
+        source_url="https://example.test/mapped",
+        source_name="Example",
+        language="en",
+        match_confidence=1,
+        match_reason="test",
+    )
+    settings = _budget_settings(
+        tmp_path,
+        suwayomi_enabled=True,
+        suwayomi_mode="managed",
+    )
+    service = FakeService(database, [[]])
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+
+    @asynccontextmanager
+    async def session():
+        raise SuwayomiDeferred("within minimum off")
+        yield  # pragma: no cover - the hold is refused before the body
+
+    covers = 0
+
+    async def drain() -> None:
+        nonlocal covers
+        covers += 1
+
+    monitor.suwayomi_session = session
+    monitor.during_suwayomi_hold = drain
+    result = await monitor.run_cycle()
+    assert result["deferred"] == 1
+    assert result["checked"] == 0
+    assert result["errors"] == []
+    assert covers == 0
+    assert database.get_manga("mapped")["last_checked_at"] is None

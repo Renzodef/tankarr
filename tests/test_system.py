@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -43,9 +44,14 @@ def test_backup_endpoint_snapshots_the_database(tmp_path: Path):
 
 
 def test_source_alert_requires_every_source_down_over_a_day_and_series_still_wanted(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ):
+    from tankarr import app as app_module
     from tests.test_release_sources import FakeProvider, seed
+
+    # Status alerts come from the background snapshot. A short interval lets
+    # this test see a write without running the heavy queries on the request.
+    monkeypatch.setattr(app_module, "STATUS_SNAPSHOT_SECONDS", 0.05)
 
     class Provider(FakeProvider):
         async def aclose(self):
@@ -86,6 +92,14 @@ def test_source_alert_requires_every_source_down_over_a_day_and_series_still_wan
                 item for item in response.json()["alerts"] if item["key"] == "sources"
             ]
 
+        def wait_for(count: int) -> list[dict]:
+            deadline = time.monotonic() + 5
+            seen = alerts()
+            while len(seen) != count and time.monotonic() < deadline:
+                time.sleep(0.05)
+                seen = alerts()
+            return seen
+
         database.record_release_source_result(
             "origin-id", "alternate", "one", error="No chapters found"
         )
@@ -94,14 +108,14 @@ def test_source_alert_requires_every_source_down_over_a_day_and_series_still_wan
                 "UPDATE manga_release_source SET error_since=? WHERE provider_manga_id='one'",
                 (old,),
             )
-        assert alerts() == []  # Another source has not failed.
+        assert wait_for(0) == []  # Another source has not failed.
         database.record_release_source_result(
             "origin-id", "alternate", "two", error="HTTP error 522"
         )
-        assert alerts() == []  # This failure is new.
+        assert wait_for(0) == []  # This failure is new.
         with database.connect() as connection:
             connection.execute("UPDATE manga_release_source SET error_since=?", (old,))
-        result = alerts()
+        result = wait_for(1)
         assert len(result) == 1
         assert (
             result[0]["title"]
@@ -110,8 +124,8 @@ def test_source_alert_requires_every_source_down_over_a_day_and_series_still_wan
         assert result[0]["detail"] == "V.B. Rose"
         assert result[0]["href"] == "#/wanted"
         database.configure_monitor_mode("origin-id", "none")
-        assert alerts() == []
+        assert wait_for(0) == []
         database.configure_monitor_mode("origin-id", "all")
-        assert len(alerts()) == 1
+        assert len(wait_for(1)) == 1
         database.record_release_source_result("origin-id", "alternate", "two")
-        assert alerts() == []  # Recovery clears the alert immediately.
+        assert wait_for(0) == []  # Recovery clears the alert on the next snapshot.

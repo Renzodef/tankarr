@@ -162,6 +162,14 @@ class SuwayomiRuntimeBusy(SuwayomiRuntimeError):
     """An install or restart is already in progress."""
 
 
+class SuwayomiDeferred(SuwayomiRuntimeError):
+    """Automatic work asked for Suwayomi while it is meant to stay stopped.
+
+    Metadata covers and other background work use this so they do not start
+    the JVM. A download, a search, or a request the operator started does not.
+    """
+
+
 @dataclass(frozen=True)
 class ReleaseAssets:
     tag: str
@@ -476,6 +484,10 @@ class SuwayomiRuntime:
         self._last_used = time.monotonic()
         self.idle_shutdown_minutes = 0
         self._operator_stopped = False
+        # Set when a running process is actually stopped. Automatic work
+        # waits out the idle-shutdown interval before starting the JVM again.
+        # None until the first stop, so the first monitor cycle can start it.
+        self._stopped_at: float | None = None
         self.needed_within: Callable[[], float | None] | None = None
         self._started_at: float | None = None
         self._consecutive_crashes = 0
@@ -1120,7 +1132,8 @@ class SuwayomiRuntime:
                 self._operator_stopped = True
             self._stopping = True
             process = self._process
-            if process is not None and process.returncode is None:
+            was_running = process is not None and process.returncode is None
+            if was_running:
                 with contextlib.suppress(ProcessLookupError):
                     process.terminate()
                 try:
@@ -1137,15 +1150,37 @@ class SuwayomiRuntime:
             self._process = None
             self._ready = False
             self._started_at = None
+            if was_running:
+                self._stopped_at = time.monotonic()
         return self.status()
 
     async def restart(self) -> dict[str, Any]:
         await self.stop()
         return await self.start()
 
+    def _within_minimum_off(self) -> bool:
+        """True when an automatic start would undo a stop that just happened.
+
+        The window is the idle-shutdown interval. There is no separate
+        setting: ``0`` leaves the server running and disables the window.
+        """
+
+        if self.idle_shutdown_minutes <= 0 or self._stopped_at is None:
+            return False
+        elapsed = time.monotonic() - self._stopped_at
+        return elapsed < self.idle_shutdown_minutes * 60
+
     @contextlib.asynccontextmanager
-    async def retain(self) -> AsyncIterator[None]:
-        """Start the server if it is down, and keep it up until the caller finishes.
+    async def retain(
+        self, *, automatic: bool = False, start: bool = True
+    ) -> AsyncIterator[None]:
+        """Keep the server up until the caller finishes.
+
+        ``start=False`` never launches the JVM: a caller such as metadata
+        joins a server that is already up and raises ``SuwayomiDeferred``
+        when it is not. ``automatic=True`` also refuses to start during the
+        minimum off time after a stop. A download, a search, or an operator
+        request uses the defaults and starts the server immediately.
 
         Nested and overlapping calls share one process. The idle loop will
         not stop it while the count is above zero. Status reads do not call
@@ -1154,9 +1189,14 @@ class SuwayomiRuntime:
 
         async with self._use_lock:
             self._users += 1
-            self._operator_stopped = False
         try:
             if not self.running:
+                if not start or (automatic and self._within_minimum_off()):
+                    raise SuwayomiDeferred(
+                        "Suwayomi is stopped"
+                        if not start
+                        else "Suwayomi is within its minimum off time"
+                    )
                 await self.start()
             if not (self.running and self._ready):
                 ready = await self.wait_ready()
