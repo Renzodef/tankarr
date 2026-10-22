@@ -360,6 +360,7 @@ curl -H "X-Api-Key: $API_KEY" http://localhost:8787/api/system/health
 | `TANKARR_OIDC_SCOPES` | `openid profile email` | Space-separated scopes; `openid` is required. Add `groups` if your provider requires it to include the group claim. |
 | `TANKARR_OIDC_ALLOWED_SUBJECTS` | *empty* | Comma-separated exact `sub` claims allowed to sign in as Tankarr administrators. At least one subject or group must be allowed. |
 | `TANKARR_OIDC_ALLOWED_GROUPS` | *empty* | Comma-separated exact entries in the signed `groups` claim allowed administrator access. Either this list or the subject list can grant access. |
+| `TANKARR_OIDC_DISABLE_LOCAL_LOGIN` | `false` | `true` hides the username/password form and rejects `POST /api/auth/login`. Requires OpenID Connect to be enabled and valid; otherwise Tankarr refuses to start, so a bad setting cannot lock the browser out. The API key and HTTP Basic authentication keep working for scripts and other applications. `TANKARR_AUTH_REQUIRED_FOR_LOCAL=false` still admits the local network without the identity provider, so leave it `true` when the provider should be the only browser entry. Set this back to `false` and restart to restore the form. The password under **Settings → Security** can still be changed by someone who is already signed in; that change does not create a browser session. Restart required. |
 
 ### OpenID Connect
 
@@ -368,7 +369,13 @@ Authelia, Keycloak, or another conforming provider. Use Authorization Code,
 PKCE S256, and client-secret authentication. Register the exact redirect URL
 above, set the issuer, client credentials and an allowlist, then enable OIDC.
 The login page offers **Sign in with OpenID Connect** and keeps the local
-username/password form available if the provider is down.
+username/password form available if the provider is down. Set
+`TANKARR_OIDC_DISABLE_LOCAL_LOGIN=true` to leave only the OpenID Connect
+button. The form is rejected on the server as well, including a correct
+password, a password saved later under **Settings → Security**, and the
+login Tankarr generated on its first start. Those passwords still work for
+HTTP Basic authentication, and the API key is unchanged. Revert the option
+and restart to bring the form back.
 
 Only signed ID tokens with a matching issuer, audience, expiry, nonce and an
 allowed subject or group create a Tankarr session. All approved identities

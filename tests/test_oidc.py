@@ -168,7 +168,105 @@ def test_oidc_is_disabled_by_default(tmp_path):
     )
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/auth/oidc/login").status_code == 404
-        assert "oidc_login_url" not in client.get("/api/auth/status").json()
+        status = client.get("/api/auth/status").json()
+        assert "oidc_login_url" not in status
+        assert "local_login_enabled" not in status
+
+
+def test_oidc_only_mode_rejects_local_login_and_keeps_api_access(tmp_path):
+    settings = settings_at(tmp_path, oidc_disable_local_login=True)
+    with TestClient(create_app(settings)) as client:
+        status = client.get("/api/auth/status").json()
+        assert status["local_login_enabled"] is False
+        assert status["oidc_login_url"] == "/api/auth/oidc/login"
+        wrong = client.post(
+            "/api/auth/login",
+            json={"username": "fixture-user", "password": "wrong-password"},
+        )
+        right = client.post(
+            "/api/auth/login",
+            json={
+                "username": "fixture-user",
+                "password": "fixture-password",
+                "remember_me": True,
+            },
+        )
+        assert wrong.status_code == right.status_code == 403
+        assert wrong.json() == right.json() == {"detail": "Local login is disabled"}
+        assert SESSION_COOKIE not in wrong.cookies
+        assert SESSION_COOKIE not in right.cookies
+        assert client.get("/api/manga").status_code == 401
+
+        basic = ("fixture-user", "fixture-password")
+        assert client.get("/api/manga", auth=basic).status_code == 200
+        key = client.get("/api/auth/api-key", auth=basic).json()["api_key"]
+        assert client.get("/api/manga", headers={"X-Api-Key": key}).status_code == 200
+        assert (
+            client.get(
+                "/api/manga", headers={"Authorization": f"Bearer {key}"}
+            ).status_code
+            == 200
+        )
+
+        changed = client.put(
+            "/api/settings",
+            headers={"X-Api-Key": key},
+            json={"auth_password": "replacement-password"},
+        )
+        assert changed.status_code == 200
+        assert SESSION_COOKIE not in changed.cookies
+        still_local = client.post(
+            "/api/auth/login",
+            json={
+                "username": "fixture-user",
+                "password": "replacement-password",
+            },
+        )
+        assert still_local.status_code == 403
+        assert SESSION_COOKIE not in still_local.cookies
+        assert client.get("/api/manga").status_code == 401
+        assert (
+            client.get(
+                "/api/manga", auth=("fixture-user", "replacement-password")
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/manga", auth=basic).status_code == 401
+        assert client.get("/api/manga", headers={"X-Api-Key": key}).status_code == 200
+        blocked = client.put(
+            "/api/settings",
+            headers={"X-Api-Key": key},
+            json={"auth_method": "basic"},
+        )
+        assert blocked.status_code == 400
+        assert client.get("/api/auth/status").json()["method"] == "forms"
+
+
+def test_oidc_only_mode_refuses_to_start_without_a_valid_provider(tmp_path):
+    values = settings_at(tmp_path).model_dump()
+
+    def rejected(**changes: object) -> str:
+        candidate = dict(values)
+        candidate.update(changes)
+        with pytest.raises(ValueError) as error:
+            Settings.model_validate(candidate)
+        message = str(error.value)
+        assert "TANKARR_OIDC_DISABLE_LOCAL_LOGIN" in message
+        assert "fixture-client-secret" not in message
+        assert "fixture-password" not in message
+        return message
+
+    assert "TANKARR_OIDC_ENABLED" in rejected(
+        oidc_enabled=False, oidc_disable_local_login=True
+    )
+    assert "TANKARR_OIDC_ISSUER_URL" in rejected(
+        oidc_issuer_url="http://identity.example.test",
+        oidc_disable_local_login=True,
+    )
+    assert "forms authentication" in rejected(
+        auth_method="basic", oidc_disable_local_login=True
+    )
+    assert settings_at(tmp_path, oidc_disable_local_login=True).oidc_disable_local_login
 
 
 def test_oidc_group_allowlist_is_explicit_and_exact(tmp_path):

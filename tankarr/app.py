@@ -1878,6 +1878,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/auth/status")
     async def authentication_status(request: Request):
         status = authentication.status(request.scope)
+        if settings.oidc_disable_local_login:
+            status["local_login_enabled"] = False
         if settings.oidc_enabled:
             status["oidc_login_url"] = f"{settings.url_base}/api/auth/oidc/login"
         return status
@@ -1890,6 +1892,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="Forms authentication is not enabled",
             )
         client = client_address(request.scope)
+        if settings.oidc_disable_local_login:
+            # Hiding the form is not the control: this endpoint must refuse too.
+            logger.warning(
+                "Local sign-in rejected for user %r from %s; local login is disabled",
+                credentials.username[:64],
+                client,
+            )
+            raise HTTPException(status_code=403, detail="Local login is disabled")
         wait = authentication.throttle.retry_after(client)
         if wait > 0:
             return too_many_attempts(wait)
