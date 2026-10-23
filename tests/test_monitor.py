@@ -1614,3 +1614,352 @@ async def test_minimum_off_defers_suwayomi_series_without_a_failure(tmp_path):
     assert result["errors"] == []
     assert covers == 0
     assert database.get_manga("mapped")["last_checked_at"] is None
+
+
+def _map_source(
+    database: Database,
+    manga_id: str,
+    *,
+    provider: str = "suwayomi",
+    provider_manga_id: str = "source-1",
+    source_name: str = "Manga Ball",
+    language: str = "en",
+    error: str | None = None,
+    checked_at: str | None = None,
+    enabled: bool = True,
+) -> None:
+    database.upsert_release_source(
+        manga_id,
+        provider=provider,
+        provider_manga_id=provider_manga_id,
+        title="Example",
+        source_url=f"https://example.test/{provider_manga_id}",
+        source_name=source_name,
+        language=language,
+        match_confidence=1,
+        match_reason="test",
+    )
+    if error:
+        database.record_release_source_result(
+            manga_id, provider, provider_manga_id, error=error
+        )
+    if checked_at is not None or not enabled:
+        with database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE manga_release_source
+                SET last_checked_at=COALESCE(?, last_checked_at), enabled=?
+                WHERE manga_id=? AND provider=? AND provider_manga_id=?
+                """,
+                (checked_at, int(enabled), manga_id, provider, provider_manga_id),
+            )
+
+
+class _RecordingSources:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool, bool]] = []
+
+    async def refresh_mappings(
+        self, manga_id: str, *, monitor_new: bool, errors_only: bool = False
+    ) -> dict:
+        self.calls.append((manga_id, monitor_new, errors_only))
+        return {"seen": 0, "new_chapter_ids": [], "sources": []}
+
+
+@pytest.mark.asyncio
+async def test_all_mode_rechecks_a_stale_mapping_error_before_the_series_interval(
+    tmp_path,
+):
+    from tankarr.release_sources import ReleaseSourceManager
+    from tests.test_release_sources import FakeProvider
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "stale",
+            "title": "Stale",
+            "status": "completed",
+            "provider": "catalogue",
+        },
+        "en",
+        "all",
+    )
+    database.record_monitor_result("stale")
+    old = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+    _map_source(
+        database,
+        "stale",
+        error="Cloudflare bypass currently disabled",
+        checked_at=old,
+    )
+    provider = FakeProvider([], {"source-1": []})
+    service = FakeService(database, [[]])
+    monitor = ReleaseMonitor(
+        _budget_settings(tmp_path),
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+        ReleaseSourceManager(database, {"suwayomi": provider}),
+    )
+
+    assert (await monitor.run_cycle())["checked"] == 1
+    assert provider.chapters == {"source-1": []}
+    mapping = database.list_release_sources("stale")[0]
+    assert mapping["last_error"] is None
+    assert (await monitor.run_cycle())["checked"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_or_fresh_mapping_error_does_not_pull_a_checked_series(
+    tmp_path,
+):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "quiet",
+            "title": "Quiet",
+            "status": "completed",
+            "provider": "catalogue",
+        },
+        "en",
+        "all",
+    )
+    database.record_monitor_result("quiet")
+    old = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+    _map_source(
+        database,
+        "quiet",
+        error="Cloudflare bypass currently disabled",
+        checked_at=old,
+        enabled=False,
+    )
+    service = FakeService(database, [])
+    monitor = ReleaseMonitor(
+        _budget_settings(tmp_path),
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+    monitor.refresh_one = AsyncMock(return_value={"queued": 0})  # type: ignore[method-assign]
+
+    assert (await monitor.run_cycle())["checked"] == 0
+    monitor.refresh_one.assert_not_awaited()
+
+    _map_source(
+        database,
+        "quiet",
+        provider_manga_id="fresh",
+        error="HTTP 403",
+        checked_at=datetime.now(UTC).isoformat(),
+    )
+    assert (await monitor.run_cycle())["checked"] == 0
+    monitor.refresh_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_existing_mode_retries_only_the_failed_mapping_and_holds_suwayomi(
+    tmp_path,
+):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "shelf",
+            "title": "Shelf",
+            "status": "completed",
+            "provider": "catalogue",
+        },
+        "en",
+        "existing",
+    )
+    _map_source(
+        database,
+        "shelf",
+        error="Cloudflare bypass currently disabled",
+        checked_at=(datetime.now(UTC) - timedelta(days=40)).isoformat(),
+    )
+    settings = _budget_settings(
+        tmp_path, suwayomi_enabled=True, suwayomi_mode="managed"
+    )
+    service = FakeService(database, [])
+    service.refresh_metadata = AsyncMock()  # type: ignore[attr-defined]
+    sources = _RecordingSources()
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+        sources,  # type: ignore[arg-type]
+    )
+    entered = 0
+
+    @asynccontextmanager
+    async def session():
+        nonlocal entered
+        entered += 1
+        yield
+
+    monitor.suwayomi_session = session
+    monitor.refresh_one = AsyncMock(return_value={"queued": 0})  # type: ignore[method-assign]
+
+    assert (await monitor.run_cycle())["checked"] == 1
+    assert entered == 1
+    assert sources.calls == [("shelf", False, True)]
+    monitor.refresh_one.assert_not_awaited()
+    service.refresh_metadata.assert_awaited_once_with("shelf")
+
+
+@pytest.mark.asyncio
+async def test_existing_mode_does_not_start_suwayomi_for_a_healthy_mapping(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "shelf",
+            "title": "Shelf",
+            "status": "completed",
+            "provider": "catalogue",
+        },
+        "en",
+        "existing",
+    )
+    _map_source(database, "shelf")
+    settings = _budget_settings(
+        tmp_path, suwayomi_enabled=True, suwayomi_mode="managed"
+    )
+    service = FakeService(database, [])
+    service.refresh_metadata = AsyncMock()  # type: ignore[attr-defined]
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+    )
+    entered = 0
+
+    @asynccontextmanager
+    async def session():
+        nonlocal entered
+        entered += 1
+        yield
+
+    monitor.suwayomi_session = session
+
+    assert (await monitor.run_cycle())["checked"] == 1
+    assert entered == 0
+    service.refresh_metadata.assert_awaited_once_with("shelf")
+
+
+@pytest.mark.asyncio
+async def test_a_non_suwayomi_error_does_not_start_suwayomi(tmp_path):
+    from tankarr.release_sources import ReleaseSourceManager
+    from tests.test_release_sources import FakeProvider
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    database.upsert_manga(
+        {
+            "id": "shelf",
+            "title": "Shelf",
+            "status": "completed",
+            "provider": "catalogue",
+        },
+        "en",
+        "existing",
+    )
+    _map_source(database, "shelf", provider_manga_id="healthy")
+    _map_source(
+        database,
+        "shelf",
+        provider="alternate",
+        provider_manga_id="broken",
+        source_name="Alternate",
+        error="HTTP 403",
+        checked_at=(datetime.now(UTC) - timedelta(days=40)).isoformat(),
+    )
+    suwayomi = FakeProvider([], {"healthy": []})
+    alternate = FakeProvider([], {"broken": []})
+    asked: list[str] = []
+
+    async def ask(provider: str, manga_id: str, language: str) -> list:
+        asked.append(provider)
+        return []
+
+    suwayomi.list_chapters = lambda manga_id, language: ask(  # type: ignore[method-assign]
+        "suwayomi", manga_id, language
+    )
+    alternate.list_chapters = lambda manga_id, language: ask(  # type: ignore[method-assign]
+        "alternate", manga_id, language
+    )
+    settings = _budget_settings(
+        tmp_path, suwayomi_enabled=True, suwayomi_mode="managed"
+    )
+    service = FakeService(database, [])
+    service.refresh_metadata = AsyncMock()  # type: ignore[attr-defined]
+    monitor = ReleaseMonitor(
+        settings,
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+        ReleaseSourceManager(database, {"suwayomi": suwayomi, "alternate": alternate}),
+    )
+    entered = 0
+
+    @asynccontextmanager
+    async def session():
+        nonlocal entered
+        entered += 1
+        yield
+
+    monitor.suwayomi_session = session
+
+    assert (await monitor.run_cycle())["checked"] == 1
+    assert entered == 0
+    assert asked == ["alternate"]
+    broken = database.get_release_source("shelf", "alternate", "broken")
+    assert broken["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_mapping_error_rechecks_stay_inside_the_cycle_budget(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    old = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+    for manga_id in ("alpha", "beta"):
+        database.upsert_manga(
+            {
+                "id": manga_id,
+                "title": manga_id,
+                "status": "completed",
+                "provider": "catalogue",
+            },
+            "en",
+            "existing",
+        )
+        _map_source(
+            database,
+            manga_id,
+            provider="alternate",
+            provider_manga_id=manga_id,
+            source_name="Alternate",
+            error="HTTP 503",
+            checked_at=old,
+        )
+    service = FakeService(database, [])
+    service.refresh_metadata = AsyncMock()  # type: ignore[attr-defined]
+    sources = _RecordingSources()
+    monitor = ReleaseMonitor(
+        _budget_settings(tmp_path, monitor_cycle_budget_seconds=0),
+        database,
+        service,  # type: ignore[arg-type]
+        RecordingWorker(),  # type: ignore[arg-type]
+        sources,  # type: ignore[arg-type]
+    )
+
+    result = await monitor.run_cycle()
+
+    assert result["checked"] == 1
+    assert result["deferred"] == 1
+    assert sources.calls == [("alpha", False, True)]

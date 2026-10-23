@@ -220,3 +220,41 @@ async def test_demoted_mapping_is_retried_and_success_clears_its_error(
     mapping = database.list_release_sources("manga-1")[0]
     assert mapping["last_error"] is None
     assert mapping["error_since"] is None
+
+
+@pytest.mark.asyncio
+async def test_cooldown_records_the_attempt_without_clearing_the_error(tmp_path: Path):
+    from datetime import UTC, datetime, timedelta
+
+    from tankarr.source_circuit import source_gate_key
+
+    monitor, _, alternate = make_monitor(tmp_path)
+    database = monitor.database
+    database.record_release_source_result(
+        "manga-1",
+        "alternate",
+        "alternate-series",
+        error="Cloudflare bypass currently disabled",
+    )
+    stale = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE manga_release_source SET last_checked_at=? WHERE manga_id=?",
+            (stale, "manga-1"),
+        )
+    database.record_source_circuit(
+        source_gate_key(
+            "alternate", "https://example.test/alternate-series", "Alternate"
+        ),
+        error="ProviderRequestError",
+        detail="HTTP 503",
+    )
+
+    result = await monitor.release_sources.refresh_mappings("manga-1", monitor_new=True)
+
+    mapping = database.list_release_sources("manga-1")[0]
+    assert alternate.calls == 0
+    assert result["sources"][0]["state"] == "cooldown"
+    assert mapping["last_error"] == "Cloudflare bypass currently disabled"
+    assert mapping["error_since"]
+    assert mapping["last_checked_at"] != stale

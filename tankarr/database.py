@@ -1911,6 +1911,43 @@ class Database:
                              AND source.provider = 'suwayomi'
                              AND source.enabled = 1
                        ) AS suwayomi_source,
+                       EXISTS (
+                           SELECT 1 FROM manga_release_source AS source
+                           WHERE source.manga_id = m.id
+                             AND source.enabled = 1
+                             AND trim(COALESCE(source.last_error, '')) <> ''
+                             AND (
+                               trim(COALESCE(source.language, '')) = ''
+                               OR lower(trim(source.language))
+                                  = lower(trim(m.preferred_language))
+                             )
+                       ) AS mapping_error,
+                       (
+                           SELECT MIN(
+                               COALESCE(NULLIF(trim(source.last_checked_at), ''), '')
+                           )
+                           FROM manga_release_source AS source
+                           WHERE source.manga_id = m.id
+                             AND source.enabled = 1
+                             AND trim(COALESCE(source.last_error, '')) <> ''
+                             AND (
+                               trim(COALESCE(source.language, '')) = ''
+                               OR lower(trim(source.language))
+                                  = lower(trim(m.preferred_language))
+                             )
+                       ) AS oldest_mapping_error_at,
+                       EXISTS (
+                           SELECT 1 FROM manga_release_source AS source
+                           WHERE source.manga_id = m.id
+                             AND source.provider = 'suwayomi'
+                             AND source.enabled = 1
+                             AND trim(COALESCE(source.last_error, '')) <> ''
+                             AND (
+                               trim(COALESCE(source.language, '')) = ''
+                               OR lower(trim(source.language))
+                                  = lower(trim(m.preferred_language))
+                             )
+                       ) AS suwayomi_mapping_error,
                        (
                            SELECT MAX(chapter.publish_at)
                            FROM chapter_release AS chapter
@@ -1933,6 +1970,9 @@ class Database:
                 "last_check_error": row["last_check_error"],
                 "monitor_initialized": bool(row["monitor_initialized"]),
                 "suwayomi_source": bool(row["suwayomi_source"]),
+                "mapping_error": bool(row["mapping_error"]),
+                "oldest_mapping_error_at": row["oldest_mapping_error_at"],
+                "suwayomi_mapping_error": bool(row["suwayomi_mapping_error"]),
                 "newest_publish_at": row["newest_publish_at"],
             }
             for row in rows
@@ -3823,6 +3863,27 @@ class Database:
                     ok=message is None,
                     reason=message or "",
                 )
+
+    def note_release_source_attempt(
+        self, manga_id: str, provider: str, provider_manga_id: str
+    ) -> None:
+        """Record that a refresh considered this mapping without a new verdict.
+
+        A circuit cooldown is not a new failure and not a success. Moving
+        ``last_checked_at`` keeps the schedule from retrying the same row on
+        every cycle, and the saved error stays in place.
+        """
+
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE manga_release_source
+                SET last_checked_at=?, updated_at=?
+                WHERE manga_id=? AND provider=? AND provider_manga_id=?
+                """,
+                (now, now, manga_id, provider, provider_manga_id),
+            )
 
     def record_primary_source_result(
         self, manga_id: str, *, error: str | None = None

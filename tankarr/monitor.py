@@ -260,30 +260,56 @@ class ReleaseMonitor:
             newest = parse_timestamp(row.get("newest_publish_at"))
             every = series_interval_seconds(status, newest, now, interval)
             last = parse_timestamp(row.get("last_checked_at"))
-            if not is_due(
+            # A failed series keeps its backoff. A saved mapping error does
+            # not pull it forward: the last attempt never reached the source.
+            series_due = is_due(
                 last,
                 every,
                 now,
                 error=bool(row.get("last_check_error")),
-            ):
+            )
+            mapping_error = bool(row.get("mapping_error"))
+            mapping_at = parse_timestamp(row.get("oldest_mapping_error_at"))
+            mapping_due = (
+                mapping_error
+                and not row.get("last_check_error")
+                and is_due(mapping_at, every, now)
+            )
+            if not series_due and not mapping_due:
                 continue
             provider = str(row.get("provider") or "").casefold()
+            mode = str(row.get("monitor_mode") or "none")
+            full_refresh = mode in FUTURE_MONITOR_MODES
+            # Suwayomi starts only for a refresh that will actually read it.
+            # A metadata pass, or a recheck of some other provider's error,
+            # leaves a healthy Suwayomi mapping alone.
+            needs_suwayomi = provider == "suwayomi" or (
+                bool(row.get("suwayomi_source"))
+                and (full_refresh or bool(row.get("suwayomi_mapping_error")))
+            )
+            sort_at = last
+            if mapping_due and (
+                mapping_at is None or (sort_at is not None and mapping_at < sort_at)
+            ):
+                sort_at = mapping_at
             due.append(
                 {
                     "id": str(row["id"]),
-                    "monitor_mode": row.get("monitor_mode"),
+                    "monitor_mode": mode,
                     "monitor_initialized": bool(row.get("monitor_initialized")),
                     "hot": is_hot(every, interval),
-                    "needs_suwayomi": provider == "suwayomi"
-                    or bool(row.get("suwayomi_source")),
+                    "needs_suwayomi": needs_suwayomi,
                     "last_checked_at": last,
+                    "sort_at": sort_at,
+                    "series_due": series_due,
+                    "mapping_error": mapping_error,
                 }
             )
         due.sort(
             key=lambda item: (
                 0 if item["hot"] else 1,
-                item["last_checked_at"] is not None,
-                item["last_checked_at"] or datetime.min.replace(tzinfo=UTC),
+                item["sort_at"] is not None,
+                item["sort_at"] or datetime.min.replace(tzinfo=UTC),
                 item["id"],
             )
         )
@@ -321,7 +347,24 @@ class ReleaseMonitor:
             try:
                 async with asyncio.timeout(timeout):
                     if item["monitor_mode"] in FUTURE_MONITOR_MODES:
+                        # ``all`` and ``future`` already re-read every mapping.
+                        # A stale saved error makes the series due early so
+                        # that read is not postponed by a metadata stamp.
                         result = await self.refresh_one(manga_id)
+                    elif item.get("mapping_error") and self.release_sources is not None:
+                        # ``existing`` and ``none`` do not watch for new
+                        # chapters. They still retry a mapping that already
+                        # failed, without refreshing the ones that succeeded.
+                        await self.release_sources.refresh_mappings(
+                            manga_id, monitor_new=False, errors_only=True
+                        )
+                        if item.get("series_due"):
+                            await self.service.refresh_metadata(manga_id)
+                            self.database.record_monitor_result(
+                                manga_id,
+                                initialized=bool(item["monitor_initialized"]),
+                            )
+                        result = {"queued": 0}
                     else:
                         await self.service.refresh_metadata(manga_id)
                         self.database.record_monitor_result(
