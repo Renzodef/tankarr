@@ -373,7 +373,12 @@ class ReleaseSourceManager:
         return None
 
     async def refresh_mappings(
-        self, manga_id: str, *, monitor_new: bool, language: str | None = None
+        self,
+        manga_id: str,
+        *,
+        monitor_new: bool,
+        language: str | None = None,
+        errors_only: bool = False,
     ) -> dict[str, Any]:
         language = language or str(
             self.database.get_manga(manga_id)["preferred_language"]
@@ -384,6 +389,8 @@ class ReleaseSourceManager:
         new_ids: list[str] = []
         statuses: list[dict[str, Any]] = []
         for mapping in self.database.list_release_sources(manga_id):
+            if errors_only and not str(mapping.get("last_error") or "").strip():
+                continue
             provider_name = str(mapping["provider"])
             provider = self.providers.get(provider_name)
             if provider is None:
@@ -419,6 +426,11 @@ class ReleaseSourceManager:
             )
             retry_at = self.database.source_retry_at(gate_key)
             if retry_at > datetime.now(UTC).timestamp():
+                # The saved error is unchanged. The attempt time has to move
+                # or a stale error stays due on every later cycle.
+                self.database.note_release_source_attempt(
+                    manga_id, provider_name, str(mapping["provider_manga_id"])
+                )
                 statuses.append(
                     {
                         "provider": provider_name,

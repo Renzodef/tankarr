@@ -159,7 +159,7 @@ from tankarr.settings_store import (
     settings_view,
     update_settings,
 )
-from tankarr.source_alerts import source_outages
+from tankarr.source_alerts import challenged_source_names, source_outages
 from tankarr.source_circuit import source_gate_key
 from tankarr.source_numbering import is_not_yet_released
 from tankarr.source_ranking import is_official_release, official_hosts
@@ -183,7 +183,6 @@ from tankarr.suwayomi_catalogue import (
     database_file as suwayomi_database_file,
 )
 from tankarr.suwayomi_runtime import (
-    CHALLENGE_PATTERN,
     SuwayomiDeferred,
     SuwayomiRuntime,
     SuwayomiRuntimeBusy,
@@ -987,20 +986,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         this host, and of the English catalogue measured on this network only
         a couple of sources are gated this way. They are reported so the
         operator knows why those sources never return anything, and the
-        perennial ranking sinks them on its own.
+        perennial ranking sinks them on its own. A disabled mapping or one
+        old error does not keep the notice up.
         """
 
-        names = list(suwayomi_runtime.challenged_sources)
         mappings = (
             release_sources
             if release_sources is not None
             else database.list_all_release_sources()
         )
-        for mapping in mappings:
-            error = str(mapping.get("last_error") or "")
-            if CHALLENGE_PATTERN.search(error) and mapping.get("source_name"):
-                names.append(str(mapping["source_name"]))
-        return sorted(set(names))
+        return challenged_source_names(
+            mappings, probes=list(suwayomi_runtime.challenged_sources)
+        )
 
     async def suwayomi_maintenance_loop() -> None:
         await asyncio.sleep(600)  # let startup settle

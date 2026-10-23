@@ -172,7 +172,10 @@ The managed server runs without a challenge solver (its FlareSolverr support is
 switched off) and without Suwayomi's embedded browser, and Tankarr does not
 install extensions that depend on them. A source that answers with an
 anti-bot challenge is listed on **System** under **Challenged sources** and is
-ranked last.
+ranked last. The notice follows the latest probe and checks from the last two
+weeks: one old error, or an error on a mapping that is switched off, does not
+keep it up, and neither does a source that is still answering on most of its
+recent checks.
 
 ### Choosing sources
 
