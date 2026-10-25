@@ -12,7 +12,7 @@ RUN npm run build \
 # JRE for the managed Suwayomi-Server JAR.
 FROM eclipse-temurin:25-jre-jammy AS java-runtime
 
-FROM python:3.14-slim-bookworm AS runtime
+FROM python:3.15-slim-bookworm AS runtime
 # PYTHONSAFEPATH: helper processes started with `python -m tankarr.…` import
 # the installed package, never code from the working directory.
 ENV PYTHONDONTWRITEBYTECODE=1 \
