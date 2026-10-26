@@ -17,6 +17,8 @@ it("submits a main-chapter total below the count including decimals for server v
   const saved = vi.fn().mockResolvedValue(undefined);
   render(<AppContext.Provider value={{ health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) }}><EditModal manga={item} onClose={vi.fn()} onSaved={saved} onOpenCover={vi.fn()} onOpenMetadata={vi.fn()} /></AppContext.Provider>);
   const input = screen.getByLabelText("Managed edition total") as HTMLInputElement;
+  expect(screen.queryByLabelText("Translation fallback")).toBeNull();
+  expect(screen.queryByLabelText("Source languages, in order")).toBeNull();
   fireEvent.change(input, { target: { value: "44" } });
   expect(input.validity.valid).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));

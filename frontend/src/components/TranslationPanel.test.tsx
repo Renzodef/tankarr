@@ -6,7 +6,7 @@ import type { Manga } from "../types";
 
 vi.mock("../api", () => ({ api: { translations: vi.fn(), searchTranslations: vi.fn(), retryTranslation: vi.fn(), cancelTranslation: vi.fn() } }));
 vi.mock("../components", () => ({ LANGUAGES: [["en", "English"], ["ja", "Japanese"]], Spinner: () => null, languageName: (language: string) => language, useApp: () => ({ notify: vi.fn() }) }));
-const manga = { id: "work", preferred_language: "en", translation_enabled: true } as Manga;
+const manga = { id: "work", preferred_language: "en" } as Manga;
 beforeEach(() => { vi.clearAllMocks(); });
 afterEach(cleanup);
 

@@ -23,9 +23,7 @@ def normalize_fallback_languages(raw: str) -> str:
 
 def fallback_languages(manga: dict, default: str) -> list[str]:
     result = []
-    for value in normalize_fallback_languages(
-        manga.get("translation_source_languages") or default
-    ).split(","):
+    for value in normalize_fallback_languages(default).split(","):
         if value == "original":
             value = manga.get("original_language") or ""
         try:

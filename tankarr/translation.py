@@ -74,7 +74,8 @@ class TranslationManager:
         )
 
     def enabled(self, manga: dict) -> bool:
-        return self.configured() and bool(manga.get("translation_enabled"))
+        # Existing and newly added series follow the same global setting.
+        return self.configured()
 
     async def queue_missing(self, manga_id: str) -> int:
         manga = self.database.get_manga(manga_id)
@@ -183,11 +184,7 @@ class TranslationManager:
             return
         async with self.lock:
             self.service.assert_mutations_allowed()
-            active = [
-                job
-                for job in self.store.list(active=True, enabled_only=True)
-                if self.enabled(self.database.get_manga(job["manga_id"]))
-            ]
+            active = self.store.list(active=True)
             # Two outstanding processor jobs allow small installations to use
             # two workers. Downloads and archive work on the Tankarr host stay
             # serial.

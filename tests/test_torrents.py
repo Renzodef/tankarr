@@ -1303,6 +1303,45 @@ async def test_wholly_conflicting_pack_is_recycled_after_importer_cannot_use_it(
 
 
 @pytest.mark.asyncio
+async def test_foreign_grab_uses_global_translation_setting(tmp_path: Path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    seed(database)
+    item = {
+        **release(),
+        "provider": "prowlarr",
+        "language": "ja",
+        "title": "The Legend of Kamui v01 [JA]",
+        "volume": "1",
+    }
+    service = FakeService(tmp_path)
+    service.settings.translation_enabled = True
+    service.settings.translation_source_languages = "original"
+    qbit = FakeQBitTorrent(tmp_path / "download")
+    manager = TorrentManager(
+        database,
+        service,
+        SuccessfulImporter(),
+        FakeMetadata(),
+        SearchableFakeProwlarr(item),
+        qbit,
+    )
+    manager._release_cache[("kamui", "prowlarr", item["id"])] = (
+        asyncio.get_running_loop().time(),
+        item,
+    )
+    request = {"source_language": "ja", "target_language": "en", "slots": ["volume:1"]}
+    assert not database.get_manga("kamui")["translation_enabled"]
+    grabbed = await manager.grab("kamui", "prowlarr", item["id"], translation=request)
+    assert qbit.added
+    assert grabbed["language_evidence"]["translation_request"] == request
+    database.update_manga("kamui", {"translation_enabled": True})
+    service.settings.translation_enabled = False
+    with pytest.raises(ValueError, match="Translation fallback is disabled"):
+        await manager.grab("kamui", "prowlarr", item["id"], translation=request)
+
+
+@pytest.mark.asyncio
 async def test_grabbing_again_retries_a_release_whose_first_attempt_failed(
     tmp_path: Path,
 ):

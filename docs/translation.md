@@ -4,11 +4,13 @@ description: Optional machine-translation fallback in Tankarr for books and chap
 
 # Optional translation fallback
 
-Fallback is off globally and for every series by default. Configure Settings →
-Translation, then enable it in a series' Edit dialog. The series language remains
-the destination language. Source languages are ordered codes such as
-`original,ja,fr`; `original` uses known work metadata and is skipped when unknown.
-Each series can override that order, or leave it empty to inherit the global list.
+Fallback is off by default. Configure and enable it once in Settings →
+Translation to apply it to all monitored series with missing books or chapters,
+including series added later. There is no per-series translation switch. The
+series language remains the destination language. Source languages are ordered
+globally using codes such as `original,ja,fr`; `original` uses known work metadata
+and is skipped when unknown. Old per-series translation switches and language
+lists are ignored; existing jobs and files are preserved.
 
 ## On this computer (default)
 
@@ -67,7 +69,7 @@ The configured torrent retention action runs only after the translations have
 been imported. A native release appearing in the meantime pauses translation and
 has priority; the foreign archive is never treated as a native library file.
 
-Switching either toggle off pauses submissions, polling and publication. An external request
+Switching the global toggle off pauses submissions, polling and publication. An external request
 already running on the processor can finish and incur its existing API charges;
 its cached result waits for re-enablement. Cancel prevents publication and sends
 a durable cancellation request to the processor, retried after connection failures

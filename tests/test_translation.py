@@ -43,7 +43,6 @@ def translation(tmp_path):
     database = Database(settings.database_path)
     database.initialize()
     database.upsert_manga({**manga(), "provider": "catalogue"}, "en", "all")
-    database.update_manga("manga-1", {"translation_enabled": True})
     source = {**chapter("source-ja", "1", language="ja"), "provider": "suwayomi"}
     database.upsert_chapters("manga-1", [source], monitor_new=False)
     source = database.get_chapter("source-ja")
@@ -95,6 +94,9 @@ def test_fallback_order_and_unknown_original():
     assert normalize_fallback_languages(" Original,fr,ja,FR ") == "original,fr,ja"
     work = {"preferred_language": "en", "original_language": "ja"}
     assert fallback_languages(work, "original,en,fr,ja") == ["ja", "fr"]
+    assert fallback_languages(
+        {**work, "translation_source_languages": "ru"}, "original,en,fr,ja"
+    ) == ["ja", "fr"]
     assert fallback_languages({**work, "original_language": None}, "original") == []
     with pytest.raises(ValueError):
         normalize_fallback_languages("original,xx")
@@ -222,8 +224,6 @@ async def test_local_ocr_provider_and_library_import(translation):
 @pytest.mark.asyncio
 async def test_disabled_fallback_never_discovers_or_downloads(translation):
     manager, database, service, _source = translation
-    database.update_manga("manga-1", {"translation_enabled": False})
-    assert await manager.queue_missing("manga-1") == 0
     database.update_manga("manga-1", {"translation_enabled": True})
     manager.settings.translation_enabled = False
     assert await manager.queue_missing("manga-1") == 0
@@ -327,7 +327,7 @@ async def test_confirmed_independent_source_reading_can_be_published(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["global", "series", "language", "cancelled"])
+@pytest.mark.parametrize("change", ["global", "language", "cancelled"])
 async def test_disable_or_profile_change_prevents_publication(
     translation, tmp_path, change
 ):
@@ -336,8 +336,6 @@ async def test_disable_or_profile_change_prevents_publication(
     output = output_archive(manager, job, tmp_path)
     if change == "global":
         manager.settings.translation_enabled = False
-    elif change == "series":
-        database.update_manga("manga-1", {"translation_enabled": False})
     elif change == "language":
         database.update_manga("manga-1", {"preferred_language": "it"})
     else:
@@ -440,13 +438,14 @@ async def test_cancellation_never_sends_new_credentials_to_old_processor(transla
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backlog", ["waiting_native", "completed", "disabled"])
-async def test_large_paused_or_finished_backlog_does_not_hide_runnable_jobs(
+async def test_active_jobs_are_prioritized_across_series_and_history(
     translation, backlog
 ):
     manager, database, _service, source = translation
     database.upsert_manga(
         {**manga(), "id": "disabled-series", "provider": "catalogue"}, "en", "all"
     )
+    backlog_jobs = []
     for index in range(201):
         job = manager.store.create(
             "disabled-series" if backlog == "disabled" else "manga-1",
@@ -456,6 +455,7 @@ async def test_large_paused_or_finished_backlog_does_not_hide_runnable_jobs(
         manager.store.update(
             job["id"], status="queued" if backlog == "disabled" else backlog
         )
+        backlog_jobs.append(job)
     queued = manager.store.create(
         "manga-1", {**source, "chapter": "1000", "volume": None}, "en"
     )
@@ -467,7 +467,8 @@ async def test_large_paused_or_finished_backlog_does_not_hide_runnable_jobs(
     await manager.tick()
     assert [call.args[0]["id"] for call in manager.process.await_args_list] == [
         running["id"],
-        queued["id"],
+        # Legacy per-series flags no longer pause a queue under the global switch.
+        backlog_jobs[0]["id"] if backlog == "disabled" else queued["id"],
     ]
     assert {running["id"], queued["id"]} <= {
         job["id"] for job in manager.store.list("manga-1")

@@ -472,13 +472,13 @@ only, never with the URL, which may hold a token.
 ## Translation
 
 Optional machine translation of missing chapters or books from another
-language. It has to be switched on here and on each series; see
+language. Enable it once here for all monitored series; see
 [Translation](translation.md) for how it works.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TANKARR_TRANSLATION_ENABLED` | `false` | Allow translation fallback. It also has to be enabled on each series, and it only runs when the AI provider URL, model and API key are set. Settings → Translation. |
-| `TANKARR_TRANSLATION_SOURCE_LANGUAGES` | `original` | Languages to translate from, in order of preference: 1 to 12 comma-separated language codes, for example `original,ja,en,fr`. `original` stands for the work's original language when it is known. The series' own language is skipped. A series can override this list. Settings → Translation. |
+| `TANKARR_TRANSLATION_ENABLED` | `false` | Allow translation fallback globally for monitored series with missing books or chapters, including newly added series. No per-series opt-in is required. It only runs when the AI provider URL, model and API key are set. Settings → Translation. |
+| `TANKARR_TRANSLATION_SOURCE_LANGUAGES` | `original` | Languages to translate from for all series, in order of preference: 1 to 12 comma-separated language codes, for example `original,ja,en,fr`. `original` stands for the work's original language when it is known. The series' own language is skipped. Old per-series overrides are ignored. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_URL` | *unset* | Base URL of an AI provider with an OpenAI-compatible chat API, including its API path when the provider needs one. HTTP or HTTPS, without credentials, query or fragment. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_MODEL` | *empty* | Model identifier at that provider. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_API_KEY` | *unset* | API key of the AI provider. An external processor, when configured, receives it too. Secret; stored in the secrets file. Settings → Translation. |

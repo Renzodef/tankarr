@@ -392,8 +392,6 @@ export const api = {
     id: string,
     changes: Partial<Pick<Manga, "preferred_language" | "monitor_mode">> & {
       assemble_books_automatically?: boolean;
-      translation_enabled?: boolean;
-      translation_source_languages?: string;
       status_override?: PublicationStatusOverride;
       library_status_override?: "automatic" | "up_to_date";
       expected_count_override?: number | "automatic";
