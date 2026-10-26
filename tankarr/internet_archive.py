@@ -30,6 +30,7 @@ from tankarr import USER_AGENT
 from tankarr.config import Settings
 from tankarr.http import async_client
 from tankarr.language_audit import automatic_english_decision
+from tankarr.languages import SUPPORTED_LANGUAGES
 from tankarr.providers.base import ProviderHTTP
 from tankarr.torrent_utils import release_match_score, release_number_hints
 
@@ -156,12 +157,59 @@ def _archive_language_allows_english(value: object) -> bool:
     )
 
 
+_LANGUAGE_ALIASES = {
+    alias: code
+    for code, label in SUPPORTED_LANGUAGES
+    for alias in (code, label.casefold().split(" (")[0])
+}
+_LANGUAGE_ALIASES.update(
+    dict(
+        zip(
+            "eng ita jpn jap jp raw kor chi zho chs cht fra fre deu ger spa por rus ukr vie ara tur ind tha pol nld dut ces cze hun ron rum ell gre swe dan fin nor ben bul mya bur cat fil heb hin lit msa may mon fas per srp hrv".split(),
+            "en it ja ja ja ja ko zh zh zh zh-hk fr fr de de es pt ru uk vi ar tr id th pl nl nl cs cs hu ro ro el el sv da fi no bn bg my my ca fil he hi lt ms ms mn fa fa sr sr".split(),
+            strict=True,
+        )
+    )
+)
+_LANGUAGE_ALIASES.update(
+    {"italian": "it", "portuguese": "pt", "spanish": "es", "chinese": "zh"}
+)
+
+
+def archive_source_language(declaration: object, filename: str) -> str:
+    """Preserve source-language evidence; an unrestricted query is not English.
+
+    A per-file marker is more specific than an item's language (mixed-language
+    items are common). Ambiguous/missing evidence stays unknown for review.
+    The processor still verifies OCR before anything enters the library.
+    """
+    markers = re.findall(r"[\[(]([^\])]+)[\])]", filename.casefold())
+    file_claims = {
+        _LANGUAGE_ALIASES[token]
+        for marker in markers
+        for token in re.split(r"[,;/\s]+", marker)
+        if token in _LANGUAGE_ALIASES
+    }
+    if file_claims:
+        return next(iter(file_claims)) if len(file_claims) == 1 else "und"
+    values = declaration if isinstance(declaration, list) else [declaration]
+    tokens = [
+        token.strip().casefold()
+        for value in values
+        if isinstance(value, str)
+        for token in re.split(r"[,;/]", value)
+        if token.strip()
+    ]
+    claims = {_LANGUAGE_ALIASES.get(token) for token in tokens}
+    return next(iter(claims)) if len(claims) == 1 and None not in claims else "und"
+
+
 def normalize_item_files(
     item: dict[str, Any],
     files: list[dict[str, Any]],
     *,
     query: str,
-    language: str,
+    language: str | None,
 ) -> list[dict[str, Any]]:
     """One release per importable original file of one archive item."""
 
@@ -184,6 +232,11 @@ def normalize_item_files(
         size = _integer(entry.get("size"))
         if size < MIN_BOOK_BYTES or size > MAX_BOOK_BYTES:
             continue
+        source_language = (
+            language
+            if language is not None
+            else archive_source_language(item.get("language"), name)
+        )
         if language == "en":
             language_claim = automatic_english_decision(
                 {"verdict": "review"},
@@ -211,7 +264,7 @@ def normalize_item_files(
                 "indexer_id": 0,
                 "indexer_priority": INDEXER_PRIORITY,
                 "title": title[:500],
-                "language": language,
+                "language": source_language,
                 "category_id": "7000",
                 "category_ids": [7000],
                 "category": f"Internet Archive · {item_title}"[:500],
@@ -273,7 +326,7 @@ class InternetArchiveClient:
         return True
 
     async def search(
-        self, title: str, language: str, limit: int = 50
+        self, title: str, language: str | None, limit: int = 50
     ) -> list[dict[str, Any]]:
         """Every importable book file the archive holds under this title."""
 
@@ -314,11 +367,17 @@ class InternetArchiveClient:
                 return releases[:limit]
         return []
 
+    async def search_translation(
+        self, title: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Search every language for the optional translation acquisition path."""
+        return await self.search(title, None, limit=limit)
+
     async def _books_in(
         self,
         docs: list[dict[str, Any]],
         query: str,
-        language: str,
+        language: str | None,
         limit: int,
     ) -> list[dict[str, Any]]:
         """The importable books held by these items, read one item at a time."""
@@ -342,7 +401,15 @@ class InternetArchiveClient:
                 logger.info("Internet Archive item %s unreadable: %s", identifier, exc)
                 continue
             releases.extend(
-                normalize_item_files(item, files, query=query, language=language)
+                normalize_item_files(
+                    {
+                        **item,
+                        "language": (metadata.get("metadata") or {}).get("language"),
+                    },
+                    files,
+                    query=query,
+                    language=language,
+                )
             )
             if len(releases) >= limit:
                 break

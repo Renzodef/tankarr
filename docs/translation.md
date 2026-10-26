@@ -6,9 +6,17 @@ description: Optional machine-translation fallback in Tankarr for books and chap
 
 Fallback is off globally and for every series by default. Configure Settings →
 Translation, then enable it in a series' Edit dialog. The series language remains
-the destination language. Source languages are ordered codes such as
-`original,ja,fr`; `original` uses known work metadata and is skipped when unknown.
-Each series can override that order, or leave it empty to inherit the global list.
+the destination language. Source languages are selected automatically: any
+language supported by the processing backend can supply a missing book or chapter.
+There is no language list to maintain, globally or per series. Old saved language
+lists are retained for compatibility but no longer restrict acquisition.
+
+Tankarr considers known sources in every language on every pass. It prefers an
+already downloaded source, then the original language, identity match,
+availability and download size. Provider discovery rotates through at most three
+languages per pass; the cursor survives restarts so a language is not permanently
+excluded. A local processor only selects languages its OCR supports. External
+processors remain responsible for validating their supported language pairs.
 
 ## On this computer (default)
 
@@ -61,11 +69,21 @@ When Prowlarr is enabled, fallback also searches its configured indexers for
 explicitly numbered foreign books and packs. It requires a matching series title
 and a source-language marker, then stages only the requested missing books. OCR
 on the processor must verify the actual source and target languages before import.
-Automatic staging supports image ZIP/CBZ files; other formats and differently sized
-editions with an `edition_book_count` override require explicit source assignment.
+Automatic staging supports image ZIP/CBZ, RAR/CBR and PDF files through the same
+bounded archive extractor used by normal imports. Differently sized editions with
+an `edition_book_count` override require explicit source assignment.
 The configured torrent retention action runs only after the translations have
 been imported. A native release appearing in the meantime pauses translation and
 has priority; the foreign archive is never treated as a native library file.
+
+When Internet Archive is enabled, translation fallback also searches it directly,
+without an English-language filter or a torrent client. The item's language or an
+explicit per-file language marker supplies the source language; the translation
+processor verifies the text before publication. Missing or ambiguous declarations
+are not labelled English and need source-language verification before automatic
+translation. Only matching, missing, explicitly numbered books are acquired, with
+at most two new archive/indexer downloads in total per pass. Ordinary English
+acquisition keeps its language checks when translation is disabled.
 
 Switching either toggle off pauses submissions, polling and publication. An external request
 already running on the processor can finish and incur its existing API charges;

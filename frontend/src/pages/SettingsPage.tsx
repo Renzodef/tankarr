@@ -249,7 +249,6 @@ const SECTIONS: SectionDef[] = [
     description: msg("Translate missing books or chapters from another language. Tankarr tries the series language first. Enable fallback here and separately in each series, then enter your AI provider settings. By default, basic OCR and lettering run on this computer, one job at a time. Docker includes the required tools; other installations need Tesseract and DejaVu fonts. The AI provider may charge for translation. Existing files remain available when fallback is switched off."),
     fields: [
       { key: "translation_enabled", label: msg("Enable translation fallback"), kind: "boolean" },
-      { key: "translation_source_languages", label: msg("Source languages, in order"), kind: "text", hint: msg("Use language codes separated by commas, for example original,ja,en,fr. Original uses the work’s original language when known. The requested language is skipped.") },
       { key: "translation_ai_url", label: msg("AI provider API base URL"), kind: "url", hint: msg("A provider with an OpenAI-compatible chat API, including its API path when required.") },
       { key: "translation_ai_model", label: msg("AI model"), kind: "text", hint: msg("Model identifier supplied by your AI provider.") },
       { key: "translation_ai_api_key", label: msg("AI provider API key"), kind: "password", hint: msg("Used to translate recognized dialogue with your provider. If an external processor is configured, it also receives this key. Stored with Tankarr’s other integration secrets.") },
@@ -1446,11 +1445,13 @@ export default function SettingsPage() {
           <section key={section.title} className="panel settings-section">
             <h2>{t(section.title)}</h2>
             {section.description ? <p className="muted small setting-section-description">{t(section.description)}</p> : null}
-            {section.group === "translation" ? <p className="muted small" role="status">
+            {section.group === "translation" ? <><p className="muted small">
+              {t("Source languages are selected automatically. Tankarr considers any supported language, including foreign editions from Internet Archive, and prefers an existing source before downloading another. No language list is required.")}
+            </p><p className="muted small" role="status">
               {values.translation_processor_url?.trim()
                 ? t("Processing: external service. Open Advanced settings to change it or clear its URL to use this computer.")
                 : t("Processing: this computer. No processor URL or access token is required. Basic lettering uses white text boxes; complex pages may need an external processor in Advanced settings.")}
-            </p> : null}
+            </p></> : null}
             {section.fields.map((field) => {
               if (
                 field.visibleWhen

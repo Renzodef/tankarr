@@ -134,6 +134,11 @@ CREATE TABLE IF NOT EXISTS chapter_release (
 CREATE INDEX IF NOT EXISTS idx_chapter_manga_language
     ON chapter_release(manga_id, language, publish_at);
 
+CREATE TABLE IF NOT EXISTS translation_discovery (
+    manga_id TEXT PRIMARY KEY REFERENCES manga(id) ON DELETE CASCADE,
+    cursor INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS translation_job (
     id TEXT PRIMARY KEY,
     manga_id TEXT NOT NULL REFERENCES manga(id) ON DELETE CASCADE,

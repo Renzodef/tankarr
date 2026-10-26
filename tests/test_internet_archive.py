@@ -10,6 +10,7 @@ from httpx import Response
 from tankarr.config import Settings
 from tankarr.internet_archive import (
     InternetArchiveClient,
+    archive_source_language,
     normalize_item_files,
     pseudo_hash,
     search_query,
@@ -63,6 +64,45 @@ FILES = [
         "source": "original",
     },
 ]
+
+
+@pytest.mark.parametrize(
+    "declared,name,language",
+    [
+        ("jpn", "Example v01.cbz", "ja"),
+        ("Portuguese", "Example v01.cbz", "pt"),
+        ("vie", "Example v01.cbz", "vi"),
+        ("eng", "Example v01 [RAW].cbz", "ja"),
+        (["eng", "por"], "Example v01 [PT-BR].cbz", "pt-br"),
+        (None, "Example v01 [FR].cbz", "fr"),
+        (None, "Example v01.cbz", "und"),
+        (["eng", "por"], "Example v01.cbz", "und"),
+        ("unrecognized", "Example v01.cbz", "und"),
+    ],
+)
+def test_translation_source_language_is_evidence_not_query(declared, name, language):
+    assert archive_source_language(declared, name) == language
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_translation_search_includes_foreign_books_without_relabelling_english():
+    respx.get("https://archive.org/advancedsearch.php").mock(
+        return_value=Response(200, json={"response": {"docs": [ITEM]}})
+    )
+    respx.get("https://archive.org/metadata/ultra-heaven-koike").mock(
+        return_value=Response(
+            200, json={"metadata": {"language": "por"}, "files": FILES}
+        )
+    )
+    client = InternetArchiveClient(Settings())
+    try:
+        releases = await client.search_translation("Ultra Heaven")
+    finally:
+        await client.aclose()
+    assert len(releases) == 3
+    assert {r["language"] for r in releases} == {"pt"}
+    assert {r["protocol"] for r in releases} == {"http"}
 
 
 def test_the_query_asks_for_the_title_as_a_phrase_and_books_only():

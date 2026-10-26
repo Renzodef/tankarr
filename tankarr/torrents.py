@@ -720,16 +720,14 @@ class TorrentManager:
         if translation is None and manga["preferred_language"] != "en":
             raise ValueError("The series translation language must be English")
         if translation is not None:
-            from tankarr.translation_policy import fallback_languages
+            from tankarr.translation_policy import processor_languages
 
             if (
                 not self.settings.translation_enabled
                 or not manga.get("translation_enabled")
                 or translation.get("target_language") != manga["preferred_language"]
                 or translation.get("source_language")
-                not in fallback_languages(
-                    manga, self.settings.translation_source_languages
-                )
+                not in processor_languages(manga, self.settings)
             ):
                 raise ValueError(
                     "Translation fallback is disabled or its language profile changed"
