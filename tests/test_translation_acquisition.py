@@ -197,7 +197,7 @@ async def test_indexer_outage_does_not_hide_archive_candidates(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("disabled", ["global", "series", "archive"])
+@pytest.mark.parametrize("disabled", ["global", "archive"])
 async def test_archive_fallback_respects_switches(translation, monkeypatch, disabled):
     manager, database, _service, _source = translation
     acquisition = setup_acquisition(manager, monkeypatch)
@@ -205,8 +205,6 @@ async def test_archive_fallback_respects_switches(translation, monkeypatch, disa
     add_archive(acquisition, [])
     if disabled == "global":
         manager.settings.translation_enabled = False
-    elif disabled == "series":
-        database.update_manga("manga-1", {"translation_enabled": False})
     else:
         acquisition.torrents.internet_archive.enabled = False
     assert await acquisition.hunt("manga-1", ["ja"]) == 0

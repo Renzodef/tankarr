@@ -52,7 +52,6 @@ class TranslationStore:
         manga_id: str | None = None,
         *,
         active: bool = False,
-        enabled_only: bool = False,
     ) -> list[dict]:
         clauses, params = [], []
         if manga_id is not None:
@@ -61,10 +60,6 @@ class TranslationStore:
         if active:
             clauses.append(
                 "status IN ('queued', 'preparing', 'processing', 'importing', 'waiting_native')"
-            )
-        if enabled_only:
-            clauses.append(
-                "manga_id IN (SELECT id FROM manga WHERE translation_enabled=1)"
             )
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         # Apply priority before the result limit: old paused jobs or completed

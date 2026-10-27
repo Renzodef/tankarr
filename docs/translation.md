@@ -4,12 +4,14 @@ description: Optional machine-translation fallback in Tankarr for books and chap
 
 # Optional translation fallback
 
-Fallback is off globally and for every series by default. Configure Settings →
-Translation, then enable it in a series' Edit dialog. The series language remains
-the destination language. Source languages are selected automatically: any
-language supported by the processing backend can supply a missing book or chapter.
-There is no language list to maintain, globally or per series. Old saved language
-lists are retained for compatibility but no longer restrict acquisition.
+Fallback is off by default. Configure and enable it once in Settings →
+Translation to apply it to all monitored series with missing books or chapters,
+including series added later. There is no per-series translation switch. The
+series language remains the destination language. Source languages are selected
+automatically: any language supported by the processing backend can supply a
+missing book or chapter. There is no language list to maintain, globally or per
+series. Old per-series translation switches and saved language lists are retained
+for compatibility but ignored; existing jobs and files are preserved.
 
 Tankarr considers known sources in every language on every pass. It prefers an
 already downloaded source, then the original language, identity match,
@@ -85,7 +87,7 @@ translation. Only matching, missing, explicitly numbered books are acquired, wit
 at most two new archive/indexer downloads in total per pass. Ordinary English
 acquisition keeps its language checks when translation is disabled.
 
-Switching either toggle off pauses submissions, polling and publication. An external request
+Switching the global toggle off pauses submissions, polling and publication. An external request
 already running on the processor can finish and incur its existing API charges;
 its cached result waits for re-enablement. Cancel prevents publication and sends
 a durable cancellation request to the processor, retried after connection failures

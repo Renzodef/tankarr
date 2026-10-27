@@ -246,7 +246,7 @@ const SECTIONS: SectionDef[] = [
   {
     title: msg("Translation fallback"),
     group: "translation",
-    description: msg("Translate missing books or chapters from another language. Tankarr tries the series language first. Enable fallback here and separately in each series, then enter your AI provider settings. By default, basic OCR and lettering run on this computer, one job at a time. Docker includes the required tools; other installations need Tesseract and DejaVu fonts. The AI provider may charge for translation. Existing files remain available when fallback is switched off."),
+    description: msg("Translate missing books or chapters from another language. Tankarr tries the series language first. Enable fallback here for all monitored series, including series added later, then enter your AI provider settings. By default, basic OCR and lettering run on this computer, one job at a time. Docker includes the required tools; other installations need Tesseract and DejaVu fonts. The AI provider may charge for translation. Existing files remain available when fallback is switched off."),
     fields: [
       { key: "translation_enabled", label: msg("Enable translation fallback"), kind: "boolean" },
       { key: "translation_ai_url", label: msg("AI provider API base URL"), kind: "url", hint: msg("A provider with an OpenAI-compatible chat API, including its API path when required.") },

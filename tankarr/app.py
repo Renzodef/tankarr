@@ -3283,8 +3283,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "expected_count_override",
                     "edition_book_count",
                     "assemble_books_automatically",
-                    "translation_enabled",
-                    "translation_source_languages",
                     "reader_mode_override",
                     "reader_direction_override",
                 )

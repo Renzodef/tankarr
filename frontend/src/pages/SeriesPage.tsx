@@ -912,7 +912,7 @@ export default function SeriesPage({ id }: { id: string }) {
       {calendar ? <SeriesCalendarSection calendar={calendar} /> : null}
 
       {unitsError ? <LoadError message={unitsError} retryLabel={t("Retry books and chapters")} retry={() => void load(true)} loading={loading} hasData={Boolean(units?.manga_id === manga.id)} /> : null}
-      {manga.translation_enabled ? <TranslationPanel manga={manga} /> : null}
+      <TranslationPanel key={manga.id} manga={manga} />
       {units?.manga_id === manga.id ? <SeriesUnitGroups
         key={`series-units:${manga.id}`}
         data={units}
@@ -2060,7 +2060,6 @@ export function EditModal({
   const { notify } = useApp();
   const [title, setTitle] = useState(manga.title);
   const [language, setLanguage] = useState(manga.preferred_language);
-  const [translationEnabled, setTranslationEnabled] = useState(Boolean(manga.translation_enabled));
   const [mode, setMode] = useState<MonitorMode>(manga.monitor_mode);
   const [readerMode, setReaderMode] = useState<"automatic" | "manga" | "webtoon">(
     manga.reader_mode_override ?? "automatic",
@@ -2185,8 +2184,6 @@ export function EditModal({
         warning = renamed.warnings.length > 0;
       }
       const changes: Partial<Pick<Manga, "preferred_language" | "monitor_mode">> & {
-        translation_enabled?: boolean;
-        translation_source_languages?: string;
         assemble_books_automatically?: boolean;
         status_override?: PublicationStatusOverride;
         library_status_override?: LibraryStatusOverride;
@@ -2205,7 +2202,6 @@ export function EditModal({
         changes.authors_override = editedAuthors.length ? editedAuthors : "automatic";
       }
       if (language !== manga.preferred_language) changes.preferred_language = language;
-      if (translationEnabled !== Boolean(manga.translation_enabled)) changes.translation_enabled = translationEnabled;
       if (mode !== manga.monitor_mode) changes.monitor_mode = mode;
       if (readerMode !== (manga.reader_mode_override ?? "automatic")) {
         changes.reader_mode = readerMode;
@@ -2550,15 +2546,6 @@ export function EditModal({
             {t("Changing language re-baselines monitoring and reloads the chapter index for the new language.")}
           </p>
         ) : null}
-      </div>
-      <div className="form-row">
-        <label htmlFor="series-translation">{t("Translation fallback")}</label>
-        <label className="muted small">
-          <input id="series-translation" type="checkbox" checked={translationEnabled} disabled={saving} onChange={(event) => setTranslationEnabled(event.target.checked)} />
-          {t("Translate missing books and chapters into the selected language")}
-        </label>
-        <p className="muted small">{t("Requires translation to be enabled and an AI provider configured in Settings → Translation. Releases in the requested language have priority.")}</p>
-        {translationEnabled ? <p className="muted small">{t("Tankarr automatically selects a source in any supported language. No source-language list is required.")}</p> : null}
       </div>
       <div className="form-row">
         <label>{t("Monitor")}</label>

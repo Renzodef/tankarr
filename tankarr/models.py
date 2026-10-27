@@ -66,8 +66,6 @@ class UpdateMangaRequest(BaseModel):
     reader_mode: Literal["automatic", "manga", "webtoon"] | None = None
     reader_direction: Literal["automatic", "ltr", "rtl"] | None = None
     assemble_books_automatically: bool | None = None
-    translation_enabled: bool | None = None
-    translation_source_languages: str | None = Field(default=None, max_length=200)
     # Books in the edition on disk when it differs from the catalogue's
     # (Viz's 12-book Master Keaton against the 18-tankobon map). "automatic"
     # clears it and the catalogue map decides again.

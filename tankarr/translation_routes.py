@@ -21,9 +21,7 @@ def register_translation_routes(app: FastAPI, manager, monitor):
         try:
             manga = manager.database.get_manga(manga_id)
             if not manager.enabled(manga):
-                raise ValueError(
-                    "Enable translation fallback in Settings and for this series first"
-                )
+                raise ValueError("Enable translation fallback in Settings first")
             return await monitor.search_wanted_series(manga_id, trigger="translation")
         except KeyError as exc:
             raise HTTPException(404, "Series not found") from exc
@@ -77,9 +75,7 @@ def register_translation_routes(app: FastAPI, manager, monitor):
             manga = manager.database.get_manga(manga_id)
             language = normalize_language_code(source_language)
             if not manager.enabled(manga):
-                raise ValueError(
-                    "Enable translation fallback in Settings and for this series first"
-                )
+                raise ValueError("Enable translation fallback in Settings first")
             if language == manga["preferred_language"]:
                 raise ValueError(
                     "The source already uses the requested language; use Library Import"
@@ -122,7 +118,7 @@ def register_translation_routes(app: FastAPI, manager, monitor):
                     or current["preferred_language"] != manga["preferred_language"]
                 ):
                     raise HTTPException(
-                        409, "Series translation settings changed during upload"
+                        409, "Translation settings or destination changed during upload"
                     )
                 if key in manager.store.slots(manga_id, manga["preferred_language"]):
                     raise HTTPException(409, "This slot already has a translation job")

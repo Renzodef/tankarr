@@ -1000,9 +1000,7 @@ class TankarrService:
         if chapter.get("provider") == "translated":
             from tankarr.translation_policy import matches_slot, slot_key
 
-            if not self.settings.translation_enabled or not manga.get(
-                "translation_enabled"
-            ):
+            if not self.settings.translation_enabled:
                 raise ExternalImportConflict("Translation fallback is disabled")
             for owned in self.database.list_chapters(manga_id, chapter["language"]):
                 if (

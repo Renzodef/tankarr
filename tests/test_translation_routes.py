@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from tankarr.models import UpdateMangaRequest
 from tankarr.translation_routes import register_translation_routes
 from tests.test_translation import translation as translation
 
@@ -63,7 +64,7 @@ def test_upload_rejects_disabled_same_language_and_missing_number(translation):
             ).status_code
             == 400
         )
-    database.update_manga("manga-1", {"translation_enabled": False})
+    manager.settings.translation_enabled = False
     assert (
         client.post(
             "/api/manga/manga-1/translations/upload?source_language=ja&volume=1",
@@ -72,6 +73,31 @@ def test_upload_rejects_disabled_same_language_and_missing_number(translation):
         == 400
     )
     assert manager.store.list() == []
+
+
+def test_global_setting_controls_series_search_and_legacy_flags_are_ignored(
+    translation,
+):
+    manager, database, _service, _source = translation
+    client = client_for(manager)
+    assert not database.get_manga("manga-1")["translation_enabled"]
+    assert client.post("/api/manga/manga-1/translations/search").status_code == 200
+    database.update_manga("manga-1", {"translation_enabled": True})
+    manager.settings.translation_enabled = False
+    response = client.post("/api/manga/manga-1/translations/search")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Enable translation fallback in Settings first"
+
+
+def test_series_api_no_longer_offers_translation_settings():
+    request = UpdateMangaRequest(
+        translation_enabled=True, translation_source_languages="fr"
+    )
+    assert request.model_dump(exclude_none=True) == {}
+    assert "translation_enabled" not in request.model_json_schema()["properties"]
+    assert (
+        "translation_source_languages" not in request.model_json_schema()["properties"]
+    )
 
 
 def test_queue_read_does_not_expose_provider_keys(translation):
