@@ -1,6 +1,6 @@
 """Tankarr application package."""
 
-__version__ = "0.14.0"
+__version__ = "0.14.1"
 
 PROJECT_URL = "https://github.com/Renzodef/tankarr"
 # Sent with every outbound request, so a site operator can see who is asking.
