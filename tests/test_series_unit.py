@@ -259,11 +259,9 @@ def test_numbers_only_one_source_claims_beyond_the_consensus_are_unconfirmed():
     assert (
         numbers[-1] == 253 and dropped == 21
     )  # 251-253 continue the sequence, 260-280 do not
-    # The official platform confirms on its own.
+    # Another configured source corroborates the whole sequence.
     official = src("Tapas", range(1, 281), host="tapas.io")
-    kept, dropped = confirm_chapter_numbers(
-        releases + official, official_hosts={"tapas.io"}
-    )
+    kept, dropped = confirm_chapter_numbers(releases + official)
     assert dropped == 0
     # A single source has no consensus to compare against: everything stays.
     kept, dropped = confirm_chapter_numbers(src("Only", range(1, 20)))
@@ -475,10 +473,12 @@ def webtoon(chapter, **extra):
     )
 
 
-def test_the_official_platform_decides_whether_the_prologue_is_a_chapter():
+def test_any_source_can_explicitly_number_a_prologue():
     # Tower of God: WEBTOON English lists "[Season 1] Ep. 0 (ch. 0)". Dropping
     # it leaves the whole library one chapter behind the official numbering.
-    releases = [webtoon(str(number)) for number in range(0, 30)]
+    releases = [
+        webtoon(str(number), title=f"Episode {number}") for number in range(0, 30)
+    ]
 
     _info, selected = select_releases(
         {"preferred_language": "en"}, WEBTOON_LINKS, releases
@@ -502,7 +502,7 @@ def test_a_prologue_no_official_source_publishes_stays_an_extra():
     assert info["dropped"]["chapter_zero_or_negative"] == 1
 
 
-def test_a_chapter_the_official_edition_has_not_reached_is_not_a_slot():
+def test_a_source_can_extend_the_chapter_index_beyond_a_slower_publisher():
     # Lookism: WEBTOON English stops at 611, the scanlators are at 622.
     releases = [webtoon(str(number)) for number in range(1, 612)] + [
         ch(str(number), provider="mirror") for number in range(605, 623)
@@ -513,8 +513,8 @@ def test_a_chapter_the_official_edition_has_not_reached_is_not_a_slot():
     )
 
     numbers = {item["chapter"] for item in selected}
-    assert max(int(number) for number in numbers) == 611
-    assert info["dropped"]["beyond_official_edition"] == 11
+    assert max(int(number) for number in numbers) == 622
+    assert "beyond_official_edition" not in info["dropped"]
 
 
 def test_without_an_official_source_nothing_is_cut_off():
@@ -703,3 +703,11 @@ def test_a_webtoon_is_followed_in_episodes_even_when_it_has_ended():
     # An operator who asks for books on a webtoon still gets them.
     forced = {"id": "x", "status": "ended", "series_unit_override": "volumes"}
     assert resolve_series_unit(forced, webtoon, [])["unit"] == "volumes"
+
+
+def test_a_generic_zero_placeholder_is_not_an_explicit_prologue():
+    releases = [ch("0", title="Chapter 0")] + [
+        ch(str(number)) for number in range(1, 4)
+    ]
+    _info, selected = select_releases({"status": "ongoing"}, {}, releases)
+    assert "0" not in {item["chapter"] for item in selected}

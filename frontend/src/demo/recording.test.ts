@@ -13,7 +13,7 @@ const recording: Recording = {
   responses: {
     [recordingKey("GET", "/api/manga?cached=true")]: { status: 200, type: "application/json", file: "files/manga.json" },
     [recordingKey("GET", "/api/settings")]: { status: 200, type: "application/json", file: "files/settings.json" },
-    [recordingKey("GET", "/api/calendar?days=14&ahead=14")]: { status: 200, type: "application/json", body: '{"releases":[]}' },
+    [recordingKey("GET", "/api/history?limit=14")]: { status: 200, type: "application/json", body: '{"items":[]}' },
     [recordingKey("GET", "/api/metadata/artwork/a/series?v=1")]: { status: 200, type: "image/png", file: "files/a.png" },
     [recordingKey("POST", "/api/wanted/search")]: { status: 200, type: "application/json", body: '{"queued":3}' },
   },
@@ -22,7 +22,7 @@ const recording: Recording = {
 describe("the demo answers from its recording", () => {
   it("serves the exact request, inline or from its file", async () => {
     expect(await lookup(recording, "get", "/api/manga?cached=true", read)).toMatchObject({ file: "files/manga.json" });
-    expect((await lookup(recording, "GET", "/api/calendar?days=14&ahead=14", read)).body).toBe('{"releases":[]}');
+    expect((await lookup(recording, "GET", "/api/history?limit=14", read)).body).toBe('{"items":[]}');
   });
 
   it("ignores the parameters that only steer the server's cache", async () => {

@@ -38,7 +38,7 @@ test("the library, a series, the reader and the other pages come up from the rec
   await expect(page.getByAltText(/^Page 1 of/)).toBeVisible();
   await page.waitForFunction(() => Array.from(document.images).every((image) => image.complete && image.naturalWidth > 0));
 
-  for (const hash of ["#/calendar", "#/wanted", "#/activity", "#/history", "#/system", "#/settings"]) {
+  for (const hash of ["#/wanted", "#/activity", "#/history", "#/system", "#/settings"]) {
     await page.goto(`./${hash}`);
     await expect(page.locator("main")).toBeVisible();
     await page.waitForLoadState("networkidle");

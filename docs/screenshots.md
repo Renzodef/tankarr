@@ -1,6 +1,6 @@
 ---
 title: Screenshots - Tankarr, the Sonarr for manga
-description: What Tankarr looks like - the manga and comics Library with covers and missing counts, a series page with the publisher's release rhythm, the Calendar of upcoming chapters, the Wanted list, Settings and the System page.
+description: What Tankarr looks like - the manga and comics Library with covers and missing counts, a series page with chapters from configured sources, the Wanted list, Settings and the System page.
 ---
 
 # Screenshots
@@ -25,17 +25,9 @@ status, library state or text; sort by title, year or completeness.
 ## Series
 
 One work: its metadata and cover from the catalogue, the monitoring profile,
-the release rhythm read from the publisher's platform with the next chapters
-announced or expected, and every chapter with its file on disk.
+and every chapter from the configured sources with its file on disk.
 
-![A series page with the release calendar and the chapter list](assets/screenshots/series.webp)
-
-## Calendar
-
-The week's releases across the library: downloaded, available on the official
-platform, or expected from each series' cadence.
-
-![The Calendar week view with released, available and expected chapters](assets/screenshots/calendar.webp)
+![A series page with its chapter list](assets/screenshots/series.webp)
 
 ## Wanted
 

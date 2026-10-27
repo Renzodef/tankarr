@@ -427,27 +427,18 @@ def test_hiatus_is_a_pause_not_an_end():
     assert publication_summary({"status": "ongoing"})["paused"] is False
 
 
-def test_the_official_platform_pause_wins_over_a_catalogue_that_says_ongoing():
-    """unORDINARY, 2026-09-05: Webtoons said "On hiatus", MangaBaka said
-    ongoing, and the calendar kept projecting a Thursday that never came."""
-
-    summary = publication_summary(
-        {"status": "ongoing", "official_status": "hiatus"}, {"status": "ongoing"}
-    )
-    assert summary["status"] == "continuing" and summary["paused"] is True
-    # A finished work is finished whatever the platform's flag says.
-    ended = publication_summary({"status": "completed", "official_status": "hiatus"})
-    assert ended["status"] == "ended" and ended["paused"] is False
-    # Without any catalogue status the platform's word is the status.
-    only = publication_summary({"official_status": "hiatus"})
-    assert only == {
-        "status": "continuing",
-        "source": "official",
-        "overridden": False,
-        "raw_status": "hiatus",
-        "paused": True,
-        "pause_sources": ["official"],
-    }
+def test_mangabaka_status_wins_over_conflicting_source_labels():
+    for source_status in ("ongoing", "completed", "hiatus"):
+        manga = {
+            "status": source_status,
+            "official_status": "hiatus",
+            "publication_signals": {"mangabaka": "ongoing", "official": "hiatus"},
+        }
+        summary = publication_summary(manga, {"status": source_status})
+        assert summary["status"] == "continuing"
+        assert summary["paused"] is False
+        manga["publication_signals"]["mangabaka"] = "completed"
+        assert publication_summary(manga)["status"] == "ended"
 
 
 def test_any_catalogue_that_tracks_pauses_can_declare_one():
@@ -481,7 +472,7 @@ def test_any_catalogue_that_tracks_pauses_can_declare_one():
     assert resumed["paused"] is False and resumed["pause_sources"] == []
 
 
-def test_a_new_official_chapter_resumes_a_work_before_catalogues_catch_up():
+def test_publisher_signals_do_not_override_mangabaka_hiatus():
     summary = publication_summary(
         {
             "status": "hiatus",
@@ -494,8 +485,8 @@ def test_a_new_official_chapter_resumes_a_work_before_catalogues_catch_up():
         {"status": "hiatus"},
     )
     assert summary["status"] == "continuing"
-    assert summary["paused"] is False
-    assert summary["source"] == "official release"
+    assert summary["paused"] is True
+    assert summary["source"] == "mangabaka"
 
 
 def test_hiatus_can_be_set_by_hand_and_stays_a_continuing_work():

@@ -17,13 +17,13 @@ TERMINAL_STATUSES = frozenset(
     }
 )
 # A paused work is not a finished one: chapters may still come, and the
-# official platform stays the reference for how many exist.
+# configured sources remain the reference for available chapters.
 CONTINUING_STATUSES = frozenset(
     {"ongoing", "continuing", "publishing", "releasing", "hiatus", "on_hiatus"}
 )
 # A hiatus is still "continuing" for every decision (frontier, monitoring,
 # counts) but the library shows it apart: the catalogue says the author
-# stopped, so no calendar date and no expectation of new chapters for now.
+# stopped; monitoring still checks for new source chapters.
 PAUSED_STATUSES = frozenset({"hiatus", "on_hiatus", "paused"})
 
 
@@ -65,20 +65,30 @@ def publication_summary(
 
     metadata_status = str((metadata or {}).get("status") or "").strip().casefold()
     provider_status = str(manga.get("status") or "").strip().casefold()
-    # A pause is announced by whoever notices first: the catalogues that
-    # track it (MangaBaka, MyAnimeList, MangaUpdates) or the publisher's own
-    # platform (Webtoons said "On hiatus" for unORDINARY while every
-    # catalogue still said ongoing). Any one of them is enough; none of them
-    # can end a work. AniList is not consulted: it calls NANA "releasing".
     signals = {
         str(key): str(value or "").strip().casefold()
         for key, value in (manga.get("publication_signals") or {}).items()
+        if key in {"mangabaka", "myanimelist", "mangaupdates"}
     }
-    official_status = str(manga.get("official_status") or "").strip().casefold()
-    if official_status and "official" not in signals:
-        signals["official"] = official_status
-    raw_status = metadata_status or provider_status
-    source = "metadata" if metadata_status else "provider" if provider_status else None
+    mangabaka_status = (
+        signals.get("mangabaka")
+        or str((metadata or {}).get("mangabaka_status") or "").strip().casefold()
+    )
+    if (
+        not mangabaka_status
+        and ((metadata or {}).get("provenance") or {}).get("status") == "mangabaka"
+    ):
+        mangabaka_status = metadata_status
+    raw_status = mangabaka_status or metadata_status or provider_status
+    source = (
+        "mangabaka"
+        if mangabaka_status
+        else "metadata"
+        if metadata_status
+        else "provider"
+        if provider_status
+        else None
+    )
     if raw_status in TERMINAL_STATUSES:
         status = "ended"
     elif raw_status in CONTINUING_STATUSES:
@@ -86,16 +96,6 @@ def publication_summary(
     else:
         status = "unknown"
     pause_sources = [key for key, value in signals.items() if value in PAUSED_STATUSES]
-    if (
-        signals.get("official_resume") == "published"
-        and signals.get("official") not in PAUSED_STATUSES
-        and status == "continuing"
-    ):
-        # A new chapter on the managed publisher platform is stronger evidence
-        # of a return than a catalogue's older hiatus record. A later
-        # catalogue refresh can declare a new pause again.
-        pause_sources = []
-        raw_status, source = "ongoing", "official release"
     # The merged catalogue status is one of those signals restated; name the
     # generic "metadata"/"provider" only when no specific reporter is known.
     if raw_status in PAUSED_STATUSES and source and not pause_sources:

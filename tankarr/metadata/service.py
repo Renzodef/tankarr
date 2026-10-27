@@ -1282,8 +1282,6 @@ class MetadataService:
         entries = entries_from_releases(releases, source="mangaupdates")
         if entries:
             self.database.replace_chapter_map(manga_id, "mangaupdates", entries)
-        # The dated feed is also the work's publishing rhythm for the calendar.
-        self.database.replace_release_history(manga_id, "mangaupdates", releases)
 
     @staticmethod
     def _correlation_supplier(correlation: dict[str, Any]) -> str:

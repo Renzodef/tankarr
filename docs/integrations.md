@@ -579,7 +579,6 @@ services. Its requests identify themselves with the user agent
 | Kitsu | `kitsu.io` | Metadata refreshes, by catalogue ID |
 | Jikan (MyAnimeList data) | `api.jikan.moe` | Metadata refreshes, by catalogue ID |
 | Catalogue image hosts | The image servers of MangaBaka and of the catalogues its records link to (AniList, MangaUpdates, Kitsu, MyAnimeList, Anime-Planet, Anime News Network) | Downloading the covers named in catalogue records; other hosts are refused |
-| NAVER Webtoon | `comic.naver.com` | Reading the official episode list of a work whose catalogue record links there, as numbering evidence only; nothing is downloaded from it |
 | Internet Archive | `archive.org` | When enabled: searches, item file lists and book downloads |
 | GitHub | `api.github.com`, `github.com` | Managed Suwayomi only: checking for and downloading Suwayomi-Server releases (at install and once a day), and the extension repository's index and packages |
 

@@ -14,6 +14,7 @@ from tankarr.catalogue import NO_REMOTE_PROVIDERS
 from tankarr.config import Settings
 from tankarr.database import Database
 from tankarr.monitor_schedule import (
+    WEEKLY_SECONDS,
     effective_status,
     is_due,
     is_hot,
@@ -257,8 +258,12 @@ class ReleaseMonitor:
             if automatic_updates_paused(row):
                 continue
             status = effective_status(row.get("status"), row.get("status_override"))
-            newest = parse_timestamp(row.get("newest_publish_at"))
-            every = series_interval_seconds(status, newest, now, interval)
+            mode = str(row.get("monitor_mode") or "none")
+            every = (
+                series_interval_seconds(status, None, now, interval)
+                if mode in FUTURE_MONITOR_MODES
+                else WEEKLY_SECONDS
+            )
             last = parse_timestamp(row.get("last_checked_at"))
             # A failed series keeps its backoff. A saved mapping error does
             # not pull it forward: the last attempt never reached the source.
@@ -278,7 +283,6 @@ class ReleaseMonitor:
             if not series_due and not mapping_due:
                 continue
             provider = str(row.get("provider") or "").casefold()
-            mode = str(row.get("monitor_mode") or "none")
             full_refresh = mode in FUTURE_MONITOR_MODES
             # Suwayomi starts only for a refresh that will actually read it.
             # A metadata pass, or a recheck of some other provider's error,
@@ -812,22 +816,12 @@ class ReleaseMonitor:
                 )
             upgraded = 0
             try:
-                upgraded = await self.upgrade_to_official()
+                upgraded = await self.upgrade_to_preferred_source()
             except Exception as exc:  # noqa: BLE001 - next cycle retries
                 errors.append(
                     {
                         "manga_id": "*",
-                        "error": f"official upgrade: {type(exc).__name__}: {exc}",
-                    }
-                )
-            aligned = {"deleted": 0, "series": 0}
-            try:
-                aligned = await self.align_official_editions()
-            except Exception as exc:  # noqa: BLE001 - next cycle retries
-                errors.append(
-                    {
-                        "manga_id": "*",
-                        "error": f"official alignment: {type(exc).__name__}: {exc}",
+                        "error": f"preferred source upgrade: {type(exc).__name__}: {exc}",
                     }
                 )
             quality = {"measured": 0, "replaced": 0}
@@ -856,7 +850,6 @@ class ReleaseMonitor:
                 "searched": searched,
                 "queued": queued,
                 "upgraded": upgraded,
-                "aligned": aligned,
                 "quality": quality,
                 "errors": errors,
             }
@@ -868,40 +861,6 @@ class ReleaseMonitor:
             except Exception:  # noqa: BLE001 - a notification never fails the pass
                 logger.debug("Decision notification failed", exc_info=True)
             return result
-
-    async def align_official_editions(self) -> dict[str, Any]:
-        """Keep every series on the numbering of its official edition.
-
-        The series page, Wanted and the download gate all already stop at the
-        official frontier. Files acquired before that gate existed do not
-        disappear on their own, and while they sit there the library reads as
-        ahead of a publication it is supposed to mirror.
-        """
-
-        if not getattr(self.settings, "official_edition_alignment_enabled", False):
-            return {"deleted": 0, "series": 0, "enabled": False}
-        deleted = 0
-        touched = 0
-        for manga in self.database.list_manga():
-            if automatic_updates_paused(manga):
-                continue
-            if not manga.get("monitored"):
-                continue
-            try:
-                outcome = await self.service.align_with_official_edition(
-                    str(manga["id"])
-                )
-            except Exception as exc:  # noqa: BLE001 - one series must not stop it
-                logger.info(
-                    "Could not align %s with its official edition: %s",
-                    manga.get("title"),
-                    exc,
-                )
-                continue
-            if outcome["deleted"]:
-                deleted += int(outcome["deleted"])
-                touched += 1
-        return {"deleted": deleted, "series": touched, "enabled": True}
 
     async def audit_page_quality(self) -> dict[str, Any]:
         """Measure imported chapters, then replace the unreadable ones."""
@@ -1103,12 +1062,10 @@ class ReleaseMonitor:
     async def track_publication_pauses(self) -> dict[str, Any]:
         """Notice when a work enters or leaves a hiatus and say so.
 
-        The signals themselves are refreshed elsewhere on their own rhythm:
-        MangaBaka, MyAnimeList and MangaUpdates on the weekly metadata
-        refresh, the official platform's flag on every source refresh. This
-        step only compares the resulting state with the last one it saw, so
-        a work that resumes goes back on the calendar the same day and the
-        operator hears about it once.
+        MangaBaka, MyAnimeList and MangaUpdates are refreshed by the metadata
+        pass. This step compares their cached state with the last one it saw,
+        so the operator hears about each transition once. A hiatus never
+        changes the source watching interval.
         """
 
         from tankarr.series_summary import publication_summary
@@ -1136,14 +1093,14 @@ class ReleaseMonitor:
             if paused:
                 entered.append(title)
                 logger.info("%s entered a hiatus according to %s", title, sources)
-                detail = f"{title} is on hiatus ({sources}). No chapters are expected until it resumes."
+                detail = f"{title} is on hiatus ({sources}). Source monitoring continues at the global interval."
             else:
                 left.append(title)
                 logger.info(
-                    "%s is back from hiatus; expected chapters return to the calendar",
+                    "%s is back from hiatus; source monitoring continues",
                     title,
                 )
-                detail = f"{title} is publishing again. Expected chapters are back on the calendar."
+                detail = f"{title} is publishing again. Source monitoring continues."
             notifier = getattr(self.service, "notifier", None)
             if notifier is not None and getattr(notifier, "configured", False):
                 try:
@@ -1241,25 +1198,22 @@ class ReleaseMonitor:
             )
         return {"deleted": deleted, "series": touched, "enabled": True}
 
-    async def upgrade_to_official(self) -> int:
-        """Queue explicitly enabled replacements with official releases."""
+    async def upgrade_to_preferred_source(self) -> int:
+        """Queue explicitly enabled replacements with preferred sources."""
 
-        from tankarr.official_upgrade import (
-            preferred_source_upgrades,
-            upgrade_candidates,
-        )
         from tankarr.source_circuit import source_gate_key
         from tankarr.source_ranking import (
-            beyond_frontier,
-            official_frontier,
+            beyond_chapter_limit,
+            completed_chapter_limit,
             official_hosts,
             release_source_keys,
         )
+        from tankarr.source_upgrade import (
+            preferred_source_upgrades,
+        )
 
         def enabled():
-            return settings is not None and (
-                settings.official_upgrade_enabled or settings.source_upgrade_enabled
-            )
+            return settings is not None and settings.source_upgrade_enabled
 
         settings = getattr(self.service, "settings", None)
         if not enabled():
@@ -1277,8 +1231,6 @@ class ReleaseMonitor:
                 ((metadata_row or {}).get("data") or {}).get("official_links"),
                 language=str(manga.get("preferred_language") or ""),
             )
-            if not hosts and not settings.source_upgrade_enabled:
-                continue
             chapters = self.database.list_chapters(
                 str(manga["id"]), str(manga["preferred_language"])
             )
@@ -1296,25 +1248,17 @@ class ReleaseMonitor:
                 }
                 for release in chapters
             ]
-            candidates = (
-                preferred_source_upgrades(chapters, settings.source_ranking, hosts)
-                if settings.source_upgrade_enabled
-                else upgrade_candidates(chapters, hosts)
+            candidates = preferred_source_upgrades(
+                chapters, settings.source_ranking, hosts
             )
-            frontier = (
-                official_frontier(
-                    chapters,
-                    hosts,
-                    status=str(manga.get("status") or ""),
-                    metadata=(metadata_row or {}).get("data") or {},
-                )
-                if settings.source_ranking.prefer_official
-                else None
+            frontier = completed_chapter_limit(
+                status=str(manga.get("status") or ""),
+                metadata=(metadata_row or {}).get("data") or {},
             )
             for release in candidates:
                 if not enabled():
                     return queued
-                if beyond_frontier(release, frontier):
+                if beyond_chapter_limit(release, frontier):
                     continue
                 if (
                     self.database.source_retry_at(
@@ -2207,9 +2151,6 @@ class ReleaseMonitor:
                 )
             )
             result["release_sources"] = mapped["sources"]
-        result[
-            "official_evidence"
-        ] = await self.service.refresh_official_edition_evidence(manga_id)
         if "mapped-ranges" in (result.get("reclassified_providers") or []):
             # Files just recognised as the books: the loose chapters they
             # replace go now, not at the next six-hourly pass.

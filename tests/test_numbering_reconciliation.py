@@ -33,24 +33,6 @@ def release(
     }
 
 
-def test_release_ahead_of_the_primary_official_head_waits_for_evidence():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    mirror = [release("mirror-6", "MangaK (EN)", 6)]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror], official_hosts=frozenset({"webtoons.com"})
-    )
-
-    assert decisions["mirror-6"]["canonical_chapter"] is None
-    assert decisions["mirror-6"]["numbering_status"] == "pending_evidence"
-    assert decisions["mirror-6"]["numbering_method"] == (
-        "awaiting_secondary_official_evidence"
-    )
-
-
 def test_official_season_zero_episode_with_repeated_title_keeps_its_own_chapter():
     official = [
         release(
@@ -76,289 +58,12 @@ def test_official_season_zero_episode_with_repeated_title_keeps_its_own_chapter(
         ),
     ]
 
-    decisions = reconcile_numbering(
-        official, official_hosts=frozenset({"webtoons.com"})
-    )
+    decisions = reconcile_numbering(official)
 
     assert decisions["season-one-finale"]["canonical_chapter"] == "78"
     assert decisions["season-two-zero"]["canonical_chapter"] == "78.5"
-    assert decisions["season-two-zero"]["numbering_method"] == "official_season_opening"
+    assert decisions["season-two-zero"]["numbering_method"] == "title_season_opening"
     assert decisions["season-two-one"]["canonical_chapter"] == "79"
-
-
-def test_finished_catalogue_maps_matching_explicit_title_inside_its_boundary():
-    pending = release("mirror-45", "Mirror", 45, title="Chapter 45")
-    pending.update(
-        canonical_chapter=None,
-        chapter=None,
-        numbering_status="pending_evidence",
-        numbering_method="awaiting_secondary_official_evidence",
-    )
-
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    decision = reconcile_numbering(
-        [*official, pending],
-        official_hosts=frozenset({"webtoons.com"}),
-        canonical_end=55,
-    )["mirror-45"]
-
-    assert decision["canonical_chapter"] == "45"
-    assert decision["numbering_status"] == "mapped"
-    assert decision["numbering_method"] == "catalogue_bounded_title"
-
-
-def test_finished_catalogue_does_not_map_title_past_its_boundary():
-    pending = release("mirror-56", "Mirror", 56, title="Chapter 56")
-    pending.update(
-        canonical_chapter=None,
-        chapter=None,
-        numbering_status="pending_evidence",
-        numbering_method="awaiting_secondary_official_evidence",
-    )
-
-    decision = reconcile_numbering([pending], canonical_end=55)["mirror-56"]
-
-    assert decision["canonical_chapter"] is None
-    assert decision["numbering_status"] == "pending_evidence"
-
-
-def test_secondary_official_edition_can_validate_an_early_release():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    secondary = [
-        release(f"secondary-{number}", "NAVER", number, host="comic.naver.com")
-        for number in range(1, 9)
-    ]
-    mirror = [
-        release(f"mirror-{number}", "Weeb Central (EN)", number)
-        for number in range(1, 9)
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *secondary, *mirror],
-        source_roles={
-            "webtoons.com": "primary_official",
-            "comic.naver.com": "secondary_official",
-        },
-    )
-
-    assert decisions["mirror-6"]["canonical_chapter"] == "6"
-    assert decisions["mirror-8"]["canonical_chapter"] == "8"
-    assert decisions["mirror-8"]["numbering_method"] == ("secondary_official_bridge")
-
-
-def test_secondary_official_metadata_can_validate_an_early_release():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    mirror = [
-        release(f"mirror-{number}", "MangaDex (EN)", number) for number in range(1, 9)
-    ]
-    evidence = [
-        {"host": "comic.naver.com", "edition_chapter": str(number)}
-        for number in range(1, 9)
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror],
-        source_roles={
-            "webtoons.com": "primary_official",
-            "comic.naver.com": "secondary_official",
-        },
-        secondary_evidence=evidence,
-    )
-
-    assert decisions["mirror-8"]["canonical_chapter"] == "8"
-    assert decisions["mirror-8"]["numbering_method"] == "secondary_official_bridge"
-
-
-def test_verified_mirror_identity_can_continue_a_short_primary_prefix():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 10)
-    ]
-    mirror = [
-        release(f"mirror-{number}", "Weeb Central (EN)", number)
-        for number in range(1, 101)
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror], official_hosts=frozenset({"webtoons.com"})
-    )
-
-    assert decisions["mirror-100"]["canonical_chapter"] == "100"
-    assert decisions["mirror-100"]["numbering_status"] == "mapped"
-    assert decisions["mirror-100"]["numbering_method"] == (
-        "verified_identity_continuation"
-    )
-
-
-def test_special_release_cannot_fill_a_continuation_gap():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    mirror = [
-        release(f"mirror-{number}", "Weeb Central (EN)", number)
-        for number in range(1, 6)
-    ] + [
-        release(
-            "mirror-6-special",
-            "Weeb Central (EN)",
-            6,
-            title="Season 2 announcement",
-        ),
-        release("mirror-7", "Weeb Central (EN)", 7, title="Chapter 7"),
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror],
-        official_hosts=frozenset({"webtoons.com"}),
-    )
-
-    assert decisions["mirror-6-special"]["numbering_method"] == "special_title"
-    assert decisions["mirror-7"]["canonical_chapter"] is None
-    assert decisions["mirror-7"]["numbering_method"] == (
-        "awaiting_secondary_official_evidence"
-    )
-
-
-def test_special_releases_cannot_supply_identity_anchors():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    mirror = [
-        release("mirror-1", "MangaFire (EN)", 1),
-        release(
-            "mirror-special-2",
-            "MangaFire (EN)",
-            2,
-            title="Season 2 announcement",
-        ),
-        *[
-            release(f"mirror-{number}", "MangaFire (EN)", number)
-            for number in range(3, 7)
-        ],
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror],
-        official_hosts=frozenset({"webtoons.com"}),
-    )
-
-    assert decisions["mirror-6"]["canonical_chapter"] is None
-    assert decisions["mirror-6"]["numbering_evidence"]["identity_anchors"] == 4
-    assert decisions["mirror-6"]["numbering_evidence"]["drift_detected"] is True
-
-
-def test_verified_identity_does_not_jump_a_gap_after_the_official_head():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    mirror = [
-        release(f"mirror-{number}", "Weeb Central (EN)", number)
-        for number in [1, 2, 3, 4, 5, 7, 8]
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror], official_hosts=frozenset({"webtoons.com"})
-    )
-
-    assert decisions["mirror-7"]["canonical_chapter"] is None
-    assert decisions["mirror-8"]["canonical_chapter"] is None
-
-
-def test_known_numbering_drift_prevents_identity_continuation():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    drifted = [
-        release(
-            f"mirror-{number}",
-            "MangaK (EN)",
-            number,
-            title=f"Chapter {number + 10}",
-        )
-        for number in range(1, 6)
-    ] + [release("mirror-6", "MangaK (EN)", 6, title="Episode")]
-
-    decisions = reconcile_numbering(
-        [*official, *drifted], official_hosts=frozenset({"webtoons.com"})
-    )
-
-    assert decisions["mirror-5"]["numbering_method"] == "title_sequence"
-    assert decisions["mirror-6"]["canonical_chapter"] is None
-    assert decisions["mirror-6"]["numbering_evidence"]["drift_detected"] is True
-
-
-def test_secondary_metadata_bridge_rejects_a_non_contiguous_outlier():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    mirror = [
-        release(f"mirror-{number}", "MangaDex (EN)", number)
-        for number in [1, 2, 3, 6, 999]
-    ]
-    evidence = [
-        {"host": "comic.naver.com", "edition_chapter": str(number)}
-        for number in [1, 2, 3, 6, 999]
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror],
-        source_roles={
-            "webtoons.com": "primary_official",
-            "comic.naver.com": "secondary_official",
-        },
-        secondary_evidence=evidence,
-    )
-
-    assert decisions["mirror-6"]["canonical_chapter"] == "6"
-    assert decisions["mirror-6"]["numbering_method"] == "secondary_official_bridge"
-    assert decisions["mirror-999"]["canonical_chapter"] is None
-
-
-def test_secondary_metadata_special_cannot_fill_a_bridge_gap():
-    official = [
-        release(f"official-{number}", "Webtoons.com (EN)", number, host="webtoons.com")
-        for number in range(1, 6)
-    ]
-    mirror = [
-        release(f"mirror-{number}", "MangaDex (EN)", number)
-        for number in [1, 2, 3, 4, 5, 7]
-    ]
-    evidence = [
-        {
-            "host": "comic.naver.com",
-            "edition_chapter": str(number),
-            "title": "Season 2 announcement" if number == 6 else f"Chapter {number}",
-        }
-        for number in range(1, 8)
-    ]
-
-    decisions = reconcile_numbering(
-        [*official, *mirror],
-        source_roles={
-            "webtoons.com": "primary_official",
-            "comic.naver.com": "secondary_official",
-        },
-        secondary_evidence=evidence,
-    )
-
-    assert decisions["mirror-7"]["canonical_chapter"] is None
-    assert decisions["mirror-7"]["numbering_method"] == (
-        "awaiting_secondary_official_evidence"
-    )
 
 
 def test_page_sequence_maps_only_the_supported_offset_segment():
@@ -393,10 +98,7 @@ def test_page_sequence_maps_only_the_supported_offset_segment():
         for source, pages in zip(range(394, 408), page_counts)
     ]
 
-    decisions = reconcile_numbering(
-        [*official, *aligned_reference, *drifted],
-        official_hosts=frozenset({"webtoons.com"}),
-    )
+    decisions = reconcile_numbering([*official, *aligned_reference, *drifted])
 
     assert decisions["drifted-394"]["canonical_chapter"] == "380"
     assert decisions["drifted-407"]["canonical_chapter"] == "393"
@@ -416,13 +118,11 @@ def test_legacy_manual_mapping_is_reconciled_from_primary_official_title():
         canonical=393,
     )
 
-    decision = reconcile_numbering(
-        [corrected], official_hosts=frozenset({"webtoons.com"})
-    )["corrected"]
+    decision = reconcile_numbering([corrected])["corrected"]
 
     assert decision["source_chapter"] == "412"
     assert decision["canonical_chapter"] == "393"
-    assert decision["numbering_method"] == "official_title"
+    assert decision["numbering_method"] == "explicit_title"
     assert decision["edition_chapter"] == "393"
     assert decision["primary_chapter"] == "393"
 
@@ -436,14 +136,12 @@ def test_explicit_official_title_survives_a_reset_provider_index():
         host="tapas.io",
     )
 
-    decision = reconcile_numbering([future], official_hosts=frozenset({"tapas.io"}))[
-        "official-future"
-    ]
+    decision = reconcile_numbering([future])["official-future"]
 
     assert decision["source_chapter"] == "0"
     assert decision["canonical_chapter"] == "251"
     assert decision["numbering_status"] == "mapped"
-    assert decision["numbering_method"] == "official_title"
+    assert decision["numbering_method"] == "explicit_title"
     assert decision["numbering_evidence"]["title_chapter"] == "251"
 
 
@@ -520,3 +218,63 @@ def test_a_chapter_zero_tagged_with_a_later_book_is_not_an_expected_chapter():
     assert decisions["side-0"]["numbering_status"] == "unmapped"
     assert decisions["side-0"]["numbering_method"] == "special_title"
     assert decisions["pro-0"]["numbering_status"] == "mapped"
+
+
+def test_each_configured_source_can_extend_a_slower_publisher_feed():
+    publisher = [release(f"publisher-{n}", "Publisher", n) for n in range(1, 6)]
+    for source in ("Mirror", "Community", "Publisher"):
+        newest = release("newest", source, 8)
+        result = reconcile_numbering([*publisher, newest])["newest"]
+        assert result["canonical_chapter"] == "8"
+        assert result["numbering_status"] == "mapped"
+
+
+def test_retired_official_pending_state_is_rebuilt_from_the_source():
+    stale = release("newest", "Source", 630)
+    stale.update(
+        canonical_chapter=None,
+        chapter=None,
+        numbering_status="pending_evidence",
+        numbering_method="awaiting_secondary_official_evidence",
+        numbering_version=6,
+    )
+    result = reconcile_numbering([stale])["newest"]
+    assert result["canonical_chapter"] == "630"
+    assert result["numbering_status"] == "mapped"
+
+
+def test_specials_do_not_become_chapters_when_official_gating_is_removed():
+    newest = release("special", "Source", 8, title="Omake 8")
+    result = reconcile_numbering([newest])["special"]
+    assert result["canonical_chapter"] is None
+    assert result["numbering_status"] == "unmapped"
+
+
+def test_uniform_page_counts_cannot_prove_a_numbering_offset():
+    reference = [
+        release(f"owned-{n}", "Owned", n, title="Episode", pages=20)
+        for n in range(1, 8)
+    ]
+    for item in reference:
+        item["downloaded"] = True
+    other = [
+        release(f"new-{n}", "Other", n, title="Episode", pages=20) for n in range(8, 15)
+    ]
+    decisions = reconcile_numbering([*reference, *other])
+    assert decisions["new-14"]["canonical_chapter"] == "14"
+
+
+def test_owned_source_is_the_content_reference_without_publisher_roles():
+    owned = [
+        release(f"owned-{n}", "Community", n, title="Episode", pages=20 + n)
+        for n in range(1, 13)
+    ]
+    for item in owned:
+        item["downloaded"] = True
+    other = [
+        release(f"other-{n + 10}", "Publisher", n + 10, title="Episode", pages=20 + n)
+        for n in range(1, 13)
+    ]
+    result = reconcile_numbering([*owned, *other])
+    assert result["other-22"]["canonical_chapter"] == "12"
+    assert result["other-22"]["numbering_method"] == "content_sequence_alignment"

@@ -20,7 +20,7 @@ for `amd64` and `arm64`.
 
 The demo is the real interface on a library of well-known manga, manhwa and
 manhua, added through the catalogue the way you would add them: every page,
-the Calendar, the Wanted list, Settings and the built-in reader. Nothing is
+the Wanted list, Settings and the built-in reader. Nothing is
 downloaded and nothing you change is saved. Covers and descriptions come from
 [MangaBaka](https://mangabaka.org); the only pages you can read are those of
 [Pepper&Carrot](https://www.peppercarrot.com) by David Revoy (CC BY 4.0).
@@ -46,7 +46,7 @@ Mylar3, Kapowarr or Suwayomi, read [how Tankarr compares](comparison.md).
   assemble chapters into books.
 - **Writes a portable library**: consistent names, `ComicInfo.xml`, covers,
   atomic hash-checked imports, a recycle bin and automatic backups.
-- **Looks and feels like Sonarr**: Library, Calendar, Activity, Wanted, History,
+- **Looks and feels like Sonarr**: Library, Activity, Wanted, History,
   Settings and System, with interactive release search.
 - **Speaks your language**: the interface is available in English and Italian,
   chosen per browser.

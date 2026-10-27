@@ -445,13 +445,13 @@ async def test_profile_upgrade_reaches_import_and_does_not_repeat(
     monitor = ReleaseMonitor(service.settings, database, service, worker)
     await worker.start()
     try:
-        assert await monitor.upgrade_to_official() == 1
+        assert await monitor.upgrade_to_preferred_source() == 1
         pending = database.list_queued_job_ids()
         assert len(pending) == 1
         await asyncio.wait_for(worker.queue.join(), timeout=5)
         assert database.get_job(pending[0])["status"] == "completed"
         assert database.get_chapter("new-release")["downloaded"]
         assert validate_cbz(old_path)["page_count"] == 1
-        assert await monitor.upgrade_to_official() == 0
+        assert await monitor.upgrade_to_preferred_source() == 0
     finally:
         await worker.stop()

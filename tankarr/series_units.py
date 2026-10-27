@@ -296,9 +296,9 @@ def build_series_units(
     )
 
     book_releases: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    official_head_label = canonical_label(index.get("official_frontier"))
-    official_head = (
-        Decimal(official_head_label) if official_head_label is not None else None
+    catalogue_end_label = canonical_label(index.get("completed_chapter_limit"))
+    catalogue_end = (
+        Decimal(catalogue_end_label) if catalogue_end_label is not None else None
     )
     loose_slots: list[dict[str, Any]] = []
     for release in rows:
@@ -338,15 +338,15 @@ def build_series_units(
             )
             if not expected and not release.get("downloaded"):
                 continue
-            # The index drops the chapters the official edition has not
+            # The index drops chapters beyond the completed catalogue, unless it has
             # reached; a scanlation of one must not put the slot back as a
             # hole. Lookism's WEBTOON English run ends at 613 while the
             # aggregators already number 624, and those eleven showed as
             # missing under "613 / 613". A file on disk still keeps its row.
             if (
-                official_head is not None
+                catalogue_end is not None
                 and not release.get("downloaded")
-                and number > official_head
+                and number > catalogue_end
             ):
                 continue
             # Where the index ended the numbering, a release numbered past it
@@ -716,39 +716,23 @@ def build_series_units(
     }
 
 
-def _acquisition_frontier(
+def _completed_chapter_limit(
     database: Database, manga: dict[str, Any], releases: list[dict[str, Any]]
 ) -> Decimal | None:
-    """The chapter the official edition has reached, as acquisition sees it.
-
-    Under "prefer official" the hunt refuses every release past this line
-    ("Beyond the confirmed official edition frontier"), so a shelf that
-    counts those chapters as missing asks for what will never be fetched:
-    Lookism 614-625 under an edition at 613. The page reads the same line.
-    """
+    """Use the completed catalogue boundary consistently across read models."""
 
     from tankarr.series_summary import publication_summary
-    from tankarr.source_ranking import official_frontier, official_hosts
+    from tankarr.source_ranking import completed_chapter_limit
 
-    ranking = getattr(database, "source_ranking", None)
-    if getattr(ranking, "acquisition_policy", None) != "prefer_official":
-        return None
     metadata = manga.get("metadata") or {}
     try:
-        return official_frontier(
-            releases,
-            official_hosts(
-                metadata.get("official_links"),
-                language=str(manga.get("preferred_language") or ""),
-            ),
+        return completed_chapter_limit(
             metadata=metadata,
             status=publication_summary(manga, metadata)["status"],
-            chapter_total=(
-                manga.get("expected_count_override")
-                if str(manga.get("expected_count_unit_override") or "").casefold()
-                == "chapter"
-                else None
-            ),
+            chapter_total=manga.get("expected_count_override")
+            if str(manga.get("expected_count_unit_override") or "").casefold()
+            == "chapter"
+            else None,
         )
     except Exception:  # noqa: BLE001 - the page never fails for a frontier
         return None
@@ -784,7 +768,7 @@ def load_series_units(
         )
         # What the pages said about each chapter file and the books.
         content = database.content_alignment(manga_id)
-        frontier = _acquisition_frontier(database, manga, releases)
+        frontier = _completed_chapter_limit(database, manga, releases)
     from tankarr.series_form import sync_books
 
     units = apply_series_form(

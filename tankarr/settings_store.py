@@ -25,7 +25,7 @@ from tankarr.config import (
 from tankarr.database import Database
 from tankarr.download_sources import normalize_provider_priority
 from tankarr.languages import normalize_language_code, normalize_language_list
-from tankarr.source_ranking import normalize_acquisition_policy, normalize_source_list
+from tankarr.source_ranking import normalize_source_list
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +96,8 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "import_subprocess_memory_mb": SettingSpec("int", minimum=128, maximum=16384),
     "import_disk_reserve_bytes": SettingSpec("int", minimum=0, maximum=1024**4),
     "provider_priority": SettingSpec("str", min_length=3, max_length=200),
-    "release_acquisition_policy": SettingSpec("str", min_length=13, max_length=16),
-    "official_upgrade_enabled": SettingSpec("bool"),
     "source_upgrade_enabled": SettingSpec("bool"),
     "release_preference_profile": SettingSpec("str", max_length=20),
-    "official_edition_alignment_enabled": SettingSpec("bool"),
     "page_quality_recovery_enabled": SettingSpec("bool"),
     "duplicate_cleanup_enabled": SettingSpec("bool"),
     "preferred_unit": SettingSpec("str", min_length=7, max_length=8),
@@ -219,8 +216,6 @@ def coerce_setting(name: str, raw: str) -> Any:
             raise ValueError(
                 "release_preference_profile must be balanced, official or curated"
             )
-        if name == "release_acquisition_policy":
-            return normalize_acquisition_policy(value)
         if name == "log_level":
             from tankarr.logs import normalize_log_level
 
@@ -361,16 +356,6 @@ def apply_setting_overrides(settings: Settings, database: Database) -> None:
     """Layer persisted overrides over the environment-derived settings."""
 
     overrides = database.get_setting_overrides()
-    if "release_acquisition_policy" not in overrides:
-        legacy = overrides.get("prefer_official_releases")
-        if legacy is not None:
-            try:
-                enabled = str(legacy).strip().casefold() in {"1", "true", "yes", "on"}
-                settings.release_acquisition_policy = (
-                    "prefer_official" if enabled else "first_available"
-                )
-            except ValueError:
-                pass
     for name, raw in overrides.items():
         if name not in EDITABLE_SETTINGS:
             continue
@@ -400,8 +385,6 @@ def settings_view(settings: Settings, database: Database) -> dict[str, Any]:
         value = (
             settings.komga_effective_auth_method
             if name == "komga_auth_method"
-            else settings.effective_release_acquisition_policy
-            if name == "release_acquisition_policy"
             else getattr(settings, name)
         )
         if spec.secret:
@@ -571,9 +554,7 @@ def _update_settings_locked(
                 metadata_secrets.pop(name, None)
             continue
         database_changes[name] = "" if value is None else str(value)
-    delete_keys = (
-        ["prefer_official_releases"] if "release_acquisition_policy" in coerced else []
-    )
+    delete_keys: list[str] = []
     journal = settings.data_dir / ".settings-transaction.json"
     if metadata_secrets_changed:
         secret_path = settings.metadata_secrets_path

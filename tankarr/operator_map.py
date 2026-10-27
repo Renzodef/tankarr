@@ -76,10 +76,6 @@ class OperatorChapterMap:
                     "SELECT * FROM chapter_release WHERE manga_id=?", (manga_id,)
                 ).fetchall()
             ]
-            source_roles = self.database._numbering_source_roles(connection, manga_id)
-            secondary_evidence = self.database._secondary_official_evidence_connection(
-                connection, manga_id, source_roles
-            )
         # An edition can end in books with no chapter releases. Its effective
         # expected total and catalogue endpoint still bound new operator rows.
         known = {
@@ -157,8 +153,6 @@ class OperatorChapterMap:
             "manga": manga,
             "releases": releases,
             "numbering_releases": numbering_releases,
-            "source_roles": source_roles,
-            "secondary_evidence": secondary_evidence,
             "metadata": metadata,
             "entries": entries,
             "known": sorted(known, key=Decimal),
@@ -176,8 +170,6 @@ class OperatorChapterMap:
     ) -> list[dict[str, Any]]:
         decisions = reconcile_numbering(
             inputs["numbering_releases"],
-            source_roles=inputs["source_roles"],
-            secondary_evidence=inputs["secondary_evidence"],
             canonical_labels=canonical_decimal_labels(
                 entries,
                 inputs["numbering_releases"],

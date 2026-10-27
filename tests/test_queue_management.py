@@ -10,7 +10,6 @@ from tankarr.database import Database
 from tankarr.komga import KomgaClient
 from tankarr.providers.base import ProviderRequestError, ProviderUnavailableError
 from tankarr.service import TankarrService
-from tankarr.source_ranking import SourceRanking
 from tankarr.worker import DownloadWorker
 
 
@@ -250,7 +249,7 @@ def test_wanted_keeps_active_missing_releases_visible_without_requeueing(
 
 
 @pytest.mark.asyncio
-async def test_official_frontier_filters_verified_early_chapter_only_at_acquisition(
+async def test_only_completed_catalogue_totals_bound_automatic_acquisition(
     tmp_path: Path,
 ):
     database = Database(tmp_path / "tankarr.sqlite3")
@@ -319,9 +318,7 @@ async def test_official_frontier_filters_verified_early_chapter_only_at_acquisit
         for number in range(1, 7)
     ]
     database.upsert_chapters("frontier", [*official, *mirror])
-    assert database.get_chapter("mirror-6")["numbering_method"] == (
-        "verified_identity_continuation"
-    )
+    assert database.get_chapter("mirror-6")["numbering_method"] == ("source_identity")
     for number in range(1, 4):
         database.mark_chapter_downloaded(
             f"official-{number}", tmp_path / f"chapter-{number}.cbz"
@@ -343,16 +340,12 @@ async def test_official_frontier_filters_verified_early_chapter_only_at_acquisit
             if item.get("provider") != "expected"
         ]
 
-    assert database_chapters() == []
-    assert wanted_chapters() == []
-
-    database.source_ranking = SourceRanking(acquisition_policy="first_available")
     assert database_chapters() == ["4", "5", "6"]
     assert wanted_chapters() == ["4", "5", "6"]
 
-    stale = database.create_job("frontier", "mirror-4", "en")
-    database.source_ranking = SourceRanking(acquisition_policy="prefer_official")
-    assert database_chapters() == []
+    stale = database.create_job("frontier", "mirror-6", "en")
+    save_metadata("ended", 4)
+    assert database_chapters() == ["4"]
     service.settings.ensure_directories()
     identity = "0123456789abcdef0123456789abcdef"
     (service.settings.data_dir / ".tankarr-library-id").write_text(
@@ -362,7 +355,7 @@ async def test_official_frontier_filters_verified_early_chapter_only_at_acquisit
         identity, encoding="utf-8"
     )
     # The provider is an inert object: reaching it would fail the test.  The
-    # worker must discard the mapped-but-now-early job before claiming it.
+    # worker discards a job beyond the now-completed catalogue total.
     await service.process_download_job(stale["id"])
     with pytest.raises(KeyError):
         database.get_job(stale["id"])
@@ -402,8 +395,8 @@ async def test_official_frontier_filters_verified_early_chapter_only_at_acquisit
     assert wanted_chapters() == ["4", "5", "6"]
 
     database.update_manga("frontier", {"status_override": "continuing"})
-    assert database_chapters() == []
-    assert wanted_chapters() == []
+    assert database_chapters() == ["4", "5", "6"]
+    assert wanted_chapters() == ["4", "5", "6"]
     database.update_manga("frontier", {"status_override": "ended"})
     assert database_chapters() == ["4", "5", "6"]
     assert wanted_chapters() == ["4", "5", "6"]

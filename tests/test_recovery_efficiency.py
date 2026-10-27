@@ -369,11 +369,11 @@ async def test_wanted_snapshot_does_not_run_on_the_event_loop(monitor, monkeypat
         "retire_redundant_chapters",
         "retire_duplicate_chapter_files",
         "track_publication_pauses",
-        "upgrade_to_official",
+        "upgrade_to_preferred_source",
         "_notify_decisions",
     ):
         monkeypatch.setattr(monitor, method, AsyncMock(return_value=0))
-    for method in ("align_official_editions", "audit_page_quality"):
+    for method in ("audit_page_quality",):
         monkeypatch.setattr(monitor, method, AsyncMock(return_value={}))
 
     await monitor.search_wanted()

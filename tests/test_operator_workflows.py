@@ -241,12 +241,12 @@ def test_acquisition_preview_uses_isolated_ranking_and_preserves_settings(contex
     ranking = database.source_ranking
     original_overrides = database.get_setting_overrides()
     preview = acquisition_preview(
-        settings, database, "mb:1", {"release_acquisition_policy": "first_available"}
+        settings, database, "mb:1", {"source_priority_fresh": "suwayomi:community"}
     )
     assert preview["candidates"] == []
-    assert preview["preferences"]["release_acquisition_policy"] == "first_available"
+    assert preview["preferences"]["source_priority_fresh"] == "suwayomi:community"
     assert database.source_ranking is ranking
-    assert settings.release_acquisition_policy is None
+    assert settings.source_priority_fresh == ""
     assert database.get_setting_overrides() == original_overrides
     with pytest.raises(ValueError):
         acquisition_preview(settings, database, "mb:1", {"auth_password": "new"})

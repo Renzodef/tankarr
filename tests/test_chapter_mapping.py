@@ -863,15 +863,8 @@ def test_volumes_series_never_materialises_chapter_slots():
     assert index["expected_count"] == 34 and index["raw_missing_count"] == 32
 
 
-def test_a_chapter_only_aggregators_have_yet_is_not_missing():
-    """One Piece 1193: posted by two aggregators, not yet on MANGA Plus.
-
-    The official platform is the reference for a running work, so the shelf
-    ends at 1192. Counting the aggregators' head start as a hole made the
-    card read "1192 / 1192" and "1 missing" at the same time. The chapter
-    stays listed and becomes expected again the moment the official source
-    publishes it.
-    """
+def test_a_new_source_chapter_is_missing_even_while_the_publisher_lags():
+    """Any configured source can extend the running chapter sequence."""
     metadata = {
         "status": "ongoing",
         "official_links": [
@@ -886,7 +879,6 @@ def test_a_chapter_only_aggregators_have_yet_is_not_missing():
         "status": "ongoing",
         "monitor_mode": "all",
         "preferred_language": "en",
-        "_unit_context": {"acquisition_policy": "prefer_official"},
     }
     official = [
         {
@@ -904,11 +896,12 @@ def test_a_chapter_only_aggregators_have_yet_is_not_missing():
         }
     ]
     index = build_chapter_index(manga, metadata, [*official, *ahead])
-    assert index["expected_count"] == 5 and index["reference_kind"] == "official"
-    assert index["raw_missing_count"] == 0
-    assert index["expected_available_count"] == 5
+    assert index["expected_count"] == 6 and index["reference_kind"] == "available"
+    assert index["raw_missing_count"] == 1
+    assert index["expected_available_count"] == 6
     early = next(slot for slot in index["slots"] if slot["chapter"] == "6")
-    assert early["expected"] is False and early["beyond_official_frontier"] is True
+    assert early["expected"] is True
+    assert not early.get("beyond_catalogue_total")
     # The official source publishes it: the shelf grows and it counts again.
     published = [
         {
@@ -919,13 +912,6 @@ def test_a_chapter_only_aggregators_have_yet_is_not_missing():
     ]
     index = build_chapter_index(manga, metadata, [*official, *ahead, *published])
     assert index["expected_count"] == 6 and index["raw_missing_count"] == 1
-    # An operator who takes the first release available wants it regardless.
-    first_available = {
-        **manga,
-        "_unit_context": {"acquisition_policy": "first_available"},
-    }
-    index = build_chapter_index(first_available, metadata, [*official, *ahead])
-    assert index["raw_missing_count"] == 1
 
 
 def test_official_season_opener_is_main_episode_not_optional_special():
@@ -975,7 +961,7 @@ def test_official_season_opener_is_main_episode_not_optional_special():
     assert completed_counts["missing_count"] == 0
 
 
-def test_running_work_reference_is_the_official_source_or_available_chapters():
+def test_running_work_reference_uses_all_configured_sources():
     metadata = {
         "status": "ongoing",
         "latest_release_chapter": 877,
@@ -1012,9 +998,9 @@ def test_running_work_reference_is_the_official_source_or_available_chapters():
         for n in range(1, 9)
     ]
     index = build_chapter_index(manga, metadata, [*scans, *official])
-    assert index["expected_count"] == 8 and index["reference_kind"] == "official"
-    assert index["latest_chapter"] == "8"
-    assert "MANGA Plus" in index["expected_source"]
+    assert index["expected_count"] == 10 and index["reference_kind"] == "available"
+    assert index["latest_chapter"] == "10"
+    assert index["expected_source"] == "available sources"
     # Ended works keep the catalogue total.
     ended = build_chapter_index(
         {**manga, "status": "completed"},
@@ -1246,7 +1232,7 @@ def test_two_official_platforms_the_most_advanced_is_the_reference():
         for n in range(1, 26)
     ]
     index = build_chapter_index(manga, metadata, [*plus, *comikey])
-    assert index["expected_count"] == 25 and index["reference_kind"] == "official"
+    assert index["expected_count"] == 25 and index["reference_kind"] == "available"
     # When the leading platform stops (rights moved), the other one becomes the reference by the same rule.
     stalled = build_chapter_index(manga, metadata, [*plus, *comikey[:10]])
     assert stalled["expected_count"] == 20
@@ -1372,14 +1358,14 @@ def test_a_future_dated_episode_is_announced_not_published():
     index = build_chapter_index(manga, metadata, releases)
 
     # 4 came out a week ago (paid, but published), 5 today, 6 next week.
-    assert index["expected_count"] == 5
-    assert index["reference_kind"] == "official"
+    assert index["expected_count"] == 3
+    assert index["reference_kind"] == "available"
     assert index["expected_satisfied_count"] == 3
     # Paid episodes exist but cannot be fetched: they are not "missing".
     assert index["raw_missing_count"] == 0
 
 
-def test_a_finished_work_without_a_catalogue_total_uses_its_official_platform():
+def test_a_finished_work_without_a_catalogue_total_uses_available_sources():
     """The catalogue never recorded how many chapters the work has; what the
     official platform published is the total, exactly as for a running work."""
 
@@ -1409,8 +1395,8 @@ def test_a_finished_work_without_a_catalogue_total_uses_its_official_platform():
 
     index = build_chapter_index(manga, metadata, releases)
 
-    assert index["expected_count"] == 4
-    assert index["reference_kind"] == "official"
+    assert index["expected_count"] is None
+    assert index["reference_kind"] == "none"
 
 
 def test_parts_from_one_source_satisfy_a_whole_slot_nobody_else_delivered():
@@ -2511,7 +2497,7 @@ def test_running_english_run_ignores_japanese_head_and_legacy_verification(
     assert index["expected_count"] == 8
     assert index["raw_missing_count"] == 0
     assert index["latest_chapter"] == "8"
-    assert index["reference_kind"] == ("official" if official else "available")
+    assert index["reference_kind"] == "available"
     assert {s["chapter"] for s in index["slots"]} == {str(n) for n in range(1, 9)}
     counts = decorate_series_summary(dict(manga), metadata, index)["library_count"]
     assert counts["downloaded_count"] == counts["total_count"] == 8

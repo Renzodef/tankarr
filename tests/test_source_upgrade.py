@@ -1,6 +1,3 @@
-from tankarr.official_upgrade import upgrade_candidates
-
-
 def rel(chapter, host, downloaded=False, ident=None, **extra):
     return {
         "id": ident or f"{host}-{chapter}",
@@ -12,29 +9,9 @@ def rel(chapter, host, downloaded=False, ident=None, **extra):
     }
 
 
-def test_official_release_replaces_a_scanlator_file_once_and_only_once():
-    hosts = frozenset({"mangaplus.shueisha.co.jp"})
-    chapters = [
-        rel("1", "weebcentral.com", downloaded=True),
-        rel("1", "mangaplus.shueisha.co.jp"),  # upgrade
-        rel("2", "weebcentral.com", downloaded=True),
-        rel(
-            "2", "mangaplus.shueisha.co.jp", downloaded=True
-        ),  # already official on disk
-        rel("3", "weebcentral.com", downloaded=True),  # no official yet
-        rel("4", "mangaplus.shueisha.co.jp"),  # nothing on disk: Wanted's job
-        rel("5", "weebcentral.com", downloaded=True),
-        rel("5", "mangaplus.shueisha.co.jp", queue_status="queued"),  # already queued
-    ]
-    assert [item["id"] for item in upgrade_candidates(chapters, hosts)] == [
-        "mangaplus.shueisha.co.jp-1"
-    ]
-    assert upgrade_candidates(chapters, frozenset()) == []
-
-
 def test_preferred_source_upgrades_do_not_churn_or_cross_language():
-    from tankarr.official_upgrade import preferred_source_upgrades
     from tankarr.source_ranking import SourceRanking
+    from tankarr.source_upgrade import preferred_source_upgrades
 
     ranking = SourceRanking(backfill=("suwayomi:preferred", "suwayomi:old"))
     old = rel(

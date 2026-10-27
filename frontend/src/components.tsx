@@ -153,14 +153,6 @@ const ICON_PATHS: Record<string, ReactNode> = {
       <line x1="12" y1="16" x2="12.01" y2="16" />
     </>
   ),
-  calendar: (
-    <>
-      <rect x="3" y="4" width="18" height="18" rx="2" />
-      <line x1="16" y1="2" x2="16" y2="6" />
-      <line x1="8" y1="2" x2="8" y2="6" />
-      <line x1="3" y1="10" x2="21" y2="10" />
-    </>
-  ),
   upload: (
     <>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -474,7 +466,6 @@ export type Route =
   | { page: "series"; id: string }
   | { page: "reader"; id: string; initialPage: number | null }
   | { page: "bookmarks" }
-  | { page: "calendar" }
   | { page: "activity" }
   | { page: "wanted" }
   | { page: "history" }
@@ -519,7 +510,6 @@ export function parseRoute(hash: string): Route {
   if (segments[0] === "authors" && segments[1]) {
     return { page: "author", id: decodeURIComponent(segments.slice(1).join("/")) };
   }
-  if (segments[0] === "calendar") return { page: "calendar" };
   if (segments[0] === "bookmarks") return { page: "bookmarks" };
   if (segments[0] === "activity") return { page: "activity" };
   if (segments[0] === "import") return { page: "import" };

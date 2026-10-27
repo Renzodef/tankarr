@@ -14,7 +14,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, nullcontext, suppress
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from time import monotonic
@@ -114,7 +114,7 @@ from tankarr.models import (
     UpdateMangaRequest,
 )
 from tankarr.monitor import ReleaseMonitor
-from tankarr.monitoring import BACKLOG_MONITOR_MODES, FUTURE_MONITOR_MODES
+from tankarr.monitoring import BACKLOG_MONITOR_MODES
 from tankarr.native_reader import NativeReaderLibrary, register_native_reader_routes
 from tankarr.notify import CHANNEL_SETTINGS, Notifier
 from tankarr.official_platforms import extensions_to_install, official_platforms_for
@@ -134,12 +134,10 @@ from tankarr.read_model_cache import (
 from tankarr.reader_discovery import discover_reader as discover_local_reader
 from tankarr.readers import READER_LABELS, effective_reader_kind, resolve_reader_link
 from tankarr.redaction import redact_secrets
-from tankarr.release_cadence import expected_releases
 from tankarr.release_sources import ReleaseSourceManager
 from tankarr.response_snapshots import ResponseSnapshots
 from tankarr.sabnzbd import SABnzbdClient
-from tankarr.series_summary import decorate_series_summary, publication_summary
-from tankarr.series_unit import select_releases
+from tankarr.series_summary import decorate_series_summary
 from tankarr.series_units import load_series_units
 from tankarr.service import (
     FutureMonitoringUnavailable,
@@ -161,8 +159,6 @@ from tankarr.settings_store import (
 )
 from tankarr.source_alerts import challenged_source_names, source_outages
 from tankarr.source_circuit import source_gate_key
-from tankarr.source_numbering import is_not_yet_released
-from tankarr.source_ranking import is_official_release, official_hosts
 from tankarr.status_snapshot import read_status_updates
 from tankarr.stump import StumpLibraryClient
 from tankarr.suwayomi_bootstrap import (
@@ -419,7 +415,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> Response:
         """Serve a cached JSON snapshot: 304 when unchanged, else precompressed.
 
-        Library, Wanted and Calendar are rebuilt once per change and then
+        Library, Wanted are rebuilt once per change and then
         served to every tab and poll. Their gzip form is kept next to the
         validator, so the middleware does not compress the same megabytes
         again on each request; the first request after a change compresses
@@ -1096,15 +1092,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     installed_sources_cache: dict[str, Any] = {"at": 0.0, "sources": []}
 
-    def _acquisition_policy() -> str:
-        """The release policy the download gate is applying right now."""
-
-        return (
-            str(getattr(database.source_ranking, "acquisition_policy", "") or "")
-            .strip()
-            .casefold()
-        )
-
     def _unit_context(manga_id: str) -> dict[str, Any]:
         return {
             "preferred": getattr(settings, "preferred_unit", "volumes"),
@@ -1113,7 +1100,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "pending_volumes": database.pending_book_volumes([manga_id]).get(
                 manga_id, set()
             ),
-            "acquisition_policy": _acquisition_policy(),
         }
 
     series_unit.unit_context = _unit_context
@@ -1357,7 +1343,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "indexer_volumes": inputs["indexer_volumes"],
             "unobtainable_volumes": inputs["unobtainable_volumes"],
             "pending_volumes": inputs.get("pending_volumes", set()),
-            "acquisition_policy": _acquisition_policy(),
         }
         chapter_index = build_chapter_index(
             item,
@@ -3193,15 +3178,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=500, detail=f"Unable to delete volume files: {exc}"
             ) from exc
 
-    @app.get("/api/manga/{manga_id}/calendar")
-    async def series_calendar(manga_id: str):
-        """Recent dated releases and the estimated next chapters of one work."""
-
-        try:
-            return await run_api_blocking(service.series_calendar, manga_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Series not found") from exc
-
     @app.get("/api/manga/{manga_id}/units")
     async def series_units(manga_id: str):
         try:
@@ -4215,42 +4191,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return await monitor.search_wanted(trigger="manual")
 
-    @app.get("/api/manga/{manga_id}/official-alignment")
-    async def official_alignment(manga_id: str):
-        """What this series holds past its official edition, and the warrant."""
-
-        try:
-            report = service.surplus_beyond_official_edition(manga_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Series not found") from exc
-        return {
-            **report,
-            "surplus": [
-                {
-                    "id": str(release["id"]),
-                    "chapter": release.get("chapter"),
-                    "title": release.get("title"),
-                    "source_name": release.get("source_name"),
-                    "library_path": release.get("library_path"),
-                }
-                for release in report["surplus"]
-            ],
-        }
-
-    @app.post("/api/manga/{manga_id}/official-alignment")
-    async def apply_official_alignment(manga_id: str, dry_run: bool = False):
-        try:
-            service.assert_mutations_allowed()
-        except RecoveryBlocked as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        try:
-            outcome = await service.align_with_official_edition(
-                manga_id, dry_run=dry_run
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Series not found") from exc
-        return {**outcome, "surplus": len(outcome["surplus"])}
-
     @app.get("/api/manga/{manga_id}/page-quality")
     async def page_quality_report(manga_id: str):
         """Every measured chapter of a series, worst first."""
@@ -4774,7 +4714,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "source_priority_fresh",
             "source_priority_backfill",
             "release_preference_profile",
-            "release_acquisition_policy",
         } & set(applied):
             database.provider_priority = settings.provider_priority_order
             database.source_ranking = settings.source_ranking
@@ -5551,525 +5490,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             for source in sources:
                 await source.aclose()
-
-    calendar_cache: OrderedDict[tuple[str, ...], tuple[bytes, float]] = OrderedDict()
-    calendar_cache_lock = asyncio.Lock()
-    # The decoded snapshot behind a Calendar render: every preferred-language
-    # release of every series. Moving from one month to the next used to
-    # rebuild it (2.6 s for 1,500 series); one revision now decodes it once,
-    # and the burst over, it is released again.
-    calendar_inputs_cache: dict[str, Any] = {
-        "revision": None,
-        "inputs": None,
-        "drop": None,
-    }
-    calendar_inputs_ttl_seconds = 90.0
-    calendar_cache_limit = 12
-
-    def render_calendar(
-        *,
-        days: int,
-        ahead: int,
-        start_on: date | None,
-        end_on: date | None,
-        _with_expiry: bool = False,
-        calendar_inputs: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        now = datetime.now(UTC)
-        if (start_on is None) != (end_on is None):
-            raise HTTPException(
-                status_code=422, detail="start and end must be supplied together"
-            )
-        if start_on is not None and end_on is not None:
-            if end_on < start_on:
-                raise HTTPException(
-                    status_code=422, detail="end must not precede start"
-                )
-            if (end_on - start_on).days > 31:
-                raise HTTPException(
-                    status_code=422, detail="calendar windows cannot exceed 32 days"
-                )
-            # Release dates may be stored either as YYYY-MM-DD or as complete
-            # timestamps. A date-only lower bound includes both representations.
-            release_start = start_on.isoformat()
-            release_end = f"{end_on.isoformat()}T23:59:59.999999+00:00"
-            prediction_horizon = max(1, (end_on - now.date()).days)
-        else:
-            release_start = (now - timedelta(days=days)).isoformat()
-            release_end = (now + timedelta(days=max(2, ahead))).isoformat()
-            prediction_horizon = ahead
-
-        def published_at(value: object) -> datetime | None:
-            raw = str(value or "").strip()
-            if not raw:
-                return None
-            try:
-                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-            return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
-
-        release_window_start = published_at(release_start)
-        release_window_end = published_at(release_end)
-        assert release_window_start is not None and release_window_end is not None
-
-        if calendar_inputs is None:
-            calendar_inputs = database.list_calendar_inputs()
-        # A release can cross its announcement/window boundary without a DB
-        # write. Expire exactly at the next such transition or UTC midnight.
-        expires_at = datetime.combine(
-            now.date() + timedelta(days=1), datetime.min.time(), tzinfo=UTC
-        ).timestamp()
-        for context in calendar_inputs:
-            for release in context["chapters"]:
-                published = published_at(release.get("publish_at"))
-                if published is None:
-                    continue
-                transitions = [published.timestamp()]
-                if start_on is None:
-                    transitions.extend(
-                        (
-                            (published + timedelta(days=days)).timestamp() + 0.000001,
-                            (published - timedelta(days=max(2, ahead))).timestamp(),
-                        )
-                    )
-                expires_at = min(
-                    [
-                        expires_at,
-                        *(moment for moment in transitions if moment > now.timestamp()),
-                    ]
-                )
-        inputs_by_manga = {
-            str(entry["manga"]["id"]): entry for entry in calendar_inputs
-        }
-        # Each series follows one unit (chapters or volumes). Work from the
-        # complete snapshot so a secondary release cannot take the calendar
-        # date merely because its official counterpart falls outside the
-        # requested window.
-        unit_filtered: list[dict[str, Any]] = []
-        policy = _acquisition_policy()
-        for context in calendar_inputs:
-            # The snapshot already carries every input of the unit choice;
-            # embedding it spares three queries per series.
-            manga_row = {
-                **context["manga"],
-                "_unit_context": {
-                    "preferred": settings.preferred_unit,
-                    "acquisition_policy": policy,
-                    **(context.get("unit_context") or {}),
-                },
-            }
-            metadata_row = context["metadata"]
-            calendar_candidates: list[dict[str, Any]] = []
-            for release in context["chapters"]:
-                candidate = dict(release)
-                host = (
-                    (urlsplit(str(candidate.get("source_url") or "")).hostname or "")
-                    .casefold()
-                    .removeprefix("www.")
-                )
-                if host:
-                    source_key = str(
-                        candidate.get("source_key")
-                        or candidate.get("source_name")
-                        or candidate.get("provider")
-                        or ""
-                    )
-                    candidate["source_key"] = f"{source_key}@{host}"
-                calendar_candidates.append(candidate)
-            calendar_hosts = official_hosts(
-                ((metadata_row or {}).get("data") or {}).get("official_links"),
-                language=str(manga_row.get("preferred_language") or ""),
-            )
-            unit_info, kept = select_releases(
-                manga_row,
-                (metadata_row or {}).get("data") or {},
-                calendar_candidates,
-            )
-            kept_ids = {str(release.get("id") or "") for release in kept}
-            if unit_info["unit"] == "chapters":
-                kept.extend(
-                    release
-                    for release in calendar_candidates
-                    if str(release.get("id") or "") not in kept_ids
-                    and str(release.get("numbering_status") or "mapped") == "mapped"
-                    and canonical_number(release.get("chapter")) is not None
-                    and is_not_yet_released(release)
-                    and is_official_release(release, calendar_hosts)
-                )
-            unit_filtered.extend(
-                release
-                for release in kept
-                if str(release.get("numbering_status") or "mapped") == "mapped"
-            )
-        # One row per canonical unit. Acquisition policy is intentionally not
-        # consulted: it selects a file, never a chapter identity or date.
-        grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-        for release in unit_filtered:
-            label = canonical_number(release.get("chapter")) or ""
-            volume = canonical_number(release.get("volume")) or "" if not label else ""
-            if not label and not volume:
-                continue
-            grouped.setdefault((str(release["manga_id"]), label, volume), []).append(
-                release
-            )
-        releases: list[dict[str, Any]] = []
-        hosts_by_manga: dict[str, frozenset[str]] = {}
-        publication_by_manga: dict[str, dict[str, Any]] = {}
-        for candidates in grouped.values():
-            manga_key = str(candidates[0]["manga_id"])
-            if manga_key not in hosts_by_manga:
-                context = inputs_by_manga.get(manga_key)
-                metadata_row = context["metadata"] if context is not None else None
-                hosts_by_manga[manga_key] = official_hosts(
-                    ((metadata_row or {}).get("data") or {}).get("official_links"),
-                    language=str(candidates[0].get("language") or ""),
-                )
-            hosts = hosts_by_manga[manga_key]
-            official = [
-                item
-                for item in candidates
-                if is_official_release(item, hosts)
-                and published_at(item.get("publish_at"))
-            ]
-            # With a mapped publisher platform, only its date is authoritative.
-            # A secondary-only candidate is represented on the predicted
-            # official date below as "early available".
-            if hosts and not official:
-                continue
-            context = inputs_by_manga.get(manga_key)
-            if not official and context is not None:
-                # One summary per series, not one per chapter of it.
-                publication = publication_by_manga.get(manga_key)
-                if publication is None:
-                    publication = publication_summary(
-                        {
-                            **context["manga"],
-                            "publication_signals": context["publication_signals"],
-                        },
-                        (context["metadata"] or {}).get("data") or {},
-                    )
-                    publication_by_manga[manga_key] = publication
-                # A recent scan upload is not evidence that a paused or ended
-                # publication released a new chapter. Keep dated official
-                # history, but do not present secondary reuploads as news.
-                if publication["status"] == "ended" or publication.get("paused"):
-                    continue
-            dated = official or [
-                item for item in candidates if published_at(item.get("publish_at"))
-            ]
-            if not dated:
-                continue
-            best = min(
-                dated,
-                key=lambda item: (
-                    published_at(item.get("publish_at"))
-                    or datetime.max.replace(tzinfo=UTC),
-                    str(item.get("id") or ""),
-                ),
-            )
-            release_date = published_at(best.get("publish_at"))
-            if (
-                release_date is None
-                or release_date < release_window_start
-                or release_date > release_window_end
-            ):
-                continue
-            entry = {
-                k: v
-                for k, v in best.items()
-                if k not in {"source_key", "source_name", "provider"}
-            }
-            context = inputs_by_manga.get(manga_key)
-            manga_row = context["manga"] if context is not None else {}
-            metadata_row = context["metadata"] if context is not None else None
-            metadata_data = (metadata_row or {}).get("data") or {}
-            entry["manga_title"] = manga_row.get("title")
-            if metadata_row is not None and metadata_row.get("artwork_path"):
-                entry["manga_cover_url"] = series_artwork_url(
-                    manga_key,
-                    normalized_artwork_sha256(metadata_row.get("artwork_sha256")),
-                )
-            else:
-                entry["manga_cover_url"] = metadata_data.get(
-                    "cover_url"
-                ) or manga_row.get("cover_url")
-            entry["downloaded"] = any(
-                bool(item.get("downloaded")) for item in candidates
-            )
-            if entry["downloaded"]:
-                entry["availability_status"] = "downloaded"
-            elif release_date > now:
-                entry["availability_status"] = "expected"
-            elif official:
-                entry["availability_status"] = "official_available"
-            else:
-                entry["availability_status"] = "early_available"
-            entry["release_count"] = len(candidates)
-            releases.append(entry)
-        releases.sort(key=lambda item: str(item.get("publish_at") or ""), reverse=True)
-        expected: list[dict[str, Any]] = []
-        for context in calendar_inputs:
-            item = context["manga"]
-            if item.get("monitor_mode") not in FUTURE_MONITOR_MODES:
-                continue
-            # Only the publisher's own release dates make a calendar entry:
-            # works without a mapped official platform have no schedule.
-            metadata_row = context["metadata"]
-            metadata_data = (metadata_row or {}).get("data") or {}
-            hosts = official_hosts(
-                metadata_data.get("official_links"),
-                language=str(item.get("preferred_language") or ""),
-            )
-            chapters = context["chapters"]
-            official_history = [
-                {
-                    "chapter": row.get("chapter"),
-                    "release_date": row.get("publish_at"),
-                }
-                for row in chapters
-                if hosts
-                and str(row.get("numbering_status") or "mapped") == "mapped"
-                and row.get("chapter")
-                and is_official_release(row, hosts)
-                and (released := published_at(row.get("publish_at"))) is not None
-                and released <= now
-            ]
-            if len(official_history) < 4:
-                continue  # only the publisher's own dates make a calendar
-            # A paused or finished work has no expected chapter, whatever its
-            # past rhythm says (unORDINARY: "On hiatus" on Webtoons, and the
-            # calendar kept promising the next Thursday).
-            publication = publication_summary(
-                {
-                    **item,
-                    "publication_signals": context["publication_signals"],
-                },
-                metadata_data,
-            )
-            if publication["status"] == "ended" or publication.get("paused"):
-                continue
-            history = official_history
-            predictions = expected_releases(
-                history, today=now.date(), horizon_days=prediction_horizon
-            )
-            future_official = {
-                str(canonical_number(row.get("chapter"))): released
-                for row in chapters
-                if hosts
-                and str(row.get("numbering_status") or "mapped") == "mapped"
-                and row.get("chapter")
-                and is_official_release(row, hosts)
-                and (released := published_at(row.get("publish_at"))) is not None
-                and released > now
-            }
-            if not predictions and not future_official:
-                continue
-            known: dict[str, dict[str, bool]] = {}
-            for row in chapters:
-                if str(row.get("numbering_status") or "mapped") != "mapped":
-                    continue
-                chapter_key = str(canonical_number(row.get("chapter")) or "")
-                if not chapter_key:
-                    continue
-                state = known.setdefault(
-                    chapter_key,
-                    {
-                        "downloaded": False,
-                        "official_available": False,
-                        "early_available": False,
-                    },
-                )
-                state["downloaded"] = state["downloaded"] or bool(row.get("downloaded"))
-                released = published_at(row.get("publish_at"))
-                available_now = released is None or released <= now
-                if available_now and is_official_release(row, hosts):
-                    state["official_available"] = True
-                elif available_now:
-                    state["early_available"] = True
-            if metadata_row is not None and metadata_row.get("artwork_path"):
-                cover_url = series_artwork_url(
-                    str(item["id"]),
-                    normalized_artwork_sha256(metadata_row.get("artwork_sha256")),
-                )
-            else:
-                cover_url = metadata_data.get("cover_url") or item.get("cover_url")
-            for prediction in predictions:
-                if prediction.chapter in future_official:
-                    continue
-                if (
-                    start_on is not None
-                    and end_on is not None
-                    and not start_on <= prediction.expected_at <= end_on
-                ):
-                    continue
-                state = known.get(
-                    prediction.chapter,
-                    {
-                        "downloaded": False,
-                        "official_available": False,
-                        "early_available": False,
-                    },
-                )
-                # Under an official acquisition policy a scanlator running
-                # ahead is not an availability: those releases are exactly
-                # what the download gate refuses, so advertising them turns
-                # the calendar into an invitation to lower the policy. The
-                # entry stays "expected" on the publisher's own date. Only
-                # first_available treats an early release as acquirable news.
-                early_counts = (
-                    database.source_ranking.acquisition_policy == "first_available"
-                )
-                availability_status = (
-                    "downloaded"
-                    if state["downloaded"]
-                    else "official_available"
-                    if state["official_available"]
-                    else "early_available"
-                    if state["early_available"] and early_counts
-                    else "expected"
-                )
-                expected.append(
-                    {
-                        "manga_id": item["id"],
-                        "manga_title": item.get("title"),
-                        "manga_cover_url": cover_url,
-                        "chapter": prediction.chapter,
-                        "expected_at": prediction.expected_at.isoformat(),
-                        "cadence_days": prediction.cadence_days,
-                        "cadence_label": prediction.cadence_label,
-                        "last_chapter": prediction.last_chapter,
-                        "last_release_at": prediction.last_release_at.isoformat(),
-                        "availability_status": availability_status,
-                        "available": availability_status
-                        in {"early_available", "official_available", "downloaded"},
-                        "downloaded": state["downloaded"],
-                        # The date is a projection of the work's own rhythm,
-                        # never a publisher announcement.
-                        "estimated": True,
-                        "overdue_days": prediction.overdue_days,
-                    }
-                )
-        expected.sort(
-            key=lambda entry: (entry["expected_at"], str(entry["manga_title"]))
-        )
-        result = {"releases": releases, "expected": expected}
-        if _with_expiry:
-            result["_expires_at"] = expires_at
-        return result
-
-    app.state.render_calendar = render_calendar
-
-    def remember_calendar_inputs(
-        revision: tuple[str, ...], inputs: list[dict[str, Any]]
-    ) -> None:
-        previous = calendar_inputs_cache["drop"]
-        if previous is not None:
-            previous.cancel()
-        calendar_inputs_cache["revision"] = revision
-        calendar_inputs_cache["inputs"] = inputs
-
-        def drop() -> None:
-            if calendar_inputs_cache["drop"] is handle:
-                calendar_inputs_cache["revision"] = None
-                calendar_inputs_cache["inputs"] = None
-                calendar_inputs_cache["drop"] = None
-
-        handle = asyncio.get_running_loop().call_later(
-            calendar_inputs_ttl_seconds, drop
-        )
-        calendar_inputs_cache["drop"] = handle
-
-    async def cached_calendar_payload(
-        *,
-        days: int,
-        ahead: int,
-        start_on: date | None,
-        end_on: date | None,
-        revision: tuple[str, ...],
-    ) -> bytes:
-        key = (
-            str(days),
-            str(ahead),
-            start_on.isoformat() if start_on is not None else "",
-            end_on.isoformat() if end_on is not None else "",
-            *revision,
-        )
-        cached = calendar_cache.get(key)
-        if cached is not None and cached[1] > datetime.now(UTC).timestamp():
-            calendar_cache.move_to_end(key)
-            return cached[0]
-        async with calendar_cache_lock:
-            cached = calendar_cache.get(key)
-            if cached is not None and cached[1] > datetime.now(UTC).timestamp():
-                calendar_cache.move_to_end(key)
-                return cached[0]
-
-            shared_inputs = (
-                calendar_inputs_cache["inputs"]
-                if calendar_inputs_cache["revision"] == revision
-                else None
-            )
-
-            def build_payload() -> tuple[bytes, float, list[dict[str, Any]]]:
-                inputs = (
-                    database.list_calendar_inputs()
-                    if shared_inputs is None
-                    else shared_inputs
-                )
-                rendered = render_calendar(
-                    days=days,
-                    ahead=ahead,
-                    start_on=start_on,
-                    end_on=end_on,
-                    _with_expiry=True,
-                    calendar_inputs=inputs,
-                )
-                expires_at = rendered.pop("_expires_at")
-                return fastjson.dumps(rendered), expires_at, inputs
-
-            payload, expires_at, inputs = await run_api_blocking(build_payload)
-            remember_calendar_inputs(revision, inputs)
-            calendar_cache[key] = payload, expires_at
-            calendar_cache.move_to_end(key)
-            while len(calendar_cache) > calendar_cache_limit:
-                calendar_cache.popitem(last=False)
-            return payload
-
-    @app.get("/api/calendar")
-    async def calendar(
-        request: Request,
-        days: int = Query(default=14, ge=1, le=90),
-        ahead: int = Query(default=14, ge=1, le=60),
-        start: date | None = Query(default=None),
-        end: date | None = Query(default=None),
-    ):
-        if (start is None) != (end is None):
-            raise HTTPException(
-                status_code=422, detail="start and end must be supplied together"
-            )
-        if start is not None and end is not None:
-            if end < start:
-                raise HTTPException(
-                    status_code=422, detail="end must not precede start"
-                )
-            if (end - start).days > 31:
-                raise HTTPException(
-                    status_code=422, detail="calendar windows cannot exceed 32 days"
-                )
-        revision = (
-            *await run_revision(database.calendar_revision),
-            database.source_ranking.acquisition_policy,
-            datetime.now(UTC).date().isoformat(),
-        )
-        payload = await cached_calendar_payload(
-            days=days,
-            ahead=ahead,
-            start_on=start,
-            end_on=end,
-            revision=revision,
-        )
-        return await snapshot_response("calendar", payload, request)
 
     @app.patch("/api/manga/{manga_id}/chapters/{chapter_id}/monitored")
     async def set_chapter_monitored(

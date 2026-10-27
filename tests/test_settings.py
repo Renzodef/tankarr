@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -101,33 +100,23 @@ def test_settings_roundtrip_masking_and_validation(tmp_path: Path):
     assert fresh.qbittorrent_password == "hunter2"
 
 
-def test_release_acquisition_policy_migrates_legacy_boolean(tmp_path: Path):
+def test_retired_edition_settings_cannot_restore_publisher_gating(tmp_path: Path):
     database = Database(tmp_path / "tankarr.sqlite3")
     database.initialize()
-    database.save_setting("prefer_official_releases", "false")
+    retired = {
+        "prefer_official_releases": "true",
+        "release_acquisition_policy": "official_only",
+        "official_upgrade_enabled": "true",
+        "official_edition_alignment_enabled": "true",
+    }
+    for key, value in retired.items():
+        database.save_setting(key, value)
     settings = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
-
     apply_setting_overrides(settings, database)
-
-    assert settings.effective_release_acquisition_policy == "first_available"
-    assert settings_view(settings, database)["release_acquisition_policy"]["value"] == (
-        "first_available"
-    )
-
-    update_settings(
-        settings, database, {"release_acquisition_policy": "prefer_official"}
-    )
-    assert settings.effective_release_acquisition_policy == "prefer_official"
-    overrides = database.get_setting_overrides()
-    assert overrides["release_acquisition_policy"] == "prefer_official"
-    assert "prefer_official_releases" not in overrides
-
-    # "official only" was retired: preferring official now governs numbering,
-    # so a stored value from an older build must not resurrect the policy.
-    with pytest.raises(ValueError):
-        update_settings(
-            settings, database, {"release_acquisition_policy": "official_only"}
-        )
+    assert not set(retired) & settings_view(settings, database).keys()
+    for key in retired:
+        with pytest.raises(ValueError):
+            update_settings(settings, database, {key: retired[key]})
 
 
 def test_search_language_profile_is_normalized_and_keeps_default_enabled(
@@ -518,200 +507,6 @@ def test_chapter_monitor_toggle_excludes_from_candidates(tmp_path: Path):
     ]
 
 
-def test_calendar_lists_releases_inside_window(tmp_path: Path):
-    database = Database(tmp_path / "tankarr.sqlite3")
-    database.initialize()
-    seed_manga(database)
-    initial_revision = database.calendar_revision()
-    now = datetime.now(UTC)
-    database.upsert_chapters(
-        "manga-1",
-        [
-            {
-                "id": "chapter-recent",
-                "chapter": "2",
-                "volume": "1",
-                "title": "Recent",
-                "language": "en",
-                "provider": "mangadex",
-                "groups": [],
-                "publish_at": (now - timedelta(days=2)).isoformat(),
-                "source_url": "https://example.test/2",
-            },
-            {
-                "id": "chapter-ancient",
-                "chapter": "0",
-                "volume": "1",
-                "title": "Ancient",
-                "language": "en",
-                "provider": "mangadex",
-                "groups": [],
-                "publish_at": (now - timedelta(days=400)).isoformat(),
-                "source_url": "https://example.test/0",
-            },
-        ],
-    )
-    start = (now - timedelta(days=14)).isoformat()
-    end = (now + timedelta(days=2)).isoformat()
-    releases = database.list_calendar_releases(start, end)
-    assert [release["id"] for release in releases] == ["chapter-recent"]
-    assert releases[0]["manga_title"] == "Example"
-    assert database.calendar_revision() != initial_revision
-
-    calendar_inputs = database.list_calendar_inputs()
-    assert [entry["manga"]["id"] for entry in calendar_inputs] == ["manga-1"]
-    assert [chapter["chapter"] for chapter in calendar_inputs[0]["chapters"]] == [
-        "0",
-        "1",
-        "2",
-    ]
-    assert all(
-        isinstance(chapter["downloaded"], bool)
-        for chapter in calendar_inputs[0]["chapters"]
-    )
-
-
-def test_calendar_uses_canonical_official_dates_and_availability_states(
-    tmp_path: Path,
-):
-    settings = Settings(
-        data_dir=tmp_path / "data",
-        library_dir=tmp_path / "library",
-        monitor_enabled=False,
-        metadata_enabled=False,
-        suwayomi_enabled=False,
-    )
-    settings.data_dir.mkdir(parents=True)
-    settings.library_dir.mkdir(parents=True)
-    app = create_app(settings)
-    database: Database = app.state.database
-    database.upsert_manga(
-        {
-            "id": "calendar-series",
-            "title": "Calendar Series",
-            "description": "",
-            "cover_url": None,
-            "authors": [],
-            "original_language": "en",
-        },
-        "en",
-        "future",
-    )
-    database.save_series_metadata(
-        "calendar-series",
-        {
-            "official_links": [
-                {
-                    "url": "https://www.webtoons.com/en/example/list",
-                    "language": "en",
-                }
-            ]
-        },
-        artwork_path=None,
-        artwork_sha256=None,
-        artwork_media_type=None,
-        source_status=[],
-    )
-    now = datetime.now(UTC)
-    official = []
-    scans = []
-    for number in range(1, 5):
-        released = now - timedelta(days=(5 - number) * 7)
-        official.append(
-            {
-                "id": f"official-{number}",
-                "chapter": str(number),
-                "volume": None,
-                "title": f"Chapter {number}",
-                "language": "en",
-                "provider": "suwayomi",
-                "source_key": "suwayomi:webtoons",
-                "source_name": "Webtoons.com (EN)",
-                "groups": [],
-                "publish_at": released.isoformat(),
-                "source_url": f"https://www.webtoons.com/en/example/{number}",
-                "pages": 20 + number,
-            }
-        )
-        scans.append(
-            {
-                **official[-1],
-                "id": f"scan-{number}",
-                "source_key": "suwayomi:scan",
-                "source_name": "Scan source",
-                "source_url": f"https://scan.test/{number}",
-                "publish_at": (released - timedelta(days=1)).isoformat(),
-            }
-        )
-    scans.append(
-        {
-            **scans[-1],
-            "id": "scan-5",
-            "chapter": "5",
-            "title": "Chapter 5",
-            "source_url": "https://scan.test/5",
-            "publish_at": (now - timedelta(days=1)).isoformat(),
-            "pages": 25,
-        }
-    )
-    database.upsert_chapters("calendar-series", [*official, *scans])
-    start = now.date() - timedelta(days=1)
-    end = now.date() + timedelta(days=8)
-    render_calendar = app.state.render_calendar
-    early = render_calendar(days=14, ahead=14, start_on=start, end_on=end)
-    try:
-        chapter_five = next(
-            item for item in early["expected"] if item["chapter"] == "5"
-        )
-        # Under the default official policy a scanlator running ahead is not
-        # an availability: the entry stays "expected" on the publisher's date.
-        assert chapter_five["availability_status"] == "expected"
-        assert all(item["id"] != "scan-5" for item in early["releases"])
-
-        # first_available treats the early release as acquirable news.
-        from dataclasses import replace as dc_replace
-
-        database.source_ranking = dc_replace(
-            database.source_ranking, acquisition_policy="first_available"
-        )
-        try:
-            permissive = render_calendar(days=14, ahead=14, start_on=start, end_on=end)
-            chapter_five_early = next(
-                item for item in permissive["expected"] if item["chapter"] == "5"
-            )
-            assert chapter_five_early["availability_status"] == "early_available"
-        finally:
-            database.source_ranking = dc_replace(
-                database.source_ranking, acquisition_policy="prefer_official"
-            )
-
-        official_five = {
-            **official[-1],
-            "id": "official-5",
-            "chapter": "5",
-            "title": "Chapter 5",
-            "source_url": "https://www.webtoons.com/en/example/5",
-            "publish_at": now.isoformat(),
-            "pages": 25,
-        }
-        database.upsert_chapters("calendar-series", [official_five])
-        available = render_calendar(days=14, ahead=14, start_on=start, end_on=end)
-        official_event = next(
-            item for item in available["releases"] if item["chapter"] == "5"
-        )
-        assert official_event["id"] == "official-5"
-        assert official_event["availability_status"] == "official_available"
-
-        database.mark_chapter_downloaded("scan-5", tmp_path / "chapter-5.cbz")
-        downloaded = render_calendar(days=14, ahead=14, start_on=start, end_on=end)
-        downloaded_event = next(
-            item for item in downloaded["releases"] if item["chapter"] == "5"
-        )
-        assert downloaded_event["availability_status"] == "downloaded"
-    finally:
-        app.state.api_executor.shutdown(wait=True, cancel_futures=True)
-
-
 def test_provider_priority_setting_normalizes_and_persists(tmp_path: Path):
     database = Database(tmp_path / "tankarr.sqlite3")
     database.initialize()
@@ -785,80 +580,3 @@ def test_wanted_reports_the_locked_share_of_unmapped_items():
     # the official source" instead of "offered by nobody".
     assert int(index["dropped_releases"].get("locked", 0)) == 1
     assert all(slot["chapter"] != "6" for slot in index["slots"])
-
-
-@pytest.mark.parametrize("status", ["hiatus", "completed", "ongoing"])
-@pytest.mark.parametrize("official", [False, True])
-def test_calendar_does_not_treat_inactive_series_reuploads_as_publications(
-    tmp_path: Path, status: str, official: bool
-):
-    settings = Settings(
-        data_dir=tmp_path / "data",
-        library_dir=tmp_path / "library",
-        monitor_enabled=False,
-        metadata_enabled=False,
-        suwayomi_enabled=False,
-    )
-    settings.data_dir.mkdir()
-    settings.library_dir.mkdir()
-    app = create_app(settings)
-    database = app.state.database
-    database.upsert_manga(
-        {
-            "id": "inactive-series",
-            "title": "Example",
-            "description": "",
-            "cover_url": None,
-            "authors": [],
-            "original_language": "en",
-            "status": status,
-        },
-        "en",
-        "all",
-    )
-    metadata = {"status": status}
-    if official:
-        metadata["official_links"] = [
-            {"url": "https://www.webtoons.com/en/example/list", "language": "en"}
-        ]
-    database.save_series_metadata(
-        "inactive-series",
-        metadata,
-        artwork_path=None,
-        artwork_sha256=None,
-        artwork_media_type=None,
-        source_status=[],
-    )
-    now = datetime.now(UTC)
-    database.upsert_chapters(
-        "inactive-series",
-        [
-            {
-                "id": "recent-upload",
-                "chapter": "1",
-                "volume": None,
-                "title": "Chapter 1",
-                "language": "en",
-                "provider": "suwayomi",
-                "source_key": "official" if official else "scan",
-                "source_name": "Example source",
-                "groups": [],
-                "publish_at": (now - timedelta(hours=1)).isoformat(),
-                "source_url": "https://www.webtoons.com/en/example/1"
-                if official
-                else "https://scan.test/1",
-                "pages": 20,
-            }
-        ],
-    )
-    try:
-        result = app.state.render_calendar(
-            days=14,
-            ahead=14,
-            start_on=now.date() - timedelta(days=1),
-            end_on=now.date() + timedelta(days=1),
-        )
-        assert bool(result["releases"]) is (official or status == "ongoing")
-        assert not result["expected"]
-    finally:
-        app.state.api_executor.shutdown(wait=True, cancel_futures=True)

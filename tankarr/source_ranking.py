@@ -41,12 +41,6 @@ FRESH_WINDOW_DAYS = 21
 SUSPECT_PAGE_COUNT = 5
 
 SOURCE_CLASSES = ("official", "origin", "scan_hq", "aggregator", "unknown")
-SOURCE_ROLES = ("primary_official", "secondary_official", "alternative")
-ACQUISITION_POLICIES = (
-    "prefer_official",
-    "first_available",
-)
-
 # Slugs are matched against the normalized source name and package suffix.
 KNOWN_SOURCE_CLASSES: dict[str, str] = {
     # official platforms
@@ -107,11 +101,6 @@ KNOWN_SOURCE_CLASSES: dict[str, str] = {
 
 PHASE_CLASS_ORDER: dict[str, tuple[str, ...]] = {
     "fresh": ("official", "origin", "scan_hq", "aggregator", "unknown"),
-    # Without the official preference a fresh chapter is just "whoever
-    # published first": classes still order quality, official last because
-    # its rolling window makes it the worst backfill source.
-    "fresh_first_out": ("origin", "scan_hq", "aggregator", "official", "unknown"),
-    "backfill_official": ("official", "origin", "scan_hq", "aggregator", "unknown"),
     "backfill": ("origin", "scan_hq", "aggregator", "official", "unknown"),
 }
 
@@ -135,53 +124,6 @@ def official_hosts(
         if host:
             hosts.add(host.removeprefix("www."))
     return frozenset(hosts)
-
-
-def official_source_roles(
-    official_links: Iterable[dict[str, Any]] | None,
-    *,
-    preferred_language: str | None,
-    original_language: str | None,
-) -> dict[str, str]:
-    """Classify a work's publisher platforms by the edition they represent.
-
-    A publisher can expose the same work in several languages.  The managed
-    edition is the only primary source for display numbering and calendar
-    dates.  The original-language edition is retained as secondary evidence:
-    it can validate a stable cross-edition mapping but is never a download
-    candidate for a differently managed language.
-    """
-
-    preferred = str(preferred_language or "").strip().casefold()
-    original = str(original_language or "").strip().casefold()
-    roles: dict[str, str] = {}
-    for link in official_links or []:
-        host = (urlsplit(str(link.get("url") or "")).hostname or "").casefold()
-        host = host.removeprefix("www.")
-        if not host:
-            continue
-        language = str(link.get("language") or "unknown").strip().casefold()
-        if preferred and language == preferred:
-            roles[host] = "primary_official"
-        elif (
-            original and language == original and roles.get(host) != "primary_official"
-        ):
-            roles[host] = "secondary_official"
-        else:
-            roles.setdefault(host, "alternative")
-    return roles
-
-
-def source_role_for_release(
-    release: dict[str, Any], source_roles: Mapping[str, str] | None
-) -> str:
-    """Return the declared edition role for a concrete release URL."""
-
-    host = release_host(release)
-    for candidate, role in (source_roles or {}).items():
-        if host and (host == candidate or host.endswith("." + candidate)):
-            return role
-    return "alternative"
 
 
 def release_host(release: dict[str, Any]) -> str:
@@ -280,35 +222,16 @@ ENDED_STATUSES = frozenset(
 )
 
 
-def official_frontier(
-    releases: Iterable[dict[str, Any]],
-    official_hosts: frozenset[str] = frozenset(),
+def completed_chapter_limit(
     *,
     metadata: dict[str, Any] | None = None,
     status: object = None,
     chapter_total: object = None,
 ) -> Decimal | None:
-    """Highest chapter that officially exists, in the operator's language.
+    """Final catalogue chapter number, only once publication has ended.
 
-    Under ``prefer_official`` the official publication defines what exists:
-    scanlators routinely run ahead of it, numbering chapters the publisher
-    has not released. Following those downloads a chapter the work does not
-    have under its official numbering, on a calendar that disagrees with the
-    publisher.
-
-    Where the reference comes from depends on the work:
-
-    * **still publishing** (or on hiatus): the last chapter the official
-      platform has actually put out *in this language*. The catalogue's own
-      ``latest_release_chapter`` cannot be used - it counts the original
-      edition, which runs ahead of every translation (Lookism is at 630 on
-      NAVER and 611 on WEBTOON English);
-    * **ended**: the catalogue knows the final chapter count, and that is
-      more reliable than a partially mapped official source - three mapped
-      chapters of a finished 55-chapter work would otherwise condemn the
-      other 52.
-
-    ``None`` means no frontier applies and every candidate stays eligible.
+    Configured sources define availability while a work is running. A slower
+    publisher feed never limits another source or invalidates an owned file.
     """
 
     if str(status or "").casefold() in ENDED_STATUSES:
@@ -332,24 +255,11 @@ def official_frontier(
         # exactly the works that need it least.
         return None
 
-    best: Decimal | None = None
-    for release in releases:
-        if not is_official_release(release, official_hosts):
-            continue
-        raw = str(release.get("chapter") or "").strip()
-        if not raw:
-            continue
-        try:
-            number = Decimal(raw)
-        except (ArithmeticError, ValueError):
-            continue
-        if number.is_finite() and (best is None or number > best):
-            best = number
-    return best
+    return None
 
 
-def beyond_frontier(release: dict[str, Any], frontier: Decimal | None) -> bool:
-    """Whether this release claims a chapter the publisher has not reached."""
+def beyond_chapter_limit(release: dict[str, Any], frontier: Decimal | None) -> bool:
+    """Whether a release exceeds the reliable total of a completed work."""
 
     if frontier is None:
         return False
@@ -361,15 +271,6 @@ def beyond_frontier(release: dict[str, Any], frontier: Decimal | None) -> bool:
     except (ArithmeticError, ValueError):
         return False
     return bool(number.is_finite() and number > frontier)
-
-
-def normalize_acquisition_policy(value: object) -> str:
-    normalized = str(value or "prefer_official").strip().casefold()
-    if normalized not in ACQUISITION_POLICIES:
-        raise ValueError(
-            "release acquisition policy must be prefer_official or first_available"
-        )
-    return normalized
 
 
 def normalize_source_list(value: object) -> str:
@@ -429,14 +330,7 @@ class SourceRanking:
 
     fresh: tuple[str, ...] = ()
     backfill: tuple[str, ...] = ()
-    acquisition_policy: str = "prefer_official"
     preference_profile: str = "balanced"
-
-    @property
-    def prefer_official(self) -> bool:
-        """Compatibility view for callers that only distinguish two modes."""
-
-        return self.acquisition_policy != "first_available"
 
     @classmethod
     def from_settings(
@@ -445,8 +339,6 @@ class SourceRanking:
         fresh: object = "",
         backfill: object = "",
         provider_priority: Sequence[str] = (),
-        acquisition_policy: object | None = None,
-        prefer_official: bool | None = None,
         preference_profile: str = "balanced",
     ) -> SourceRanking:
         """Backfill inherits the legacy provider order when it has no list."""
@@ -457,17 +349,9 @@ class SourceRanking:
         )
         if not backfill_keys:
             backfill_keys = tuple(str(name).casefold() for name in provider_priority)
-        policy = (
-            normalize_acquisition_policy(acquisition_policy)
-            if acquisition_policy is not None
-            else "prefer_official"
-            if prefer_official is not False
-            else "first_available"
-        )
         return cls(
             fresh=fresh_keys,
             backfill=backfill_keys,
-            acquisition_policy=policy,
             preference_profile=preference_profile,
         )
 
@@ -491,7 +375,7 @@ class SourceRanking:
                 source_name=release.get("source_name"),
             )
         )
-        order = "backfill_official" if self.prefer_official else "backfill"
+        order = "backfill"
         return self.explicit_rank(release, "backfill"), self.class_order(order).index(
             klass
         )
@@ -547,10 +431,6 @@ class SourceRanking:
             elif klass == "official":
                 klass = "aggregator"
         order_name = phase
-        if self.acquisition_policy == "prefer_official" and phase == "backfill":
-            order_name = "backfill_official"
-        elif phase == "fresh" and self.acquisition_policy == "first_available":
-            order_name = "fresh_first_out"
         class_rank = self.class_order(order_name).index(klass)
         is_volume = str(release.get("release_unit") or "chapter") == "volume" or (
             not release.get("chapter") and bool(release.get("volume"))
@@ -594,20 +474,6 @@ class SourceRanking:
             str(release.get("source_key") or release.get("provider") or ""),
             str(release.get("id") or ""),
         )
-        if self.acquisition_policy == "first_available":
-            # Failing sources remain a last resort. Otherwise publication time
-            # is the policy; explicit source pins and quality only break ties.
-            return (
-                2
-                if release.get("provider") == "translated"
-                else int(release.get("provider") == "assembled"),
-                demoted,
-                str(release.get("publish_at") or "~"),
-                self.explicit_rank(release, phase),
-                unit_penalty,
-                *quality,
-                *identity,
-            )
         return (
             2
             if release.get("provider") == "translated"
@@ -658,9 +524,8 @@ def _descending(text: str) -> str:
 
 
 __all__ = [
-    "ACQUISITION_POLICIES",
-    "beyond_frontier",
-    "official_frontier",
+    "beyond_chapter_limit",
+    "completed_chapter_limit",
     "FRESH_WINDOW_DAYS",
     "KNOWN_SOURCE_CLASSES",
     "PHASE_CLASS_ORDER",
@@ -668,12 +533,9 @@ __all__ = [
     "group_phase",
     "is_official_release",
     "official_hosts",
-    "official_source_roles",
     "release_host",
     "normalize_source_list",
-    "normalize_acquisition_policy",
     "release_phase",
     "release_source_keys",
     "source_class",
-    "source_role_for_release",
 ]

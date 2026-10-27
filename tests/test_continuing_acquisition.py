@@ -107,9 +107,7 @@ def test_source_books_fill_gaps_without_replacing_available_chapters(
         database.set_release_book(f"book-{number}", str(number))
     candidates = database.preferred_download_candidates("manga-1")
     assert {row["id"] for row in candidates} == (
-        {"chapter-1", "chapter-2", "book-2"}
-        if mapped
-        else {"chapter-1", "chapter-2", "book-1", "book-2"}
+        {"chapter-1", "chapter-2", "book-2"} if mapped else {"chapter-1", "chapter-2"}
     )
 
     database.upsert_chapters("manga-1", [chapter(n) for n in (3, 4, 5)])

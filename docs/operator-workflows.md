@@ -280,15 +280,9 @@ separate new attempts from retries and preserve recovery across interruptions.
 
 ## Keep a continuing series up to date in its configured language
 
-For a running or paused series, Tankarr follows the official publication calendar
-in the configured language when that reference is available. Future announced
-episodes are not missing yet; ordinary monitoring acquires releases as they are
-published. Without an official reference, the latest recoverable release in that
-language defines how far the library needs to reach. Gaps between known main
-chapters remain missing, so an interrupted run cannot claim to be up to date.
-If no managed reference or recoverable books are known for a running volume
-edition, its expected total remains unknown; the catalogue's original-edition
-total is retained as information without creating missing translated books.
+Running and paused series follow the latest available chapters on their configured
+sources. MangaBaka completion switches them to completed-work handling. A publisher
+feed never imposes a lower chapter ceiling.
 
 For example, English chapters 1–8 on disk are up to date when the English sources
 stop at 8, even if the original edition is at 18. When English chapter 9 becomes
@@ -310,7 +304,7 @@ files or source listings. Extra chapters and separately labelled prologues do
 not create rows, Wanted entries, progress counts or automatic download jobs.
 Pages bundled into a normal volume remain in that volume's archive. A decimal
 label is a main chapter only when its position is established by an exact
-reading map, an official season opening or a verified continuation at the end
+reading map, an explicitly numbered season opening or a verified continuation at the end
 of the source's chapter sequence. Ambiguous catalogue totals remain unresolved
 until the story's chapter count is verified.
 

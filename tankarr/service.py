@@ -57,7 +57,6 @@ from tankarr.database import (
     local_release_identity,
     local_series_identity,
 )
-from tankarr.http import async_client
 from tankarr.komga import KomgaClient
 from tankarr.metadata.correlations import CORRELATION_LABELS, correlation_url
 from tankarr.metadata.publications import publication_metadata_key
@@ -76,15 +75,6 @@ from tankarr.naming import (
     final_library_path,
 )
 from tankarr.notify import Notifier
-from tankarr.official_evidence import (
-    NAVER_WEBTOON_HOST,
-    fetch_naver_webtoon_items,
-    naver_webtoon_id,
-)
-from tankarr.official_numbering import (
-    official_chapter_frontier,
-    surplus_downloads,
-)
 from tankarr.providers.base import (
     RETRYABLE_STATUS_CODES,
     Provider,
@@ -97,10 +87,9 @@ from tankarr.series_summary import publication_summary
 from tankarr.series_unit import normalize_series_unit, resolve_series_unit
 from tankarr.source_circuit import source_gate_key
 from tankarr.source_ranking import (
-    beyond_frontier,
-    official_frontier,
+    beyond_chapter_limit,
+    completed_chapter_limit,
     official_hosts,
-    official_source_roles,
     release_source_keys,
 )
 from tankarr.torrent_sources import EXTERNAL_IMPORT_PROVIDERS, TORRENT_IMPORT_PROVIDERS
@@ -209,9 +198,6 @@ class StaleVolumeDeletionError(RuntimeError):
 
 class StaleMangaDeletionError(RuntimeError):
     pass
-
-
-OFFICIAL_EVIDENCE_REFRESH_SECONDS = 6 * 60 * 60
 
 
 class RecoveryBlocked(RuntimeError):
@@ -485,6 +471,20 @@ class TankarrService:
         )
         self.last_deletion_recovery = current
 
+    def _future_monitoring_capability(
+        self, manga: dict[str, Any], chapters: list[dict[str, Any]]
+    ) -> tuple[bool, str]:
+        manga_id = str(manga["id"])
+        metadata = (self.database.get_series_metadata(manga_id) or {}).get("data") or {}
+        signals = self.database.publication_signals(manga_id)
+        publication = publication_summary(
+            {**manga, "publication_signals": signals}, metadata
+        )
+        context = manga
+        if publication["source"] == "mangabaka":
+            context = {**manga, "status": publication["raw_status"]}
+        return evaluate_future_monitoring(context, chapters)
+
     async def preview_manga(
         self,
         manga_id: str,
@@ -500,7 +500,7 @@ class TankarrService:
         manga = await provider.get_manga(manga_id)
         manga["preferred_language"] = language
         chapters = await provider.list_chapters(manga_id, language)
-        allowed, reason = evaluate_future_monitoring(manga, chapters)
+        allowed, reason = self._future_monitoring_capability(manga, chapters)
         chapter_count = self._logical_chapter_count(chapters)
         result = {
             **manga,
@@ -530,7 +530,7 @@ class TankarrService:
             manga = await provider.get_manga(manga_id)
             manga["preferred_language"] = language
             chapters = await provider.list_chapters(manga_id, language)
-            allowed, reason = evaluate_future_monitoring(manga, chapters)
+            allowed, reason = self._future_monitoring_capability(manga, chapters)
             if mode in FUTURE_MONITOR_MODES and not allowed:
                 raise FutureMonitoringUnavailable(reason)
             saved = self.database.upsert_manga(manga, language, mode)
@@ -1693,52 +1693,10 @@ class TankarrService:
             chapters = self.database.list_chapters(
                 manga_id, current["preferred_language"]
             )
-            allowed, reason = evaluate_future_monitoring(manga, chapters)
+            allowed, reason = self._future_monitoring_capability(manga, chapters)
             return self.database.set_future_monitoring_capability(
                 manga_id, allowed=allowed, reason=reason
             )
-
-    async def refresh_official_edition_evidence(self, manga_id: str) -> int:
-        """Refresh publisher indexes used only to validate edition bridges."""
-
-        manga = self.database.get_manga(manga_id)
-        metadata_row = self.database.get_series_metadata(manga_id)
-        metadata = (metadata_row or {}).get("data") or {}
-        roles = official_source_roles(
-            metadata.get("official_links"),
-            preferred_language=str(manga.get("preferred_language") or ""),
-            original_language=str(manga.get("original_language") or ""),
-        )
-        naver_links = [
-            str(link.get("url") or "")
-            for link in metadata.get("official_links") or []
-            if naver_webtoon_id(link.get("url"))
-            and roles.get(NAVER_WEBTOON_HOST) == "secondary_official"
-        ]
-        if not naver_links or not self.database.official_edition_evidence_due(
-            manga_id,
-            NAVER_WEBTOON_HOST,
-            max_age_seconds=OFFICIAL_EVIDENCE_REFRESH_SECONDS,
-        ):
-            return 0
-        try:
-            async with async_client(
-                timeout=self.settings.request_timeout_seconds
-            ) as client:
-                host, items = await fetch_naver_webtoon_items(client, naver_links[0])
-        except Exception as exc:  # noqa: BLE001 - evidence is never a hard failure
-            logger.info(
-                "Official Naver evidence refresh skipped for %s: %s", manga_id, exc
-            )
-            return 0
-        if not host:
-            return 0
-        return self.database.replace_official_edition_evidence(
-            manga_id,
-            host=host,
-            language=str(manga.get("original_language") or "ko"),
-            items=items,
-        )
 
     async def rename_manga(self, manga_id: str, title: str) -> dict[str, Any]:
         """Persist a display-title override and reorganize owned library files."""
@@ -2119,7 +2077,7 @@ class TankarrService:
             reclassified = await self._reconcile_release_units(manga_id)
             if reclassified:
                 result = {**result, "reclassified_providers": reclassified}
-            allowed, reason = evaluate_future_monitoring(remote, chapters)
+            allowed, reason = self._future_monitoring_capability(remote, chapters)
             mode_after = mode_before if allowed else terminal_monitor_mode(mode_before)
             self.database.set_future_monitoring_capability(
                 manga_id,
@@ -2647,75 +2605,6 @@ class TankarrService:
                         }
                     )
         return degraded
-
-    def surplus_beyond_official_edition(self, manga_id: str) -> dict[str, Any]:
-        """Library files numbered past the official edition, with the warrant.
-
-        The verdict is returned whole - frontier, how many official chapters
-        placed it, and why it is or is not solid enough to act on - because
-        this is the evidence behind deleting a file, and it has to be
-        inspectable before and after the fact.
-        """
-
-        manga = self.database.get_manga(manga_id)
-        metadata_row = self.database.get_series_metadata(manga_id)
-        metadata = (metadata_row or {}).get("data") or {}
-        releases = self.database.list_chapters(
-            manga_id, str(manga["preferred_language"])
-        )
-        hosts = official_hosts(
-            metadata.get("official_links"),
-            language=str(manga.get("preferred_language") or ""),
-        )
-        verdict = official_chapter_frontier(releases, hosts)
-        return {
-            "manga_id": manga_id,
-            "title": manga.get("title"),
-            "frontier": verdict.label,
-            "anchors": verdict.anchors,
-            "enforceable": verdict.enforceable,
-            "reason": verdict.reason,
-            "surplus": surplus_downloads(releases, verdict),
-        }
-
-    async def align_with_official_edition(
-        self, manga_id: str, *, dry_run: bool = False
-    ) -> dict[str, Any]:
-        """Remove library files the official edition has no chapter for.
-
-        Scanlators number from the original edition and run ahead of the
-        translation, so a library that follows them drifts away from the
-        publication it is supposed to mirror. Those files are not early
-        chapters of this edition; they are chapters of another one.
-
-        This deletes, so it only ever runs on an *enforceable* frontier (see
-        ``official_numbering``): enough official chapters, an unbroken tail,
-        and near-complete coverage of their own range. Deletion goes through
-        the same staged quarantine as every other removal, and the download
-        gate already refuses to re-acquire anything past the frontier, so the
-        alignment converges instead of looping.
-        """
-
-        report = self.surplus_beyond_official_edition(manga_id)
-        surplus = report["surplus"]
-        if not surplus or dry_run:
-            return {**report, "deleted": 0, "errors": [], "dry_run": dry_run}
-        outcome = await self.delete_chapter_files(
-            manga_id, [str(release["id"]) for release in surplus]
-        )
-        if outcome["deleted"]:
-            logger.info(
-                "Aligned %s with its official edition: removed %s chapter(s) past %s",
-                report["title"],
-                outcome["deleted"],
-                report["frontier"],
-            )
-        return {
-            **report,
-            "deleted": int(outcome["deleted"]),
-            "errors": list(outcome["errors"]),
-            "dry_run": False,
-        }
 
     async def recover_degraded_chapters(
         self, manga_id: str, *, limit: int = 25
@@ -3545,26 +3434,14 @@ class TankarrService:
             )
             candidates: list[dict[str, Any]] = []
             synthetic: list[dict[str, Any]] = []
-            # Under "prefer official" the publisher decides which chapters
-            # exist: scanlators running ahead of it are not releases of a
-            # chapter the work has, so those slots are not wanted at all.
-            frontier = (
-                official_frontier(
-                    releases,
-                    hosts,
-                    metadata=metadata,
-                    status=publication_summary(manga, metadata)["status"],
-                    chapter_total=(
-                        manga.get("expected_count_override")
-                        if str(
-                            manga.get("expected_count_unit_override") or ""
-                        ).casefold()
-                        == "chapter"
-                        else None
-                    ),
-                )
-                if self.database.source_ranking.acquisition_policy == "prefer_official"
-                else None
+            # Only completed works have a final catalogue boundary.
+            frontier = completed_chapter_limit(
+                metadata=metadata,
+                status=publication_summary(manga, metadata)["status"],
+                chapter_total=manga.get("expected_count_override")
+                if str(manga.get("expected_count_unit_override") or "").casefold()
+                == "chapter"
+                else None,
             )
             for slot in chapter_index["slots"]:
                 if slot.get("replaceable") and slot["monitored"]:
@@ -3603,7 +3480,7 @@ class TankarrService:
                     or slot.get("covered_unmapped")
                 ):
                     continue
-                if frontier is not None and beyond_frontier(slot, frontier):
+                if frontier is not None and beyond_chapter_limit(slot, frontier):
                     continue
                 if slot["available"]:
                     monitored_releases = [
@@ -3635,34 +3512,6 @@ class TankarrService:
                             preferred_source=manga.get("preferred_source_key"),
                         )
                     if chosen is None:
-                        unit = (
-                            "volume"
-                            if slot["chapter"] is None and slot["volume"]
-                            else "chapter"
-                        )
-                        synthetic.append(
-                            {
-                                "id": f"expected:{manga_id}:{slot['key']}",
-                                "manga_id": manga_id,
-                                "volume": slot["volume"],
-                                "chapter": slot["chapter"],
-                                "title": f"Waiting for an official {unit} release",
-                                "language": manga["preferred_language"],
-                                "provider": "expected",
-                                "groups": [],
-                                "publish_at": None,
-                                "source_url": "",
-                                "pages": None,
-                                "version": None,
-                                "monitored": True,
-                                "downloaded": False,
-                                "library_path": None,
-                                "queue_job_id": None,
-                                "queue_status": None,
-                                "expected": True,
-                                "evidence": "official_only_policy",
-                            }
-                        )
                         continue
                     selected = dict(chosen)
                     if unblocked:
@@ -3714,7 +3563,7 @@ class TankarrService:
             # A paywalled episode at the official source is not missing: the
             # library is exactly as far as the publisher lets it be, the way a
             # not-yet-aired episode is not missing in Sonarr. It never joins
-            # Wanted - the series page and the calendar already show the lock
+            # Wanted - the series page already shows the lock
             # - and it must not inflate the missing counter that tells the
             # operator how much work the library still has.
             locked = min(
@@ -4618,215 +4467,6 @@ class TankarrService:
             and not result["quarantine_files_remaining"]
         )
         return result
-
-    def series_calendar(self, manga_id: str) -> dict[str, Any]:
-        """What one work released lately and when its next chapters are expected.
-
-        The dates come from the work's own release history (MangaUpdates):
-        a median cadence projected forward. No publisher announces future
-        dates, so every expected entry is an estimate and says so; a chapter
-        whose date has passed stays listed as overdue instead of vanishing.
-        """
-
-        from tankarr.release_cadence import (
-            MIN_SAMPLES,
-            expected_releases,
-            release_timeline,
-        )
-        from tankarr.series_summary import publication_summary
-        from tankarr.source_ranking import (
-            is_official_release,
-            official_hosts,
-            source_class,
-        )
-
-        manga = self.database.get_manga(manga_id)
-        manga["publication_signals"] = self.database.publication_signals(manga_id)
-        metadata_row = self.database.get_series_metadata(manga_id)
-        metadata = metadata_row["data"] if metadata_row else manga.get("metadata")
-        publication = publication_summary(manga, metadata)
-        releases = self.database.list_chapters(manga_id, manga["preferred_language"])
-        # The publisher's own release dates come first, as on the Calendar
-        # page: they carry the series' canonical numbering. The catalogue
-        # history is the fallback, and it may count differently (MangaUpdates
-        # had The World After the Fall at 250 while every source and the
-        # library said 235): its numbers are re-anchored to the series.
-        hosts = official_hosts(
-            (metadata or {}).get("official_links"),
-            language=str(manga.get("preferred_language") or ""),
-        )
-        official_history = [
-            {"chapter": row.get("chapter"), "release_date": row.get("publish_at")}
-            for row in releases
-            if hosts
-            and str(row.get("numbering_status") or "mapped") == "mapped"
-            and row.get("chapter")
-            and is_official_release(row, hosts)
-        ]
-        # The platform states the exact moment (Tapas: 16:00 UTC); keep it
-        # for the announced episodes, the date alone is not the whole answer.
-        official_moments: dict[int, str] = {}
-        for item in official_history:
-            number = _chapter_int({"chapter": item["chapter"]})
-            raw = str(item.get("release_date") or "").strip()
-            if number is not None and raw and number not in official_moments:
-                official_moments[number] = raw
-        official_timeline = release_timeline(official_history)
-        catalogue_history = self.database.list_release_history(manga_id)
-        catalogue_timeline = release_timeline(catalogue_history)
-        renumber = 0
-        if len(official_timeline) >= MIN_SAMPLES:
-            history, timeline, source = (
-                official_history,
-                official_timeline,
-                "official platform release dates",
-            )
-        else:
-            history, timeline = catalogue_history, catalogue_timeline
-            source = "MangaUpdates release history" if catalogue_history else None
-            listed = [
-                number
-                for number in (
-                    _chapter_int(
-                        {"chapter": row.get("canonical_chapter") or row.get("chapter")}
-                    )
-                    for row in releases
-                )
-                if number is not None
-            ]
-            if timeline and listed:
-                last_catalogue = int(timeline[-1][0])
-                renumber = max(listed) - last_catalogue
-                if renumber > 0:
-                    renumber = 0  # the catalogue lags the sources: numbers agree
-        today = datetime.now(UTC).date()
-        # A publisher platform lists the next chapter ahead of time (Tapas
-        # shows "🔒 252" a week early, dated). That date is announced, not
-        # estimated: it heads the expected list and is not release history.
-        announced = (
-            [(number, released) for number, released in timeline if released > today]
-            if source == "official platform release dates"
-            else []
-        )
-        past_timeline = [
-            (number, released) for number, released in timeline if released <= today
-        ]
-        recent = [
-            {
-                "chapter": str(int(number) + renumber),
-                "released_at": released.isoformat(),
-            }
-            for number, released in past_timeline[-6:]
-        ][::-1]
-
-        known: dict[int, dict[str, bool]] = {}
-        for release in releases:
-            number = _chapter_int(
-                {"chapter": release.get("canonical_chapter") or release.get("chapter")}
-            )
-            if number is None:
-                continue
-            state = known.setdefault(
-                number, {"available": False, "downloaded": False, "official": False}
-            )
-            state["available"] = True
-            if release.get("downloaded"):
-                state["downloaded"] = True
-            if (
-                source_class(
-                    provider=release.get("provider"),
-                    source_key=release.get("source_key"),
-                    source_name=release.get("source_name"),
-                )
-                == "official"
-            ):
-                state["official"] = True
-
-        predictions = (
-            []
-            if publication["status"] == "ended" or publication.get("paused")
-            else expected_releases(history, today=today, horizon_days=60)
-        )
-        expected = []
-        announced_numbers: set[int] = set()
-        for number_decimal, released in announced:
-            number = int(number_decimal) + renumber
-            announced_numbers.add(number)
-            state = known.get(
-                number,
-                {"available": False, "downloaded": False, "official": False},
-            )
-            expected.append(
-                {
-                    "chapter": str(number),
-                    "expected_at": released.isoformat(),
-                    "cadence_days": predictions[0].cadence_days if predictions else 0,
-                    "cadence_label": predictions[0].cadence_label
-                    if predictions
-                    else "",
-                    "overdue_days": 0,
-                    "estimated": False,
-                    "published_at": official_moments.get(int(number_decimal)),
-                    # Listed but locked until that day: not yet obtainable.
-                    "available": bool(state["downloaded"]),
-                    "downloaded": bool(state["downloaded"]),
-                    "official": True,
-                }
-            )
-        for prediction in predictions:
-            number = (_chapter_int({"chapter": prediction.chapter}) or 0) + renumber
-            if number in announced_numbers:
-                continue
-            state = known.get(
-                number,
-                {"available": False, "downloaded": False, "official": False},
-            )
-            expected.append(
-                {
-                    "chapter": str(number),
-                    "expected_at": prediction.expected_at.isoformat(),
-                    "cadence_days": prediction.cadence_days,
-                    "cadence_label": prediction.cadence_label,
-                    "overdue_days": prediction.overdue_days,
-                    "estimated": True,
-                    **state,
-                }
-            )
-        cadence = None
-        if predictions:
-            last_chapter = int(predictions[0].last_chapter)
-            last_release_at = predictions[0].last_release_at
-            if announced and past_timeline:
-                last_chapter, last_release_at = (
-                    int(past_timeline[-1][0]),
-                    past_timeline[-1][1],
-                )
-            cadence = {
-                "days": predictions[0].cadence_days,
-                "label": predictions[0].cadence_label,
-                "last_chapter": str(last_chapter + renumber),
-                "last_release_at": last_release_at.isoformat(),
-                "renumbered_by": renumber,
-            }
-        if publication.get("paused"):
-            reason = "paused"
-        elif publication["status"] == "ended":
-            reason = "ended"
-        elif not history:
-            reason = "no_history"
-        elif not predictions:
-            reason = "no_rhythm"
-        else:
-            reason = None
-        return {
-            "manga_id": manga_id,
-            "source": source if timeline else None,
-            "history_count": len(past_timeline),
-            "recent": recent,
-            "cadence": cadence,
-            "expected": expected,
-            "reason": reason,
-        }
 
     def duplicate_chapter_files(self, manga_id: str) -> list[dict[str, Any]]:
         """Downloaded chapter files whose content is also inside an owned volume."""
@@ -6142,7 +5782,7 @@ class TankarrService:
         for _manga, chapter, _source, destination in candidates:
             desired_owners.setdefault(destination, []).append(chapter["id"])
 
-        # Aligning a source to the official numbering can leave two downloaded
+        # Aligning source numbering using content evidence can leave two downloaded
         # files claiming the same chapter: the copy that already sits at the
         # destination was named under the trusted numbering and stays; the
         # other is the same chapter fetched from a second source, so it is a

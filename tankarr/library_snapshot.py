@@ -28,13 +28,6 @@ LIBRARY_TABLES = (
 )
 
 LIBRARY_REVISION_TABLES = ("manga", *(table for table, _ in LIBRARY_TABLES), "author")
-CALENDAR_REVISION_TABLES = (
-    "manga",
-    "chapter_release",
-    "series_metadata",
-    "metadata_source_record",
-    "manga_release_source",
-)
 WANTED_REVISION_TABLES = (
     *LIBRARY_REVISION_TABLES,
     "release_block",
@@ -61,7 +54,7 @@ def install_revision_triggers(connection) -> None:
         "manga_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0)"
     )
     active = "('queued','running','downloading','packaging','importing')"
-    for table in dict.fromkeys((*WANTED_REVISION_TABLES, *CALENDAR_REVISION_TABLES)):
+    for table in dict.fromkeys(WANTED_REVISION_TABLES):
         connection.execute(
             "INSERT OR IGNORE INTO read_model_revision(table_name) VALUES (?)", (table,)
         )
@@ -227,6 +220,7 @@ def changed_inputs(
         for row in connection.execute(
             "SELECT manga_id, source, json_extract(data_json, '$.status') AS status "
             f"FROM metadata_source_record WHERE manga_id IN ({placeholders}) "
+            "AND entity_type IN ('work', 'series') "
             "AND source IN ('mangabaka', 'myanimelist', 'mangaupdates') "
             "ORDER BY fetched_at",
             manga_ids,
@@ -236,18 +230,6 @@ def changed_inputs(
                 inputs[str(row["manga_id"])]["publication_signals"][row["source"]] = (
                     status
                 )
-        for row in connection.execute(
-            "SELECT manga_id, publication_status FROM manga_release_source "
-            f"WHERE manga_id IN ({placeholders}) AND enabled=1 "
-            "AND source_role IN ('primary_official', 'secondary_official') "
-            "AND publication_status IS NOT NULL AND publication_status<>'' "
-            "ORDER BY CASE source_role WHEN 'primary_official' THEN 0 ELSE 1 END, "
-            "updated_at DESC",
-            manga_ids,
-        ):
-            inputs[str(row["manga_id"])]["publication_signals"].setdefault(
-                "official", str(row["publication_status"])
-            )
         for row in connection.execute(
             f"SELECT manga_id, volume FROM indexer_offer WHERE manga_id IN ({placeholders})",
             manga_ids,

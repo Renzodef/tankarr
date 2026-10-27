@@ -836,18 +836,12 @@ def absorb_loose_on_complete_shelf(
     return absorbed
 
 
-def mark_beyond_frontier(
+def mark_beyond_chapter_limit(
     books: list[dict[str, Any]],
     unassigned: list[dict[str, Any]],
     frontier: Decimal | None,
 ) -> int:
-    """A chapter past the official edition is not one the shelf is missing.
-
-    Acquisition refuses every release past the frontier, so counting those
-    chapters as missing asks for what is never fetched. They are shown as
-    extras until the edition reaches them; a file already on disk keeps its
-    row as it is.
-    """
+    """Exclude missing slots beyond a completed catalogue's final chapter."""
 
     if frontier is None:
         return 0
@@ -863,11 +857,11 @@ def mark_beyond_frontier(
             special=True,
             missing=False,
             searchable=False,
-            beyond_official_frontier=True,
+            beyond_catalogue_total=True,
         )
         marked += 1
     for book in books:
-        if any(s.get("beyond_official_frontier") for s in book.get("chapters") or []):
+        if any(s.get("beyond_catalogue_total") for s in book.get("chapters") or []):
             book["missing_chapter_count"] = sum(
                 1 for s in book["chapters"] if s.get("missing")
             )
@@ -909,7 +903,9 @@ def apply_series_form(
             )
         ]
     reset_estimated_layout(books, unassigned)
-    units["beyond_frontier"] = mark_beyond_frontier(books, unassigned, frontier)
+    units["beyond_chapter_limit"] = mark_beyond_chapter_limit(
+        books, unassigned, frontier
+    )
     expected_books = units.get("expected_book_count")
     # A broad catalogue family (for example Manhwa classified as webtoon)
     # cannot invalidate boundaries read from the actual printed edition.

@@ -1,13 +1,13 @@
 """Map provider-local episode indexes onto canonical chapter slots.
 
 Raw provider numbers are identities, not cross-provider chapter numbers.  This
-module only promotes them when there is explicit title evidence, an official
-anchor, or a coherent content-aligned segment.  Ambiguous rows stay visible but
-cannot extend the canonical sequence.
+module uses source identities, explicit title evidence and coherent content
+sequences. Ambiguous rows stay visible but cannot extend the canonical sequence.
 """
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -19,11 +19,10 @@ from tankarr.source_numbering import (
     is_special_title,
     title_number,
 )
-from tankarr.source_ranking import source_role_for_release
 
-NUMBERING_VERSION = 6
-MIN_CONTENT_ANCHORS = 5
-MIN_IDENTITY_ANCHORS = 3
+NUMBERING_VERSION = 7
+MIN_CONTENT_ANCHORS = 10
+MIN_TITLE_ANCHORS = 5
 
 
 def _integer(value: object) -> int | None:
@@ -92,12 +91,116 @@ def _longest_consecutive(values: list[int]) -> list[int]:
     return current if len(current) > len(best) else best
 
 
+def _page_sequences(pages: dict[int, int]) -> dict[tuple[int, ...], int | None]:
+    """Index distinctive consecutive page-count patterns in linear space.
+
+    Uniform or repeated patterns cannot prove chapter identity. Fixed-size
+    lookups avoid a quadratic cross-product on long or uniform source feeds.
+    """
+    patterns: dict[tuple[int, ...], int | None] = {}
+    for start in sorted(pages):
+        pattern = tuple(
+            pages.get(start + step, 0) for step in range(MIN_CONTENT_ANCHORS)
+        )
+        if 0 in pattern or len(set(pattern)) < 4:
+            continue
+        patterns[pattern] = start if pattern not in patterns else None
+    return patterns
+
+
+def _quarantine_ambiguous_tails(
+    releases: list[dict[str, Any]],
+    decisions: dict[str, dict[str, Any]],
+    stable_owned: set[str],
+) -> None:
+    """Do not revive known numbering conflicts as apparently new chapters.
+
+    A proven content offset means raw episode numbers are not interchangeable
+    for this work. Sources with recent owned identity anchors can still extend
+    it immediately; other tails need a title or content correspondence first.
+    This uses the library's evidence, never a publisher's identity or head.
+    """
+    drifted = {
+        _source_identity(release)
+        for release in releases
+        if (decision := decisions[str(release["id"])])["numbering_method"]
+        == "content_sequence_alignment"
+        and int(decision["numbering_evidence"].get("anchors") or 0)
+        >= MIN_CONTENT_ANCHORS
+        and _integer(decision["source_chapter"]) is not None
+        and _integer(decision["canonical_chapter"]) is not None
+        and decision["source_chapter"] != decision["canonical_chapter"]
+    }
+    if not drifted:
+        return
+    owned_head = max(
+        (
+            number
+            for release in releases
+            if str(release["id"]) in stable_owned
+            and (number := _integer(decisions[str(release["id"])]["canonical_chapter"]))
+            is not None
+        ),
+        default=0,
+    )
+    if not owned_head:
+        return
+    anchors: dict[str, set[int]] = defaultdict(set)
+    for release in releases:
+        decision = decisions[str(release["id"])]
+        number = _integer(decision["canonical_chapter"])
+        if (
+            str(release["id"]) in stable_owned
+            and number is not None
+            and number >= owned_head - 10
+            and decision["source_chapter"] == decision["canonical_chapter"]
+        ):
+            anchors[_source_identity(release)].add(number)
+    trusted = {source for source, numbers in anchors.items() if len(numbers) >= 3}
+    trusted -= drifted
+    for release in releases:
+        decision = decisions[str(release["id"])]
+        number = _integer(decision["canonical_chapter"])
+        if (
+            str(release["id"]) in stable_owned
+            or _source_identity(release) in trusted
+            or number is None
+            or number <= owned_head
+            or decision["numbering_status"] != "mapped"
+            or (
+                re.search(
+                    r"\(ch(?:apter)?\.?\s*[-+]?\d",
+                    str(release.get("title") or ""),
+                    re.I,
+                )
+                and canonical_number(title_number(release.get("title")))
+                == decision["canonical_chapter"]
+            )
+            or decision["numbering_method"]
+            in {
+                "explicit_title",
+                "content_sequence_alignment",
+                "operator_correspondence",
+            }
+        ):
+            continue
+        decisions[str(release["id"])] = _decision(
+            release,
+            None,
+            status="pending_evidence",
+            method="awaiting_content_alignment",
+            confidence=0.0,
+            evidence={
+                "source": _source_identity(release),
+                "reason": "known_source_numbering_conflict",
+                "owned_reference": owned_head,
+            },
+        )
+
+
 def reconcile_numbering(
     releases: list[dict[str, Any]],
     *,
-    source_roles: dict[str, str] | None = None,
-    official_hosts: frozenset[str] = frozenset(),
-    secondary_evidence: list[dict[str, Any]] | None = None,
     canonical_labels: frozenset[str] | set[str] = frozenset(),
     canonical_end: int | None = None,
 ) -> dict[str, dict[str, Any]]:
@@ -107,11 +210,6 @@ def reconcile_numbering(
     volume, or that independent sources agree on: they are chapters and map
     to themselves, whatever their titles say.
     """
-
-    # Compatibility for callers predating edition roles.  Production always
-    # passes roles derived from MangaBaka's official links.
-    if source_roles is None:
-        source_roles = {str(host): "primary_official" for host in official_hosts}
 
     decisions: dict[str, dict[str, Any]] = {}
     chapter_releases = [
@@ -127,21 +225,28 @@ def reconcile_numbering(
         confidence = float(release.get("numbering_confidence") or 0.5)
         stored_version = int(release.get("numbering_version") or 0)
         evidence = dict(release.get("numbering_evidence") or {})
-        if stored_version < NUMBERING_VERSION:
-            if status in {"pending_evidence", "unmapped", "ambiguous"}:
-                canonical = None
-                status = "pending_evidence"
-                method = "awaiting_official_evidence"
-                confidence = 0.0
-            else:
-                canonical = source
-                status = (
-                    "mapped"
-                    if canonical_number(source) is not None
-                    else "pending_evidence"
-                )
-                method = "source_identity"
-                confidence = 0.6 if status == "mapped" else 0.0
+        preserve_content = (
+            status == "mapped"
+            and canonical is not None
+            and (
+                bool(release.get("downloaded"))
+                or method
+                in {
+                    "content_sequence_alignment",
+                    "operator_correspondence",
+                    "canonical_decimal",
+                }
+            )
+        )
+        if stored_version < NUMBERING_VERSION and not preserve_content:
+            # Retired publisher gates must not leave stored releases permanently
+            # pending. Rebuild from source identity; title/content evidence and
+            # explicit operator correspondences are applied below.
+            canonical = source
+            status = (
+                "mapped" if canonical_number(source) is not None else "pending_evidence"
+            )
+            method = "source_identity"
             confidence = 0.6 if status == "mapped" else 0.0
             evidence = {
                 "source_chapter": canonical_number(source),
@@ -208,6 +313,15 @@ def reconcile_numbering(
                 },
             )
 
+    stable_owned = {
+        str(release["id"])
+        for release in chapter_releases
+        if release.get("downloaded")
+        and str(release.get("numbering_status") or "mapped") == "mapped"
+        and release.get("canonical_chapter", release.get("chapter")) is not None
+        and decisions[str(release["id"])]["numbering_status"] == "mapped"
+    }
+
     releases_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for release in chapter_releases:
         releases_by_source[_source_identity(release)].append(release)
@@ -215,7 +329,10 @@ def reconcile_numbering(
         explicit: list[tuple[int, int, dict[str, Any]]] = []
         for release in source_releases:
             current = decisions[str(release["id"])]
-            if current["numbering_method"] == "special_title":
+            if (
+                str(release["id"]) in stable_owned
+                or current["numbering_method"] == "special_title"
+            ):
                 continue
             source_number = _integer(decisions[str(release["id"])]["source_chapter"])
             written_number = title_number(release.get("title"))
@@ -244,7 +361,7 @@ def reconcile_numbering(
             else:
                 runs.append([item])
         for run in runs:
-            if len(run) < MIN_CONTENT_ANCHORS:
+            if len(run) < MIN_TITLE_ANCHORS:
                 continue
             for source_number, canonical, release in run:
                 decisions[str(release["id"])] = _decision(
@@ -264,380 +381,184 @@ def reconcile_numbering(
                     },
                 )
 
-    primary_official = [
-        release
-        for release in chapter_releases
-        if source_role_for_release(release, source_roles) == "primary_official"
-    ]
-    secondary_official = [
-        release
-        for release in chapter_releases
-        if source_role_for_release(release, source_roles) == "secondary_official"
-    ]
-    official_title_counts = Counter(
-        number
-        for release in primary_official
-        if (number := title_number(release.get("title"))) is not None
-    )
-    for release in primary_official:
-        release_id = str(release["id"])
-        current = decisions[release_id]
-        if current["numbering_method"] == "special_title":
-            continue
-        written_number = title_number(release.get("title"))
-        season_opening = (
-            written_number is not None
-            and written_number == written_number.to_integral_value()
-            and official_title_counts[written_number] > 1
-            and written_number + Decimal("0.5") not in official_title_counts
-            and is_season_zero_episode(release.get("title"))
+    # Every configured source gets the same title interpretation. Provider
+    # episode indexes are not chapter numbers when the title explicitly says
+    # otherwise. Repeated season openers keep their own fractional slot.
+    for source, source_releases in releases_by_source.items():
+        title_counts = Counter(
+            title_number(release.get("title")) for release in source_releases
         )
-        canonical = (
-            written_number + Decimal("0.5")
-            if season_opening
-            else written_number
-            or current["canonical_chapter"]
-            or current["source_chapter"]
-        )
-        if canonical is None:
-            continue
-        explicit = written_number is not None or str(
-            current["numbering_method"]
-        ).startswith("title_")
-        decisions[release_id] = _decision(
-            release,
-            canonical,
-            status="mapped",
-            method=(
-                "official_season_opening"
-                if season_opening
-                else "official_title"
-                if explicit
-                else "official_source"
-            ),
-            confidence=1.0 if explicit else 0.9,
-            evidence={
-                "source_chapter": current["source_chapter"],
-                "title_chapter": canonical_number(written_number),
-                "official": True,
-                "title": str(release.get("title") or ""),
-            },
-        )
+        for release in source_releases:
+            current = decisions[str(release["id"])]
+            if str(release["id"]) in stable_owned or current["numbering_method"] in {
+                "special_title",
+                "content_sequence_alignment",
+                "operator_correspondence",
+                "canonical_decimal",
+            }:
+                continue
+            written = title_number(release.get("title"))
+            if written is None:
+                continue
+            opening = (
+                title_counts[written] > 1
+                and written + Decimal("0.5") not in title_counts
+                and is_season_zero_episode(release.get("title"))
+            )
+            # A coherent title run was handled above. A single conflicting
+            # title only overrides the provider index when it contains a
+            # deliberate chapter annotation, such as "(ch. 393)".
+            annotated = bool(
+                re.search(
+                    r"\(ch(?:apter)?\.?\s*[-+]?\d",
+                    str(release.get("title") or ""),
+                    re.I,
+                )
+            )
+            source_label = canonical_number(current["source_chapter"])
+            try:
+                reset_index = (
+                    source_label is None or Decimal(source_label) <= 0
+                ) and written > 0
+            except InvalidOperation:
+                # Ranges belong to volume reconciliation, not episode resets.
+                reset_index = False
+            previous_manual = release.get(
+                "numbering_method"
+            ) == "manual" and canonical_number(
+                release.get("canonical_chapter")
+            ) == canonical_number(written)
+            if (
+                not opening
+                and not annotated
+                and not reset_index
+                and not previous_manual
+            ):
+                continue
+            canonical = written + Decimal("0.5") if opening else written
+            if (
+                not opening
+                and canonical_number(canonical) == current["canonical_chapter"]
+                and current["numbering_status"] == "mapped"
+            ):
+                continue
+            decisions[str(release["id"])] = _decision(
+                release,
+                canonical,
+                status="mapped",
+                method="title_season_opening" if opening else "explicit_title",
+                confidence=0.95,
+                evidence={
+                    "source": source,
+                    "title": str(release.get("title") or ""),
+                    "title_chapter": canonical_number(written),
+                },
+            )
 
-    official_by_number: dict[int, dict[str, Any]] = {}
-    for release in primary_official:
+    # Preserve content-based duplicate detection without choosing an official
+    # edition. Prefer a source already represented on disk, then the most
+    # extensively numbered source. A short reference never caps another feed.
+    if not releases_by_source:
+        return decisions
+    reference = max(
+        releases_by_source,
+        key=lambda source: (
+            sum(bool(r.get("downloaded")) for r in releases_by_source[source]),
+            sum(int(r.get("pages") or 0) >= 5 for r in releases_by_source[source]),
+            sum(
+                decisions[str(r["id"])]["numbering_status"] == "mapped"
+                for r in releases_by_source[source]
+            ),
+            source,
+        ),
+    )
+    reference_pages: dict[int, int] = {}
+    for release in releases_by_source[reference]:
         decision = decisions[str(release["id"])]
         number = _integer(decision["canonical_chapter"])
-        if number is None:
-            continue
-        incumbent = official_by_number.get(number)
-        if incumbent is None or int(release.get("pages") or 0) > int(
-            incumbent.get("pages") or 0
-        ):
-            official_by_number[number] = release
-    if not official_by_number:
-        return decisions
-
-    official_head = max(official_by_number)
-    by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for release in chapter_releases:
-        if release not in primary_official:
-            by_source[_source_identity(release)].append(release)
-
-    # The original-language publisher edition is metadata evidence only.  It
-    # establishes a bridge only after it agrees with the managed edition on a
-    # coherent prefix.  A mirror can never manufacture this evidence.
-    secondary_numbers: set[int] = set()
-    for release in secondary_official:
-        decision = decisions[str(release["id"])]
-        if decision["numbering_method"] == "special_title":
-            continue
-        source_number = _integer(decision["source_chapter"])
-        if (
-            source_number is not None
-            and source_number in official_by_number
-            and decision["canonical_chapter"] == decision["source_chapter"]
-        ):
-            secondary_numbers.add(source_number)
-    secondary_evidence_numbers: set[int] = set()
-    for item in secondary_evidence or []:
-        host = str(item.get("host") or "").casefold().removeprefix("www.")
-        if source_roles.get(host) != "secondary_official" or is_special_title(
-            item.get("title")
-        ):
-            continue
-        number = _integer(item.get("edition_chapter", item.get("source_chapter")))
-        if number is not None:
-            secondary_evidence_numbers.add(number)
-            if number in official_by_number:
-                secondary_numbers.add(number)
-    secondary_bridge_stable = (
-        len(_longest_consecutive(list(secondary_numbers))) >= MIN_IDENTITY_ANCHORS
-    )
-    if secondary_bridge_stable:
-        secondary_source_numbers = {
-            number
-            for release in secondary_official
-            if (decision := decisions[str(release["id"])])["numbering_method"]
-            != "special_title"
-            and (number := _integer(decision["source_chapter"])) is not None
-        }
-        secondary_continuation_numbers = (
-            secondary_source_numbers | secondary_evidence_numbers
-        )
-        secondary_head = official_head
-        while secondary_head + 1 in secondary_continuation_numbers:
-            secondary_head += 1
-        secondary_numbers.update(
-            number
-            for number in secondary_continuation_numbers
-            if number <= secondary_head
-        )
-        for release in secondary_official:
-            release_id = str(release["id"])
-            source_number = _integer(decisions[release_id]["source_chapter"])
-            if source_number is None or source_number > secondary_head:
-                continue
-            if source_number > official_head:
-                decisions[release_id] = _decision(
-                    release,
-                    source_number,
-                    status="mapped",
-                    method="secondary_official_continuation",
-                    confidence=0.95,
-                    evidence={
-                        "primary_official_head": official_head,
-                        "secondary_bridge_anchors": len(secondary_numbers),
-                        "secondary_official_head": secondary_head,
-                    },
-                )
-                secondary_numbers.add(source_number)
-
-    identity_anchors_by_source: dict[str, set[int]] = {
-        source: {
-            number
-            for release in source_releases
-            if (decision := decisions[str(release["id"])])["numbering_method"]
-            != "special_title"
-            and (number := _integer(decision["source_chapter"])) in official_by_number
-            and decision["canonical_chapter"] == decision["source_chapter"]
-        }
-        for source, source_releases in by_source.items()
-    }
-
-    # First align coherent page-count sequences.  Matching one page count is
-    # weak; five consecutive chapters with one offset is strong and also
-    # bounds the segment, so a later numbering reset cannot inherit it.
-    canonical_by_pages: dict[int, list[tuple[int, str]]] = defaultdict(list)
-    for number, release in official_by_number.items():
         pages = int(release.get("pages") or 0)
-        if pages >= 5:
-            canonical_by_pages[pages].append((number, "official"))
-    # A source with three equal-number official anchors can lend its downloaded
-    # page counts to the resolver when the official API does not expose them.
-    # The source being aligned is never allowed to anchor itself.
-    for source, source_releases in by_source.items():
-        if len(identity_anchors_by_source[source]) < MIN_IDENTITY_ANCHORS:
+        if (
+            decision["numbering_status"] == "mapped"
+            and number is not None
+            and pages >= 5
+        ):
+            reference_pages.setdefault(number, pages)
+    reference_patterns = _page_sequences(reference_pages)
+    if not reference_patterns:
+        _quarantine_ambiguous_tails(chapter_releases, decisions, stable_owned)
+        return decisions
+    for source, source_releases in releases_by_source.items():
+        if source == reference:
             continue
+        rows: dict[int, dict[str, Any]] = {}
         for release in source_releases:
-            source_number = _integer(decisions[str(release["id"])]["source_chapter"])
-            pages = int(release.get("pages") or 0)
-            if source_number in official_by_number and pages >= 5:
-                canonical_by_pages[pages].append((source_number, source))
-    for source, source_releases in by_source.items():
-        offsets: Counter[int] = Counter()
-        rows_by_source_number: dict[int, dict[str, Any]] = {}
-        for release in source_releases:
-            release_id = str(release["id"])
-            decision = decisions[release_id]
-            if str(decision["numbering_method"]) == "special_title" or str(
-                decision["numbering_method"]
-            ).startswith(("official_", "title_")):
+            current = decisions[str(release["id"])]
+            if str(release["id"]) in stable_owned or current["numbering_method"] in {
+                "special_title",
+                "explicit_title",
+                "title_season_opening",
+                "canonical_decimal",
+                "content_sequence_alignment",
+                "operator_correspondence",
+            }:
                 continue
-            source_number = _integer(decision["source_chapter"])
-            pages = int(release.get("pages") or 0)
-            if source_number is None or pages < 5:
+            number = _integer(current["source_chapter"])
+            if number is not None and int(release.get("pages") or 0) >= 5:
+                rows.setdefault(number, release)
+        patterns = _page_sequences({n: int(r["pages"]) for n, r in rows.items()})
+        matches: dict[int, set[int]] = defaultdict(set)
+        for pattern, start in patterns.items():
+            canonical_start = reference_patterns.get(pattern)
+            if start is None or canonical_start is None:
                 continue
-            rows_by_source_number.setdefault(source_number, release)
-            for canonical, reference_source in canonical_by_pages.get(pages, []):
-                if reference_source != source:
-                    offsets[source_number - canonical] += 1
-        for offset, support in offsets.most_common():
-            if support < MIN_CONTENT_ANCHORS:
-                break
-            matched = [
-                source_number
-                for source_number, release in rows_by_source_number.items()
-                if (canonical := source_number - offset) in official_by_number
-                and any(
-                    anchor == canonical and reference_source != source
-                    for anchor, reference_source in canonical_by_pages.get(
-                        int(release.get("pages") or 0), []
-                    )
-                )
-            ]
-            run = _longest_consecutive(matched)
+            for step in range(MIN_CONTENT_ANCHORS):
+                matches[start + step].add(canonical_start + step)
+        offsets: dict[int, list[int]] = defaultdict(list)
+        for number, candidates in matches.items():
+            if len(candidates) == 1:
+                offsets[number - next(iter(candidates))].append(number)
+        drift = False
+        aligned: set[int] = set()
+        for offset, numbers in sorted(offsets.items()):
+            run = _longest_consecutive(numbers)
             if len(run) < MIN_CONTENT_ANCHORS:
                 continue
-            start, end = run[0], run[-1]
-            for release in source_releases:
-                release_id = str(release["id"])
-                current = decisions[release_id]
-                if str(current["numbering_method"]) == "special_title" or str(
-                    current["numbering_method"]
-                ).startswith(("official_", "title_")):
-                    continue
-                source_number = _integer(current["source_chapter"])
-                if source_number is None or not start <= source_number <= end:
-                    continue
-                canonical = source_number - offset
-                if canonical not in official_by_number:
-                    continue
-                decisions[release_id] = _decision(
+            drift = drift or offset != 0
+            aligned.update(run)
+            for number in run:
+                release = rows[number]
+                decisions[str(release["id"])] = _decision(
                     release,
-                    canonical,
+                    number - offset,
                     status="mapped",
                     method="content_sequence_alignment",
                     confidence=min(0.99, 0.8 + len(run) * 0.01),
                     evidence={
                         "source": source,
+                        "reference_source": reference,
                         "offset": offset,
                         "anchors": len(run),
-                        "source_range": [start, end],
-                        "official_range": [start - offset, end - offset],
+                        "source_range": [run[0], run[-1]],
+                        "canonical_range": [run[0] - offset, run[-1] - offset],
                     },
                 )
-            break
-
-    # Three equal-numbered anchors establish a source identity.  A continuation
-    # is stronger: the anchors must reach the official head, the source must
-    # proceed without holes, and no title/page evidence may show a numbering
-    # offset.  Mapping that identity is separate from deciding whether policy
-    # allows the chapter to be acquired; ``official_frontier`` owns that gate.
-    for source, source_releases in by_source.items():
-        identity_anchors = identity_anchors_by_source[source]
-        identity_verified = len(identity_anchors) >= MIN_IDENTITY_ANCHORS
-        identity_run = _longest_consecutive(list(identity_anchors))
-        continuation_verified = (
-            len(identity_run) >= MIN_IDENTITY_ANCHORS
-            and identity_run[-1] == official_head
-        )
-        source_numbers = {
-            number
-            for release in source_releases
-            if (decision := decisions[str(release["id"])])["numbering_method"]
-            != "special_title"
-            and (number := _integer(decision["source_chapter"])) is not None
-        }
-        continuation_head = official_head
-        while continuation_head + 1 in source_numbers:
-            continuation_head += 1
-        drift_detected = any(
-            (
-                str(decision["numbering_method"]) == "special_title"
-                and _integer(decision.get("source_chapter")) is not None
-            )
-            or (
-                str(decision["numbering_method"]) == "content_sequence_alignment"
-                and int((decision.get("numbering_evidence") or {}).get("offset") or 0)
-                != 0
-            )
-            or (
-                str(decision["numbering_method"]) == "title_sequence"
-                and decision.get("canonical_chapter") != decision.get("source_chapter")
-            )
-            for release in source_releases
-            if (decision := decisions[str(release["id"])])
-        )
-        for release in source_releases:
-            release_id = str(release["id"])
-            current = decisions[release_id]
-            method = str(current["numbering_method"])
-            if method in {
-                "special_title",
-                "official_title",
-                "official_season_opening",
-                "title_sequence",
-                "catalogue_bounded_title",
-                "content_sequence_alignment",
-                "secondary_official_continuation",
-            }:
-                continue
-            source_number = _integer(current["source_chapter"])
-            if source_number is None:
-                continue
-            if source_number > official_head:
-                lead = source_number - official_head
-                if secondary_bridge_stable and source_number in secondary_numbers:
-                    decisions[release_id] = _decision(
-                        release,
-                        source_number,
-                        status="mapped",
-                        method="secondary_official_bridge",
-                        confidence=0.9,
-                        evidence={
-                            "source": source,
-                            "primary_official_head": official_head,
-                            "secondary_bridge_anchors": len(secondary_numbers),
-                            "early_lead": lead,
-                        },
-                    )
-                elif (
-                    continuation_verified
-                    and not drift_detected
-                    and source_number <= continuation_head
-                ):
-                    decisions[release_id] = _decision(
-                        release,
-                        source_number,
-                        status="mapped",
-                        method="verified_identity_continuation",
-                        confidence=0.72,
-                        evidence={
-                            "source": source,
-                            "identity_anchors": len(identity_anchors),
-                            "primary_official_head": official_head,
-                            "verified_continuation_head": continuation_head,
-                            "early_lead": lead,
-                        },
-                    )
-                else:
-                    decisions[release_id] = _decision(
-                        release,
-                        None,
-                        status="pending_evidence",
-                        method="awaiting_secondary_official_evidence",
-                        confidence=0.0,
-                        evidence={
-                            "source": source,
-                            "source_chapter": source_number,
-                            "primary_official_head": official_head,
-                            "secondary_official_bridge": secondary_bridge_stable,
-                            "identity_anchors": len(identity_anchors),
-                            "verified_continuation": continuation_verified,
-                            "verified_continuation_head": continuation_head,
-                            "drift_detected": drift_detected,
-                        },
-                    )
-            elif source_number in official_by_number or identity_verified:
-                decisions[release_id] = _decision(
+        if drift:
+            # A proven numbering mismatch requires content evidence outside
+            # its verified segment too. Never invent an offset for a new tail
+            # or let it masquerade as new chapters. Owned files stay intact.
+            for number, release in rows.items():
+                if number in aligned or release.get("downloaded"):
+                    continue
+                decisions[str(release["id"])] = _decision(
                     release,
-                    source_number,
-                    status="mapped",
-                    method="official_number_match",
-                    confidence=0.85 if source_number in official_by_number else 0.75,
-                    evidence={
-                        "source": source,
-                        "identity_anchors": len(identity_anchors),
-                        "official_head": official_head,
-                    },
+                    None,
+                    status="pending_evidence",
+                    method="awaiting_content_alignment",
+                    confidence=0.0,
+                    evidence={"source": source, "reference_source": reference},
                 )
-
+    _quarantine_ambiguous_tails(chapter_releases, decisions, stable_owned)
     return decisions
 
 
-__all__ = [
-    "MIN_CONTENT_ANCHORS",
-    "NUMBERING_VERSION",
-    "reconcile_numbering",
-]
+__all__ = ["MIN_CONTENT_ANCHORS", "NUMBERING_VERSION", "reconcile_numbering"]

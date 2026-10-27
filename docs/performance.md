@@ -32,12 +32,12 @@ other project.
   evidence and publication dates. Canonical unit selection reuses its
   normalisation and coverage work. Pure source classification, URL host
   parsing and chapter-label parsing use bounded caches.
-- **No per-series queries in a render.** Calendar loads the unit choice of
-  every series (indexer offers, refused books, books on their way) in the same
-  snapshot as the releases, and the System page reads the library paths every
-  release claims in one query instead of decoding each series' releases. On a
-  synthetic catalogue of 300 series and 30,000 releases this took a cold
-  Calendar from 2.4 s to 1.2 s and a System page load from 1.2 s to 0.15 s.
+- **Bounded watch cycles.** All unfinished series use one global timer. The
+  scheduler reads persisted check timestamps and MangaBaka status without scanning
+  chapter publication histories. It processes series sequentially within its time
+  budget and leaves the rest for the next cycle. The removed Calendar has no
+  read model, cache, API endpoint or background publication-date calculations.
+
 - **Compact Wanted rows.** The page requests `compact=true`, which keeps only
   the fields it renders and omits the boilerplate verdict of slots no recovery
   pass has searched yet: for a freshly added library that verdict was half of
@@ -59,7 +59,7 @@ other project.
   transactions behave exactly as before. On the synthetic catalogue this
   halved the small API calls (7 ms to 3 ms) and made seeding 30,000 releases
   2.4 times faster.
-- **Snapshots compressed once.** Library, Wanted and Calendar responses are
+- **Snapshots compressed once.** Library and Wanted responses are
   cached bytes served to every tab and poll. Their gzip form is now kept next
   to the ETag: the first request after a change compresses off the event
   loop, every later one sends the stored bytes (the middleware skips a
@@ -80,11 +80,9 @@ other project.
 - **One classification per release.** Unit selection tested each release
   for "is this a book" up to seven times per render across normalisation,
   coverage and the prologue rule, and parsed each label eleven times. The
-  passes now share the official hosts, classify once and test the cached
-  number before the classifier; the Calendar summarises each series'
-  publication once rather than once per chapter. Cold Library and Calendar
-  renders gained about 10% each; the remaining cost is the canonical slot
-  index itself.
+  passes classify once and test the cached number before the classifier;
+  publication state is resolved once per series. The canonical slot index
+  remains the main cost of a cold library render.
 - **One session per download client.** The qBittorrent client logged in and
   opened a new connection for every poll (two requests every ten seconds);
   it now keeps one authenticated session per configuration and logs in again

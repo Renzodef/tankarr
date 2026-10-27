@@ -15,7 +15,7 @@ below is good at its own job, and several of them work together with Tankarr.
 | Made for | Manga, manhwa, webtoons and comics followed like TV series in Sonarr | Western comic books | Western comic books, volume by volume | Reading online sources through extensions | Serving a folder of books to readers |
 | Knows a work by | The [MangaBaka](https://mangabaka.org) catalogue, cross-checked with MangaUpdates, AniList, Kitsu and MyAnimeList | ComicVine | ComicVine | Each source's own listing | Folder and file names, `ComicInfo.xml` |
 | Gets files from | Suwayomi/Mihon extensions, Prowlarr indexers with qBittorrent and SABnzbd, the Internet Archive, an import folder | Newznab/Torznab, torrents, direct downloads | Torrents, Usenet, direct downloads | Its own extensions | Nothing: you fill the folder |
-| Follows | Chapters or volumes, in the language you choose, with monitoring profiles, a Wanted list and a Calendar | Issues | Volumes | New chapters per source | Nothing |
+| Follows | Chapters or volumes, in the language you choose, with monitoring profiles, a Wanted list  | Issues | Volumes | New chapters per source | Nothing |
 | Writes | One CBZ per chapter or book, `ComicInfo.xml`, covers, hash-checked imports, a recycle bin | CBZ/CBR | CBZ/CBR | Downloads per source | Reads what is there |
 | Reads | A built-in web reader, or your Komga, Kavita or Stump | No | No | Yes, web and apps | Yes, web and apps |
 

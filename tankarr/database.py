@@ -29,7 +29,6 @@ from tankarr.chapter_mapping import (
 )
 from tankarr.download_sources import DOWNLOAD_PROVIDER_PRIORITY_DEFAULT
 from tankarr.library_snapshot import (
-    CALENDAR_REVISION_TABLES,
     CHAPTER_SUMMARY_COLUMNS,
     LIBRARY_REVISION_TABLES,
     WANTED_REVISION_TABLES,
@@ -43,11 +42,9 @@ from tankarr.source_circuit import circuit_delay_seconds
 from tankarr.source_numbering import numbered_prologue
 from tankarr.source_ranking import (
     SourceRanking,
-    beyond_frontier,
-    official_frontier,
+    beyond_chapter_limit,
+    completed_chapter_limit,
     official_hosts,
-    official_source_roles,
-    release_host,
     release_source_keys,
 )
 from tankarr.status_snapshot import install_status_revision_triggers
@@ -179,38 +176,6 @@ CREATE TABLE IF NOT EXISTS manga_release_source (
 CREATE INDEX IF NOT EXISTS idx_manga_release_source_manga
     ON manga_release_source(manga_id, enabled, provider);
 
-CREATE TABLE IF NOT EXISTS manga_official_source (
-    manga_id TEXT NOT NULL REFERENCES manga(id) ON DELETE CASCADE,
-    host TEXT NOT NULL,
-    language TEXT NOT NULL DEFAULT '',
-    source_url TEXT NOT NULL,
-    source_role TEXT NOT NULL CHECK(
-        source_role IN ('primary_official', 'secondary_official', 'alternative')
-    ),
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (manga_id, source_url)
-);
-
-CREATE INDEX IF NOT EXISTS idx_manga_official_source_manga
-    ON manga_official_source(manga_id, source_role, host);
-
-CREATE TABLE IF NOT EXISTS official_edition_evidence (
-    manga_id TEXT NOT NULL REFERENCES manga(id) ON DELETE CASCADE,
-    host TEXT NOT NULL,
-    edition_language TEXT NOT NULL,
-    provider_index TEXT NOT NULL,
-    edition_chapter TEXT,
-    title TEXT NOT NULL DEFAULT '',
-    publish_at TEXT,
-    source_url TEXT NOT NULL,
-    evidence_json TEXT NOT NULL DEFAULT '{}',
-    checked_at TEXT NOT NULL,
-    PRIMARY KEY (manga_id, host, provider_index)
-);
-
-CREATE INDEX IF NOT EXISTS idx_official_edition_evidence_manga
-    ON official_edition_evidence(manga_id, host, edition_language);
-
 CREATE TABLE IF NOT EXISTS series_chapter_map (
     manga_id TEXT NOT NULL REFERENCES manga(id) ON DELETE CASCADE,
     source TEXT NOT NULL,
@@ -237,16 +202,6 @@ CREATE TABLE IF NOT EXISTS release_numbering_override (
 CREATE TABLE IF NOT EXISTS numbering_reconciliation (
     manga_id TEXT PRIMARY KEY REFERENCES manga(id) ON DELETE CASCADE,
     fingerprint TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS series_release_history (
-    manga_id TEXT NOT NULL REFERENCES manga(id) ON DELETE CASCADE,
-    source TEXT NOT NULL,
-    chapter TEXT NOT NULL,
-    volume TEXT NOT NULL DEFAULT '',
-    release_date TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (manga_id, source, chapter, volume, release_date)
 );
 
 CREATE TABLE IF NOT EXISTS release_source_rejection (
@@ -1233,12 +1188,6 @@ class Database:
             self._ensure_column(
                 connection, "manga_release_source", "publication_status", "TEXT"
             )
-            for row in connection.execute(
-                "SELECT manga_id FROM series_metadata"
-            ).fetchall():
-                self._refresh_official_edition_sources_connection(
-                    connection, str(row["manga_id"])
-                )
             self._ensure_column(
                 connection,
                 "chapter_release",
@@ -1909,7 +1858,12 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT m.id, m.provider, m.monitor_mode, m.status,
+                SELECT m.id, m.provider, m.monitor_mode,
+                       COALESCE((SELECT json_extract(record.data_json, '$.status')
+                                 FROM metadata_source_record AS record
+                                 WHERE record.manga_id=m.id AND record.source='mangabaka'
+                                   AND record.entity_type IN ('work', 'series')
+                                 ORDER BY record.fetched_at DESC LIMIT 1), m.status) AS status,
                        m.status_override, m.last_checked_at, m.last_check_error,
                        m.monitor_initialized,
                        EXISTS (
@@ -1954,15 +1908,7 @@ class Database:
                                OR lower(trim(source.language))
                                   = lower(trim(m.preferred_language))
                              )
-                       ) AS suwayomi_mapping_error,
-                       (
-                           SELECT MAX(chapter.publish_at)
-                           FROM chapter_release AS chapter
-                           WHERE chapter.manga_id = m.id
-                             AND chapter.language = m.preferred_language
-                             AND chapter.publish_at IS NOT NULL
-                             AND trim(chapter.publish_at) <> ''
-                       ) AS newest_publish_at
+                       ) AS suwayomi_mapping_error
                 FROM manga AS m
                 """
             ).fetchall()
@@ -1980,7 +1926,6 @@ class Database:
                 "mapping_error": bool(row["mapping_error"]),
                 "oldest_mapping_error_at": row["oldest_mapping_error_at"],
                 "suwayomi_mapping_error": bool(row["suwayomi_mapping_error"]),
-                "newest_publish_at": row["newest_publish_at"],
             }
             for row in rows
         ]
@@ -1998,10 +1943,6 @@ class Database:
             ).fetchall()
         revisions = {str(row[0]): str(row[1]) for row in rows}
         return tuple(revisions.get(table, "0") for table in tables)
-
-    def calendar_revision(self) -> tuple[str, ...]:
-        """Cheap fingerprint for every row that can change the calendar."""
-        return self._read_model_revision(CALENDAR_REVISION_TABLES)
 
     def wanted_revision(self) -> tuple[str, ...]:
         """Cheap fingerprint for the state rendered by the Wanted page."""
@@ -2629,244 +2570,6 @@ class Database:
                 self._reconcile_numbering_connection(connection, manga_id)
         return {"seen": len(chapter_list), "new_chapter_ids": new_ids}
 
-    @staticmethod
-    def _numbering_source_roles(
-        connection: sqlite3.Connection, manga_id: str
-    ) -> dict[str, str]:
-        persisted = connection.execute(
-            "SELECT host, source_role FROM manga_official_source WHERE manga_id=?",
-            (manga_id,),
-        ).fetchall()
-        if persisted:
-            # A host can expose several editions. The source used for the
-            # managed language wins over secondary evidence, which wins over
-            # unrelated editions on that same host.
-            priority = {
-                "alternative": 0,
-                "secondary_official": 1,
-                "primary_official": 2,
-            }
-            roles: dict[str, str] = {}
-            for item in persisted:
-                host = str(item["host"] or "").casefold()
-                role = str(item["source_role"] or "alternative")
-                if host and priority.get(role, -1) >= priority.get(
-                    roles.get(host, ""), -1
-                ):
-                    roles[host] = role
-            return roles
-        row = connection.execute(
-            """
-            SELECT m.preferred_language, m.original_language, sm.data_json
-            FROM manga AS m
-            LEFT JOIN series_metadata AS sm ON sm.manga_id=m.id
-            WHERE m.id=?
-            """,
-            (manga_id,),
-        ).fetchone()
-        if row is None:
-            return {}
-        try:
-            metadata = json.loads(row["data_json"] or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            metadata = {}
-        return official_source_roles(
-            metadata.get("official_links"),
-            preferred_language=str(row["preferred_language"] or ""),
-            original_language=str(row["original_language"] or ""),
-        )
-
-    @staticmethod
-    def _refresh_official_edition_sources_connection(
-        connection: sqlite3.Connection, manga_id: str
-    ) -> dict[str, str]:
-        """Persist editorial editions, including metadata-only publishers."""
-
-        row = connection.execute(
-            """
-            SELECT m.preferred_language, m.original_language, sm.data_json
-            FROM manga AS m
-            LEFT JOIN series_metadata AS sm ON sm.manga_id=m.id
-            WHERE m.id=?
-            """,
-            (manga_id,),
-        ).fetchone()
-        if row is None:
-            return {}
-        try:
-            metadata = json.loads(row["data_json"] or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            metadata = {}
-        roles = official_source_roles(
-            metadata.get("official_links"),
-            preferred_language=str(row["preferred_language"] or ""),
-            original_language=str(row["original_language"] or ""),
-        )
-        connection.execute(
-            "DELETE FROM manga_official_source WHERE manga_id=?", (manga_id,)
-        )
-        now = utc_now()
-        links = metadata.get("official_links")
-        if not isinstance(links, list):
-            return roles
-        for link in links:
-            if not isinstance(link, dict):
-                continue
-            source_url = str(link.get("url") or "").strip()
-            host = release_host({"source_url": source_url})
-            if not source_url or not host:
-                continue
-            language = str(link.get("language") or "").casefold().split("-", 1)[0]
-            preferred_language = str(row["preferred_language"] or "").casefold()
-            original_language = str(row["original_language"] or "").casefold()
-            if language and language == preferred_language:
-                role = "primary_official"
-            elif language and language == original_language:
-                role = "secondary_official"
-            else:
-                # Some MangaBaka links omit their locale. Retain the host's
-                # discovered role for those, but never promote another known
-                # edition merely because it shares the same publisher host.
-                role = roles.get(host, "alternative") if not language else "alternative"
-            connection.execute(
-                """
-                INSERT INTO manga_official_source (
-                    manga_id, host, language, source_url, source_role, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    manga_id,
-                    host,
-                    language,
-                    source_url,
-                    role,
-                    now,
-                ),
-            )
-        return roles
-
-    @staticmethod
-    def _refresh_release_source_roles_connection(
-        connection: sqlite3.Connection, manga_id: str, source_roles: dict[str, str]
-    ) -> None:
-        """Persist edition roles for mapped sources without guessing by name."""
-
-        rows = connection.execute(
-            "SELECT provider, provider_manga_id, source_url FROM manga_release_source "
-            "WHERE manga_id=?",
-            (manga_id,),
-        ).fetchall()
-        for row in rows:
-            host = release_host({"source_url": row["source_url"]})
-            role = "alternative"
-            for candidate, candidate_role in source_roles.items():
-                if host and (host == candidate or host.endswith("." + candidate)):
-                    role = candidate_role
-                    break
-            connection.execute(
-                "UPDATE manga_release_source SET source_role=? "
-                "WHERE manga_id=? AND provider=? AND provider_manga_id=?",
-                (role, manga_id, row["provider"], row["provider_manga_id"]),
-            )
-
-    @staticmethod
-    def _secondary_official_evidence_connection(
-        connection: sqlite3.Connection, manga_id: str, source_roles: dict[str, str]
-    ) -> list[dict[str, Any]]:
-        rows = connection.execute(
-            "SELECT host, provider_index, edition_chapter, title, publish_at, "
-            "source_url, evidence_json FROM official_edition_evidence "
-            "WHERE manga_id=?",
-            (manga_id,),
-        ).fetchall()
-        output: list[dict[str, Any]] = []
-        for row in rows:
-            host = str(row["host"] or "").casefold()
-            if source_roles.get(host) != "secondary_official":
-                continue
-            try:
-                evidence = json.loads(row["evidence_json"] or "{}")
-            except (TypeError, ValueError, json.JSONDecodeError):
-                evidence = {}
-            output.append(
-                {
-                    "host": host,
-                    "source_chapter": row["provider_index"],
-                    "edition_chapter": row["edition_chapter"],
-                    "title": row["title"],
-                    "publish_at": row["publish_at"],
-                    "source_url": row["source_url"],
-                    "evidence": evidence,
-                }
-            )
-        return output
-
-    def replace_official_edition_evidence(
-        self,
-        manga_id: str,
-        *,
-        host: str,
-        language: str,
-        items: Iterable[dict[str, Any]],
-    ) -> int:
-        """Replace one publisher's read-only edition index and reconcile."""
-
-        normalized_host = str(host).casefold().removeprefix("www.")
-        if not normalized_host:
-            raise ValueError("Official evidence host is required")
-        now = utc_now()
-        rows = [dict(item) for item in items if str(item.get("provider_index") or "")]
-        with self.connect() as connection:
-            self._require_manga(connection, manga_id)
-            connection.execute(
-                "DELETE FROM official_edition_evidence WHERE manga_id=? AND host=?",
-                (manga_id, normalized_host),
-            )
-            for item in rows:
-                connection.execute(
-                    """
-                    INSERT INTO official_edition_evidence (
-                        manga_id, host, edition_language, provider_index,
-                        edition_chapter, title, publish_at, source_url,
-                        evidence_json, checked_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        manga_id,
-                        normalized_host,
-                        str(language or "unknown").casefold(),
-                        str(item["provider_index"]),
-                        canonical_number(item.get("edition_chapter")),
-                        str(item.get("title") or ""),
-                        item.get("publish_at"),
-                        str(item.get("source_url") or ""),
-                        json.dumps(item.get("evidence") or {}, ensure_ascii=False),
-                        now,
-                    ),
-                )
-            self._reconcile_numbering_connection(connection, manga_id)
-        return len(rows)
-
-    def official_edition_evidence_due(
-        self, manga_id: str, host: str, *, max_age_seconds: float
-    ) -> bool:
-        """Whether a publisher index needs a new read-only metadata probe."""
-
-        with self.connect() as connection:
-            row = connection.execute(
-                "SELECT MAX(checked_at) AS checked_at FROM official_edition_evidence "
-                "WHERE manga_id=? AND host=?",
-                (manga_id, str(host).casefold().removeprefix("www.")),
-            ).fetchone()
-        raw = str((row or {})["checked_at"] or "")
-        try:
-            checked = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-        if checked.tzinfo is None:
-            checked = checked.replace(tzinfo=UTC)
-        return (datetime.now(UTC) - checked).total_seconds() >= max_age_seconds
-
     def replace_numbering_overrides(
         self, manga_id: str, assignments: dict[str, str], *, evidence: str
     ) -> None:
@@ -2934,10 +2637,6 @@ class Database:
                     numbering_confidence=0.6,
                     numbering_evidence={},
                 )
-        source_roles = self._numbering_source_roles(connection, manga_id)
-        self._refresh_release_source_roles_connection(
-            connection, manga_id, source_roles
-        )
         from tankarr.chapter_mapping import (
             canonical_decimal_labels,
         )
@@ -2980,10 +2679,6 @@ class Database:
                     verified_volumes[label].add(entry.volumes[0])
         decisions = reconcile_numbering(
             releases,
-            source_roles=source_roles,
-            secondary_evidence=self._secondary_official_evidence_connection(
-                connection, manga_id, source_roles
-            ),
             canonical_labels=canonical_decimal_labels(
                 map_entries,
                 releases,
@@ -3105,8 +2800,7 @@ class Database:
 
         The rules (their version, the release, the image) and the rows they
         consult: the series, its releases, the catalogue metadata, the chapter
-        map, the source roles, the operator's overrides and the official
-        edition evidence. Equal fingerprints mean an identical outcome.
+        map, linked sources and the operator's overrides. Equal fingerprints mean an identical outcome.
         """
 
         from tankarr.numbering_reconciliation import NUMBERING_VERSION
@@ -3126,12 +2820,9 @@ class Database:
                 (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '')
                  FROM manga_release_source WHERE manga_id = ?),
                 (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '')
-                 FROM release_numbering_override WHERE manga_id = ?),
-                (SELECT COUNT(*) || ':' || COALESCE(MAX(rowid), 0) || ':' ||
-                        COALESCE(MAX(publish_at), '')
-                 FROM official_edition_evidence WHERE manga_id = ?)
+                 FROM release_numbering_override WHERE manga_id = ?)
             """,
-            (manga_id,) * 7,
+            (manga_id,) * 6,
         ).fetchone()
         return "|".join(
             [
@@ -3218,7 +2909,6 @@ class Database:
                         "SELECT * FROM chapter_release WHERE manga_id=?", (manga_id,)
                     ).fetchall()
                 ]
-                source_roles = self._numbering_source_roles(connection, manga_id)
                 metadata_row = connection.execute(
                     "SELECT data_json FROM series_metadata WHERE manga_id=?",
                     (manga_id,),
@@ -3226,12 +2916,6 @@ class Database:
                 metadata = json.loads(metadata_row["data_json"]) if metadata_row else {}
                 decisions = reconcile_numbering(
                     releases,
-                    source_roles=source_roles,
-                    secondary_evidence=self._secondary_official_evidence_connection(
-                        connection,
-                        manga_id,
-                        source_roles,
-                    ),
                     canonical_end=counted_chapter_total(dict(manga), metadata),
                 )
                 status_counts: dict[str, int] = defaultdict(int)
@@ -3262,7 +2946,6 @@ class Database:
                     {
                         "manga_id": manga_id,
                         "title": str(manga["title"]),
-                        "source_roles": source_roles,
                         "releases": len(releases),
                         "changes": changes,
                         "statuses": dict(sorted(status_counts.items())),
@@ -3938,35 +3621,8 @@ class Database:
 
     PAUSE_SIGNAL_SOURCES = ("mangabaka", "myanimelist", "mangaupdates")
 
-    @staticmethod
-    def _official_published_after(
-        connection: sqlite3.Connection, manga_id: str, pause_reported_at: str
-    ) -> bool:
-        """A new primary-platform chapter outranks an older catalogue pause."""
-
-        return (
-            connection.execute(
-                """
-            SELECT 1 FROM chapter_release AS c
-            JOIN manga_release_source AS r
-              ON r.manga_id=c.manga_id AND r.provider=c.provider
-             AND r.source_name=c.source_name AND r.language=c.language
-            WHERE c.manga_id=? AND r.enabled=1
-              AND r.source_role='primary_official'
-              AND c.numbering_status='mapped' AND c.chapter IS NOT NULL
-              AND julianday(c.publish_at)>julianday(?)
-              AND julianday(c.publish_at)<=julianday('now')
-            LIMIT 1
-            """,
-                (manga_id, pause_reported_at),
-            ).fetchone()
-            is not None
-        )
-
     def publication_signals(self, manga_id: str) -> dict[str, str]:
-        """What each catalogue and the official platform last said about the
-        work's publication: ``{"mangabaka": "hiatus", "official": "ongoing"}``.
-        AniList is left out on purpose: it reports NANA as releasing."""
+        """Cached catalogue publication states, with MangaBaka as authority."""
 
         signals: dict[str, str] = {}
         with self.connect() as connection:
@@ -3974,25 +3630,16 @@ class Database:
                 """
                 SELECT source, json_extract(data_json, '$.status') AS status, fetched_at
                 FROM metadata_source_record
-                WHERE manga_id=? AND source IN ('mangabaka', 'myanimelist', 'mangaupdates')
+                WHERE manga_id=? AND entity_type IN ('work', 'series')
+                  AND source IN ('mangabaka', 'myanimelist', 'mangaupdates')
                 ORDER BY fetched_at
                 """,
                 (manga_id,),
             ).fetchall()
-        paused_at: list[str] = []
         for row in rows:
             status = str(row["status"] or "").strip().casefold()
             if status:
                 signals[str(row["source"])] = status
-                if status in {"hiatus", "on_hiatus", "paused"}:
-                    paused_at.append(str(row["fetched_at"]))
-        official = self.official_publication_status(manga_id)
-        if official:
-            signals["official"] = official
-        if paused_at and official and official not in {"hiatus", "on_hiatus", "paused"}:
-            with self.connect() as connection:
-                if self._official_published_after(connection, manga_id, max(paused_at)):
-                    signals["official_resume"] = "published"
         return signals
 
     def record_publication_pause(
@@ -4040,25 +3687,6 @@ class Database:
             "sources": json.loads(row["sources_json"] or "[]"),
             "changed_at": row["changed_at"],
         }
-
-    def official_publication_status(self, manga_id: str) -> str | None:
-        """What the work's official platform says about its publication, if
-        an enabled official release source reported one on its last refresh."""
-
-        with self.connect() as connection:
-            row = connection.execute(
-                """
-                SELECT publication_status FROM manga_release_source
-                WHERE manga_id=? AND enabled=1
-                  AND source_role IN ('primary_official', 'secondary_official')
-                  AND publication_status IS NOT NULL AND publication_status<>''
-                ORDER BY CASE source_role WHEN 'primary_official' THEN 0 ELSE 1 END,
-                         updated_at DESC
-                LIMIT 1
-                """,
-                (manga_id,),
-            ).fetchone()
-        return str(row["publication_status"]) if row else None
 
     def configure_monitor_mode(
         self, manga_id: str, monitor_mode: str
@@ -4456,40 +4084,32 @@ class Database:
             all_chapters, fetchable, "Imported by hand: no provider can fetch it again"
         )
         all_chapters = fetchable
-        # Under "prefer official" the publisher decides which chapters exist.
-        # This is the single gate every download passes through - Wanted, the
-        # monitor and discovery all land here - so a scanlator running ahead
-        # of the official release is refused once, for all of them.
-        if self.source_ranking.acquisition_policy == "prefer_official":
-            hosts = official_hosts(
-                metadata.get("official_links"),
-                language=str(manga.get("preferred_language") or ""),
-            )
-            frontier = official_frontier(
+        # Completed works keep their final catalogue boundary.
+        hosts = official_hosts(
+            metadata.get("official_links"),
+            language=str(manga.get("preferred_language") or ""),
+        )
+        frontier = completed_chapter_limit(
+            metadata=metadata,
+            status=publication_summary(manga, metadata)["status"],
+            chapter_total=manga.get("expected_count_override")
+            if str(manga.get("expected_count_unit_override") or "").casefold()
+            == "chapter"
+            else None,
+        )
+        if frontier is not None:
+            released_chapters = [
+                chapter
+                for chapter in all_chapters
+                if chapter.get("downloaded")
+                or not beyond_chapter_limit(chapter, frontier)
+            ]
+            excluded(
                 all_chapters,
-                hosts,
-                metadata=metadata,
-                status=publication_summary(manga, metadata)["status"],
-                chapter_total=(
-                    manga.get("expected_count_override")
-                    if str(manga.get("expected_count_unit_override") or "").casefold()
-                    == "chapter"
-                    else None
-                ),
+                released_chapters,
+                "Beyond the completed catalogue total",
             )
-            if frontier is not None:
-                released_chapters = [
-                    chapter
-                    for chapter in all_chapters
-                    if chapter.get("downloaded")
-                    or not beyond_frontier(chapter, frontier)
-                ]
-                excluded(
-                    all_chapters,
-                    released_chapters,
-                    "Beyond the confirmed official edition frontier",
-                )
-                all_chapters = released_chapters
+            all_chapters = released_chapters
         from tankarr.chapter_mapping import (
             _positive_integer,
             canonical_decimal_labels,
@@ -4968,175 +4588,6 @@ class Database:
                     (manga_id, volume_key, normalized_state, now, now),
                 )
         return {"volume": volume_key, "state": normalized_state}
-
-    def list_calendar_inputs(self) -> list[dict[str, Any]]:
-        """Load every series and its preferred-language release history in bulk.
-
-        Calendar cadence used to open the database two or three times per
-        series. One snapshot keeps the calculation consistent and avoids that
-        N+1 query pattern while downloads are updating the library.
-        """
-
-        with self.read_snapshot():
-            return self._list_calendar_inputs_snapshot()
-
-    def _list_calendar_inputs_snapshot(self) -> list[dict[str, Any]]:
-        signals: dict[str, dict[str, str]] = defaultdict(dict)
-        paused_at: dict[str, str] = {}
-        with self.connect() as connection:
-            manga_rows = connection.execute(
-                """
-                SELECT m.*,
-                       sm.manga_id AS calendar_metadata_manga_id,
-                       sm.data_json AS calendar_metadata_json,
-                       sm.artwork_path AS calendar_artwork_path,
-                       sm.artwork_sha256 AS calendar_artwork_sha256
-                FROM manga AS m
-                LEFT JOIN series_metadata AS sm ON sm.manga_id=m.id
-                ORDER BY m.id
-                """
-            ).fetchall()
-            chapter_rows = connection.execute(
-                """
-                SELECT c.*
-                FROM chapter_release AS c
-                JOIN manga AS m
-                  ON m.id=c.manga_id AND c.language=m.preferred_language
-                ORDER BY c.manga_id, c.publish_at, c.id
-                """
-            ).fetchall()
-            for row in connection.execute(
-                "SELECT manga_id, source, json_extract(data_json, '$.status') AS status, fetched_at "
-                "FROM metadata_source_record "
-                "WHERE source IN ('mangabaka','myanimelist','mangaupdates') "
-                "ORDER BY fetched_at"
-            ):
-                status = str(row["status"] or "").strip().casefold()
-                if status:
-                    manga_id = str(row["manga_id"])
-                    signals[manga_id][str(row["source"])] = status
-                    if status in {"hiatus", "on_hiatus", "paused"}:
-                        paused_at[manga_id] = max(
-                            paused_at.get(manga_id, ""), str(row["fetched_at"])
-                        )
-            for row in connection.execute(
-                "SELECT manga_id, publication_status FROM manga_release_source "
-                "WHERE enabled=1 AND source_role IN ('primary_official','secondary_official') "
-                "AND publication_status IS NOT NULL AND publication_status<>'' "
-                "ORDER BY CASE source_role WHEN 'primary_official' THEN 0 ELSE 1 END, "
-                "updated_at DESC"
-            ):
-                signals[str(row["manga_id"])].setdefault(
-                    "official", str(row["publication_status"])
-                )
-            for manga_id, reported_at in paused_at.items():
-                official = signals[manga_id].get("official", "").casefold()
-                if official and official not in {"hiatus", "on_hiatus", "paused"}:
-                    if self._official_published_after(
-                        connection, manga_id, reported_at
-                    ):
-                        signals[manga_id]["official_resume"] = "published"
-            # The unit context of every series, loaded once: resolving the
-            # unit per series used to open three connections for each of
-            # them, a third of a cold Calendar render.
-            indexer_volumes: dict[str, set[int]] = defaultdict(set)
-            for row in connection.execute("SELECT manga_id, volume FROM indexer_offer"):
-                try:
-                    indexer_volumes[str(row["manga_id"])].add(int(float(row["volume"])))
-                except (TypeError, ValueError):
-                    continue
-            unobtainable_volumes: dict[str, set[int]] = defaultdict(set)
-            for row in connection.execute(
-                """
-                SELECT manga_id, slot_key FROM wanted_attempt
-                WHERE channel='indexer_book'
-                  AND outcome IN ('not_offered', 'ambiguous', 'error')
-                  AND slot_key LIKE 'volume:%'
-                """
-            ):
-                try:
-                    unobtainable_volumes[str(row["manga_id"])].add(
-                        int(float(str(row["slot_key"]).split(":", 1)[1]))
-                    )
-                except ValueError:
-                    continue
-            pending_volumes = self.pending_book_volumes()
-
-        records: dict[str, dict[str, Any]] = {}
-        for row in manga_rows:
-            raw = dict(row)
-            metadata_manga_id = raw.pop("calendar_metadata_manga_id", None)
-            metadata_json = raw.pop("calendar_metadata_json", None)
-            artwork_path = raw.pop("calendar_artwork_path", None)
-            artwork_sha256 = raw.pop("calendar_artwork_sha256", None)
-            manga = self._decode_manga(raw)
-            metadata = (
-                {
-                    "data": json.loads(metadata_json or "{}"),
-                    "artwork_path": artwork_path,
-                    "artwork_sha256": artwork_sha256,
-                }
-                if metadata_manga_id is not None
-                else None
-            )
-            records[str(manga["id"])] = {
-                "manga": manga,
-                "metadata": metadata,
-                "chapters": [],
-                "publication_signals": signals.get(str(manga["id"]), {}),
-                "unit_context": {
-                    "indexer_volumes": indexer_volumes.get(str(manga["id"]), set()),
-                    "unobtainable_volumes": unobtainable_volumes.get(
-                        str(manga["id"]), set()
-                    ),
-                    "pending_volumes": pending_volumes.get(str(manga["id"]), set()),
-                },
-            }
-
-        for row in chapter_rows:
-            release = self._decode_chapter(row)
-            record = records.get(str(release["manga_id"]))
-            if record is None:
-                continue
-            record["chapters"].append(release)
-        return list(records.values())
-
-    def list_calendar_releases(self, start: str, end: str) -> list[dict[str, Any]]:
-        """Releases published inside a window, for series in the library."""
-
-        with self.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT c.*,
-                       COALESCE(
-                           NULLIF(trim(m.title_override), ''),
-                           NULLIF(trim(m.metadata_title), ''),
-                           m.title
-                       ) AS manga_title,
-                       COALESCE(
-                           NULLIF(trim(m.cover_url), ''),
-                           CASE
-                               WHEN NULLIF(trim(series_artwork.artwork_sha256), '')
-                                    IS NOT NULL
-                               THEN '/api/metadata/artwork/' || m.id
-                                    || '/series?v=' || series_artwork.artwork_sha256
-                           END
-                       ) AS manga_cover_url,
-                       m.monitor_mode AS manga_monitor_mode
-                FROM chapter_release c
-                JOIN manga m ON m.id = c.manga_id
-                LEFT JOIN series_metadata AS series_artwork
-                  ON series_artwork.manga_id = m.id
-                WHERE c.language = m.preferred_language
-                  AND c.numbering_status = 'mapped'
-                  AND (c.release_unit = 'volume' OR c.canonical_chapter IS NOT NULL)
-                  AND c.publish_at IS NOT NULL
-                  AND c.publish_at >= ? AND c.publish_at <= ?
-                ORDER BY c.publish_at DESC
-                """,
-                (start, end),
-            ).fetchall()
-        return [self._decode_chapter(row) for row in rows]
 
     def get_setting_overrides(self) -> dict[str, str]:
         with self.connect() as connection:
@@ -6148,7 +5599,6 @@ class Database:
                     error[:1000] if error else None,
                 ),
             )
-            self._refresh_official_edition_sources_connection(connection, manga_id)
             self._reconcile_numbering_connection(connection, manga_id)
         return self.get_series_metadata(manga_id) or {}
 
@@ -8870,53 +8320,6 @@ class Database:
             )
             return cursor.rowcount
 
-    def replace_release_history(
-        self, manga_id: str, source: str, releases: Iterable[dict[str, Any]]
-    ) -> int:
-        """Store one source's dated releases (the work's publishing rhythm)."""
-
-        now = utc_now()
-        rows = []
-        for release in releases:
-            chapter = str(release.get("chapter") or "").strip()
-            released = str(release.get("release_date") or "").strip()
-            if not chapter or not released:
-                continue
-            rows.append(
-                (
-                    manga_id,
-                    source,
-                    chapter,
-                    str(release.get("volume") or ""),
-                    released,
-                    now,
-                )
-            )
-        with self.connect() as connection:
-            self._require_manga(connection, manga_id)
-            connection.execute(
-                "DELETE FROM series_release_history WHERE manga_id=? AND source=?",
-                (manga_id, source),
-            )
-            connection.executemany(
-                """
-                INSERT OR REPLACE INTO series_release_history (
-                    manga_id, source, chapter, volume, release_date, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
-        return len(rows)
-
-    def list_release_history(self, manga_id: str) -> list[dict[str, Any]]:
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT source, chapter, volume, release_date FROM series_release_history "
-                "WHERE manga_id=? ORDER BY release_date",
-                (manga_id,),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
     def replace_chapter_map(
         self, manga_id: str, source: str, entries: Iterable[Any]
     ) -> int:
@@ -9406,7 +8809,7 @@ class Database:
                 """
             ).fetchall()
             # A job can outlive the release it points at: sources are
-            # retired, releases past the official frontier are removed. Such a
+            # retired, confirmed duplicate files are removed. Such a
             # job has nothing left to download, and letting it raise here
             # aborted startup before the worker ever began.
             orphaned = [
@@ -10571,7 +9974,7 @@ class Database:
     @staticmethod
     def _decode_chapter(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
-        # Most rows carry the empty defaults; a Calendar or System render
+        # Most rows carry the empty defaults; a System render
         # decodes every release, so two json.loads per row were measurable.
         groups_json = result.pop("groups_json", "[]")
         result["groups"] = (

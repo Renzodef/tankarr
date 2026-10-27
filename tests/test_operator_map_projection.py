@@ -133,34 +133,19 @@ def official_series(tmp_path, *, evidence_kind):
 
     releases = [
         release("primary", number, "en", "webtoons.com") for number in range(1, 6)
-    ] + [
-        release("mirror", number, "en", "mirror.example")
-        for number in (1, 2, 3, 4, 5, 8)
-    ]
+    ] + [release("mirror", number, "en", "mirror.example") for number in range(1, 9)]
     if evidence_kind == "releases":
         releases += [
             release("secondary", number, "ko", "comic.naver.com")
             for number in range(1, 9)
         ]
     database.upsert_chapters("manga-1", releases)
-    if evidence_kind == "metadata":
-        database.replace_official_edition_evidence(
-            "manga-1",
-            host="comic.naver.com",
-            language="ko",
-            items=[
-                {"provider_index": str(number), "edition_chapter": str(number)}
-                for number in range(1, 9)
-            ],
-        )
-    assert database.get_chapter("mirror-8")["numbering_method"] == (
-        "secondary_official_bridge"
-    )
+    assert database.get_chapter("mirror-8")["numbering_method"] == ("source_identity")
     return database, OperatorChapterMap(database, service)
 
 
-@pytest.mark.parametrize("evidence_kind", ["releases", "metadata"])
-def test_preview_uses_other_language_and_secondary_publisher_evidence(
+@pytest.mark.parametrize("evidence_kind", ["releases", "none"])
+def test_preview_follows_sources_with_or_without_other_language_releases(
     tmp_path, evidence_kind
 ):
     database, editor = official_series(tmp_path, evidence_kind=evidence_kind)
@@ -176,14 +161,14 @@ def test_preview_uses_other_language_and_secondary_publisher_evidence(
         if slot["chapter"] == "8"
     )
     assert slot["releases"][0]["id"] == "mirror-8"
-    assert slot["releases"][0]["numbering_method"] == "secondary_official_bridge"
+    assert slot["releases"][0]["numbering_method"] == "source_identity"
     applied = editor.commit("manga-1", boundaries, preview["confirmation_snapshot"])
     assert without_timestamps(preview["chapter_index"]) == without_timestamps(
         applied["chapter_index"]
     )
 
 
-@pytest.mark.parametrize("changed", ["foreign_release", "source_role", "evidence"])
+@pytest.mark.parametrize("changed", ["foreign_release"])
 def test_confirmation_binds_numbering_inputs_outside_managed_language(
     tmp_path, changed
 ):
@@ -196,15 +181,6 @@ def test_confirmation_binds_numbering_inputs_outside_managed_language(
     with database.connect() as connection:
         if changed == "foreign_release":
             connection.execute("DELETE FROM chapter_release WHERE id='secondary-8'")
-        elif changed == "source_role":
-            connection.execute(
-                "UPDATE manga_official_source SET source_role='alternative' "
-                "WHERE host='comic.naver.com'"
-            )
-        else:
-            connection.execute(
-                "DELETE FROM official_edition_evidence WHERE provider_index='8'"
-            )
     assert database.list_chapters("manga-1", "en") == managed_before
     before = persisted_state(database)
 

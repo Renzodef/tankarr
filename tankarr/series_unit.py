@@ -1,7 +1,7 @@
 """The primary download unit for a series: chapters or whole-volume books.
 
 Sources offer two shapes of file for the same work: single chapters and
-whole tankōbon volumes. The index, Wanted and calendar follow a primary
+whole tankōbon volumes. The index and Wanted follow a primary
 unit; books may fill gaps in a continuing chapter series. The unit is
 either chosen by the user or resolved
 deterministically from the catalogue and from what the mapped sources
@@ -125,12 +125,6 @@ def _context(manga: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
-def acquisition_policy(manga: dict[str, Any]) -> str:
-    """The release policy in force, as the download gate sees it."""
-
-    return str(_context(manga).get("acquisition_policy") or "").strip().casefold()
-
-
 def coverage_for_units(
     manga: dict[str, Any],
     metadata: dict[str, Any] | None,
@@ -140,7 +134,6 @@ def coverage_for_units(
     *,
     normalized_chapters: list[dict[str, Any]] | None = None,
     pending_volumes: set[int] | None = None,
-    official_hosts: frozenset[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """How far each unit can go, aggregating every source and the indexers.
 
@@ -163,34 +156,10 @@ def coverage_for_units(
     if chapters is None:
         chapters, _dropped = normalize_chapter_releases(releases)
 
-    from tankarr.official_numbering import (
-        beyond_official_edition,
-        official_chapter_frontier,
-    )
-
-    hosts = official_hosts
-    if hosts is None:
-        from tankarr.source_ranking import official_hosts as _official_hosts
-
-        hosts = _official_hosts(
-            metadata.get("official_links"),
-            language=str(manga.get("preferred_language") or ""),
-        )
-    # The same restoration and trim ``select_releases`` applies, so the
-    # count agrees with what the series actually shows: a confirmed prologue
-    # (chapter 0 the official edition numbers) counts, and a scanlator
-    # chapter beyond that edition's own head does not - it belongs to a
-    # different, unreleased-here edition and is not "available".
-    prologue = _prologue_releases(releases, chapters, metadata, hosts)
+    # Count prologues with the same source-neutral rule as the chapter index.
+    prologue = _prologue_releases(releases, chapters, metadata)
     if prologue:
         chapters = [*prologue, *chapters]
-    verdict = official_chapter_frontier(chapters, hosts) if hosts else None
-    if verdict is not None and verdict.enforceable:
-        chapters = [
-            release
-            for release in chapters
-            if not beyond_official_edition(release, verdict)
-        ]
     chapter_numbers: set[int] = set()
     for release in chapters:
         number = _number(release["chapter"])
@@ -211,22 +180,12 @@ def coverage_for_units(
                 owned_volumes += 1
         elif item.get("downloaded") and _number(item.get("chapter")) is not None:
             owned_chapters += 1
-    # The official edition in this language is the reference once it has
-    # shown enough of itself to be believed. The catalogue's own
-    # chapter_count/latest_release_chapter counts the original-language
-    # edition, which runs ahead of every translation (Lookism: 630 on
-    # NAVER, 611 on WEBTOON English) - using it here made a complete
-    # translation read as permanently one or more chapters short, and made
-    # scanlator chapters the acquisition gate already refuses to fetch read
-    # as the library being "ahead" of the publisher.
-    if verdict is not None and verdict.enforceable and verdict.frontier is not None:
-        chapter_reference = int(verdict.frontier)
-    else:
-        from tankarr.catalogue_consensus import count_is_reliable
+    from tankarr.catalogue_consensus import count_is_reliable
+    from tankarr.series_summary import publication_summary
 
-        chapter_reference = _positive_int(
-            metadata.get("chapter_count")
-        ) or _positive_int(metadata.get("latest_release_chapter"))
+    chapter_reference = len(chapter_numbers) or None
+    if publication_summary(manga, metadata)["status"] == "ended":
+        chapter_reference = _positive_int(metadata.get("chapter_count"))
         if not count_is_reliable(metadata, "chapter"):
             chapter_reference = None
     from tankarr.catalogue_consensus import managed_volume_count
@@ -604,40 +563,27 @@ def _rank(release: dict[str, Any]) -> tuple[int, int, int, int, str, Decimal]:
 
 def confirm_chapter_numbers(
     releases: list[dict[str, Any]],
-    *,
-    official_hosts: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], int]:
     """Drop chapter numbers only one source vouches for beyond the consensus.
 
     Sources sometimes number extras or season splits as real chapters
     (MangaK lists 253–280 for a work whose other sources stop at 250).
-    The consensus ceiling is the highest number at least two sources — or
-    the official platform — expose. Above it, a number survives only when
+    The consensus ceiling is the highest number at least two sources expose. Above it, a number survives only when
     it continues the sequence without a gap from the ceiling (a source that
     is simply ahead: 878 after 877 when everyone else lags); anything past
-    the first gap is unconfirmed and stays out until a second source or the
-    official platform confirms it.
+    the first gap is unconfirmed and stays out until a second source confirms it.
     """
 
-    from tankarr.source_ranking import release_host
-
     sources_by_number: dict[int, set[str]] = defaultdict(set)
-    official_numbers: set[int] = set()
     for release in releases:
         number = _number(release.get("chapter"))
-        if number is None or number != number.to_integral_value():
-            continue
-        key = _source_key(release)
-        sources_by_number[int(number)].add(key)
-        if official_hosts and release_host(release) in official_hosts:
-            official_numbers.add(int(number))
+        if number is not None and number == number.to_integral_value():
+            sources_by_number[int(number)].add(_source_key(release))
     consensus = max(
-        [n for n, keys in sources_by_number.items() if len(keys) >= 2]
-        + list(official_numbers)
-        or [0]
+        (n for n, keys in sources_by_number.items() if len(keys) >= 2), default=0
     )
     if not consensus:
-        return releases, 0  # a single source: nothing to compare against
+        return releases, 0
     confirmed: set[int] = {n for n in sources_by_number if n <= consensus}
     cursor = consensus + 1
     while cursor in sources_by_number:
@@ -666,26 +612,11 @@ def _prologue_releases(
     items: list[dict[str, Any]],
     selected: list[dict[str, Any]],
     metadata: dict[str, Any] | None,
-    official_hosts: frozenset[str] | set[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Chapter 0 releases, when the prologue is a chapter of this edition.
+    """Recognize a numbered prologue from source titles or a catalogue total.
 
-    Webtoons often open with a chapter 0. It is an extra when the edition
-    ignores it, and the first chapter when the edition publishes it, so the
-    question is only ever "does the publication this library follows have a
-    chapter 0", and there are two ways to answer it.
-
-    The publisher's own platform is the direct answer and outranks everything:
-    WEBTOON lists "Ep. 0 (ch. 0)" for Tower of God, "Prologue (ch. 0)" for
-    unOrdinary and "Episode 0 - Prologue (ch. 0)" for Omniscient Reader.  When
-    the official source in the operator's language numbers an episode 0, the
-    official edition has a chapter 0 and dropping it puts the whole library one
-    chapter behind the numbering it is supposed to follow.
-
-    Without an official source, the catalogue total decides as before: it can
-    only settle the question for a work whose length it already knows, which
-    is why it never answers for a running webtoon (MangaBaka counts the
-    original Korean edition, which runs ahead of every translation).
+    The same rule applies to every configured source. A completed catalogue's
+    count keeps deciding whether an otherwise unlabelled zero is an extra.
     """
 
     # Almost no release is a chapter 0: test the cached number first and
@@ -697,15 +628,21 @@ def _prologue_releases(
     ]
     if not zero:
         return []
-    from tankarr.source_ranking import is_official_release
-
-    if official_hosts and any(
-        is_official_release(item, frozenset(official_hosts)) for item in zero
-    ):
-        return zero
     catalogue_total = _positive_int((metadata or {}).get("chapter_count"))
     if catalogue_total is None:
-        return []
+        from tankarr.source_numbering import title_number
+
+        return [
+            item
+            for item in zero
+            if title_number(item.get("title")) == Decimal(0)
+            and _positive_int(item.get("volume")) in {None, 1}
+            and re.search(
+                r"\b(?:prologue|episode|ep\.)\s*0\b",
+                str(item.get("title") or ""),
+                re.IGNORECASE,
+            )
+        ]
     numbered = {
         int(number)
         for item in selected
@@ -719,59 +656,23 @@ def _prologue_releases(
     return zero
 
 
-def _drop_beyond_official_edition(
-    selected: list[dict[str, Any]],
-    official_hosts: frozenset[str] | set[str],
-) -> tuple[list[dict[str, Any]], int]:
-    """Remove chapters the official edition in this language has not reached.
-
-    Scanlators number from the original edition, which runs ahead of every
-    translation: Lookism is at 630 on NAVER and 611 on WEBTOON English, so
-    six hundred and twelve is not a chapter of the publication this library
-    follows - it is a chapter of a different one. Those rows are releases of
-    nothing, and a slot built from them is a hole that can never be filled.
-
-    Only an *enforceable* frontier does this. A source exposing a handful of
-    official chapters says nothing about where the edition has got to, and
-    silently truncating a series on that would be far worse than showing a
-    few chapters too many.
-    """
-
-    from tankarr.official_numbering import (
-        beyond_official_edition,
-        official_chapter_frontier,
-    )
-
-    verdict = official_chapter_frontier(selected, frozenset(official_hosts))
-    if not verdict.enforceable:
-        return selected, 0
-    kept = [
-        release for release in selected if not beyond_official_edition(release, verdict)
-    ]
-    return kept, len(selected) - len(kept)
-
-
 def _drop_beyond_catalogue_total(
     selected: list[dict[str, Any]],
     manga: dict[str, Any],
     metadata: dict[str, Any] | None,
-    official_hosts: frozenset[str] | set[str],
 ) -> tuple[list[dict[str, Any]], int]:
     """For a finished work, numbers past its total are not chapters of it.
 
     Aggregators number Blade of the Phantom Master to 284 - magazine
     instalments of a work whose books hold 76 chapters. The download gate
     already stops at the catalogue total for an ended work (see
-    ``official_frontier``); this makes the index say the same thing, so a
+    ``completed_chapter_limit``); this makes the index say the same thing, so a
     complete series is not shown with 208 "missing" chapters that nothing
     will ever try to fetch. Files already on disk are kept: a catalogue that
     is off by one must never hide a chapter the operator has.
     """
 
-    from tankarr.source_ranking import ENDED_STATUSES, is_official_release
-
-    status = str((metadata or {}).get("status") or manga.get("status") or "")
-    if status.casefold() not in ENDED_STATUSES:
+    if publication_summary(manga, metadata)["status"] != "ended":
         return selected, 0
     total = None
     if str(manga.get("expected_count_unit_override") or "").casefold() == "chapter":
@@ -786,15 +687,9 @@ def _drop_beyond_catalogue_total(
         return selected, 0
     kept: list[dict[str, Any]] = []
     dropped = 0
-    hosts = frozenset(official_hosts)
     for release in selected:
         number = _number(release.get("chapter"))
-        if (
-            number is not None
-            and number > total
-            and not release.get("downloaded")
-            and not (hosts and is_official_release(release, hosts))
-        ):
+        if number is not None and number > total and not release.get("downloaded"):
             dropped += 1
             continue
         kept.append(release)
@@ -821,12 +716,6 @@ def select_releases(
 
     items = [dict(release) for release in releases] if copy else list(releases)
     context = _context(manga)
-    from tankarr.source_ranking import official_hosts as _official_hosts
-
-    hosts = _official_hosts(
-        (metadata or {}).get("official_links"),
-        language=str(manga.get("preferred_language") or ""),
-    )
     normalized, normalization_dropped = normalize_chapter_releases(items)
     coverage = coverage_for_units(
         manga,
@@ -836,7 +725,6 @@ def select_releases(
         context.get("unobtainable_volumes"),
         normalized_chapters=normalized,
         pending_volumes=context.get("pending_volumes"),
-        official_hosts=hosts,
     )
     # Resolving the unit and reporting its coverage use exactly the same
     # evidence. Recomputing it here normalized and ranked the whole series
@@ -864,10 +752,10 @@ def select_releases(
             if canonical_labels
             else (list(normalized), dict(normalization_dropped))
         )
-        selected, unconfirmed = confirm_chapter_numbers(selected, official_hosts=hosts)
+        selected, unconfirmed = confirm_chapter_numbers(selected)
         if unconfirmed:
             dropped = {**dropped, "unconfirmed": unconfirmed}
-        prologue = _prologue_releases(items, selected, metadata, hosts)
+        prologue = _prologue_releases(items, selected, metadata)
         if prologue:
             selected = [*prologue, *selected]
             dropped = {
@@ -876,12 +764,7 @@ def select_releases(
                     0, int(dropped.get("chapter_zero_or_negative", 0)) - len(prologue)
                 ),
             }
-        selected, ahead = _drop_beyond_official_edition(selected, hosts)
-        if ahead:
-            dropped = {**dropped, "beyond_official_edition": ahead}
-        selected, past_total = _drop_beyond_catalogue_total(
-            selected, manga, metadata, hosts
-        )
+        selected, past_total = _drop_beyond_catalogue_total(selected, manga, metadata)
         if past_total:
             dropped = {**dropped, "beyond_catalogue_total": past_total}
     unit_info = {

@@ -90,7 +90,7 @@ published as `cover.jpg` in the series folder, as a poster next to each book
 | Prowlarr indexers, through qBittorrent or SABnzbd | Whole volumes, packs and chapters | English series only, checked with OCR | Wanted pass (unambiguous matches only), interactive search |
 | Internet Archive | Whole volumes | English series only, checked with OCR | Wanted book search, interactive search |
 | Library Import | Files you already own | The language you choose | When you import |
-| Translation fallback | Machine translation from another language | The series' language | Optional, per series, when no native release can be obtained |
+| Translation fallback | Machine translation from another language | The series' language | Optional global setting, when no native release can be obtained |
 
 The order follows the cost of each channel:
 
@@ -103,27 +103,18 @@ The order follows the cost of each channel:
 3. **Missing books.** For series followed as books, the Wanted pass searches
    Prowlarr and archive.org for the missing volumes. Usenet releases rank
    first, torrents need seeders, and archive.org ranks below every indexer.
-4. **Translation.** When the series has translation fallback enabled and no
+4. **Translation.** When global translation fallback is enabled and no
    release in its language can be obtained, Tankarr can translate one from
    another language, see [Translation fallback](translation.md).
 
-When several sources carry the same chapter, Tankarr chooses between them only
-after every candidate has been mapped to the same canonical chapter. A chapter
-published in the last 21 days is fresh: with the default **New release policy**
-(**Prefer official when available**), the publisher's platform wins because it
-is the legitimate day-one release. For older chapters, completeness and scan
-quality come first and official platforms, which often keep only a few recent
-chapters, come last. **First available** drops the official preference. The
-**Source preference profile** (**Balanced**, **Official sources** or
-**Curated scans**) and the optional ordered source lists refine this order;
-all of these are in **Settings → Sources → Download sources**.
+When several configured sources carry the same chapter, Tankarr ranks equivalent
+candidates by the source preference profile, explicit source order and measured
+health. A publisher feed cannot cap the chapters offered by another source.
 
 Replacing a file you already own is opt-in. **Upgrade to preferred sources
 automatically** replaces a chapter only with a strictly preferred source in the
-same language and numbering, and keeps the old file until the replacement is
-verified. **Upgrade to official releases** replaces a non-official file when
-the publisher's platform later carries the same chapter, up to 20 per series
-per cycle.
+same language and numbering, keeping the old file until its replacement is
+verified. Ordinary monitoring skips content already owned or queued.
 
 ## Language per release and the OCR language audit
 
@@ -209,7 +200,7 @@ instead. A book whose chapters are all on disk and exactly mapped is shown as
 
 Optional extras that no book contains, such as an omake, do not create shelf
 rows, missing-chapter counts or automatic download jobs. Pages bundled into
-a normal volume remain in that archive. An official season-opening episode
+a normal volume remain in that archive. An explicitly numbered season-opening episode
 or a decimal label established as a main chapter by an exact reading map
 still belongs to the main sequence; see
 [Chapter numbers and extras](operator-workflows.md#chapter-numbers-and-extras).
@@ -235,32 +226,19 @@ treated as the chapter. For how additional content such as prologues and extras
 is counted, see
 [Chapter numbers and additional content](operator-workflows.md#chapter-numbers-and-additional-content).
 
-## The official edition sets the numbering
+## Source-based watching
 
-With the default **Prefer official when available** policy, a work that has an
-official platform in your language takes that platform's numbering as the
-library's numbering. When the platform numbers a prologue as
-chapter 0, it counts as a chapter. Chapters past what the publisher has
-released belong to another edition: scanlations number from the original, which
-runs ahead of every translation. They are neither wanted nor downloaded. For a
-finished work, the limit is the final chapter count, but only when the
-catalogues agree on it (see [Catalogue consensus](#catalogue-consensus)) or
-when you have set the edition's total yourself.
+Every unfinished monitored work follows the latest chapters actually available
+from its configured sources. There is no official-edition ceiling, publisher
+release calendar or automatic removal of files beyond a publisher's latest
+chapter. Numbered titles and content evidence still reconcile different source
+indexes; extras, duplicate content, unavailable listings and blocked sources
+remain subject to the usual checks.
 
-Removing files that are already in the library needs stronger evidence, an
-enforceable frontier computed from the official releases themselves:
-
-- at least 20 numbered official chapters;
-- an unbroken tail: all of the 10 chapters below the newest one are present;
-- a run that starts where the work starts, at chapter 0 or 1, and covers at
-  least 90% of its range;
-- a file counts as surplus only while it runs ahead of the frontier by a
-  plausible margin, at most 200 chapters.
-
-Only monitored series are aligned, and the surplus files are deleted through
-the same journalled removal as any other deletion. Set
-`TANKARR_OFFICIAL_EDITION_ALIGNMENT_ENABLED=false` to keep them and only have
-the surplus reported.
+MangaBaka's publication state takes precedence over download-source labels.
+When MangaBaka marks a work complete, Tankarr uses the existing completed-work
+rules: catalogue totals, chapter/volume coverage and recovery of missing content.
+Owned files are preserved. Translation fallback remains a global setting.
 
 ## Catalogue consensus
 
@@ -306,19 +284,14 @@ tuned in **Settings → General**:
 - **Release monitoring** (`TANKARR_MONITOR_INTERVAL_SECONDS`, default 1800, every
   30 minutes): each cycle refreshes only the series that are due, and stops
   once it has used `TANKARR_MONITOR_CYCLE_BUDGET_SECONDS` (default 480, eight
-  minutes). A series with a chapter in the last 14 days is due every monitor
-  interval, including one marked completed or on hiatus, so a series that is
-  actually publishing is not left for a day. An ongoing series, or one with
-  no publication status, is due once a day when it has no dated chapter or
-  its newest is between 14 and 90 days old, and once a week after that. A
-  completed, cancelled or paused series is due once a week unless a chapter
-  landed in the last 14 days. A series that has never been checked is due
-  immediately, and a
-  restart continues with the ones still due instead of starting over. One
+  minutes). Every unfinished series, including hiatus and undated works, uses
+  the same global interval. Completed works are checked weekly; backlog recovery
+  remains independent. Never-checked series are due immediately, and a restart
+  continues with the oldest due checks. One
   series that does not answer within `TANKARR_MONITOR_SERIES_TIMEOUT_SECONDS`
   (default 90) is recorded and left for six hours. All and Future series have
   new chapters queued; Existing and None series only have their metadata
-  refreshed, on that same schedule. Series imported locally are not polled.
+  refreshed, weekly. Series imported locally are not polled.
   The managed Suwayomi server is held only while series that read through it
   are refreshed. Covers that metadata refresh deferred are fetched in that
   same hold. Catalogue cleanup and compaction then run while it is
@@ -337,10 +310,6 @@ tuned in **Settings → General**:
   after 6 hours, 1 day, 3 days, 7 days, then 30 days. Queuing a release,
   finding a new source or searching by hand resets that series to the start.
 
-The **Calendar** shows past releases and, for works with a regular rhythm, the
-expected next ones. An expected date is estimated from the work's dated release
-history and appears only when there are enough dated releases at a stable
-interval.
 
 ## Wanted recovery
 
