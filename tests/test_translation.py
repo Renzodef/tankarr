@@ -90,16 +90,80 @@ def output_archive(manager, job, tmp_path, **changes):
     return output
 
 
-def test_fallback_order_and_unknown_original():
+def test_automatic_sources_ignore_legacy_lists_and_accept_unknown_original():
     assert normalize_fallback_languages(" Original,fr,ja,FR ") == "original,fr,ja"
     work = {"preferred_language": "en", "original_language": "ja"}
-    assert fallback_languages(work, "original,en,fr,ja") == ["ja", "fr"]
-    assert fallback_languages(
-        {**work, "translation_source_languages": "ru"}, "original,en,fr,ja"
-    ) == ["ja", "fr"]
-    assert fallback_languages({**work, "original_language": None}, "original") == []
+    languages = fallback_languages({**work, "translation_source_languages": "fr"}, "ja")
+    assert languages[0] == "ja"
+    assert {"pt", "vi", "fr", "ar", "zh"} <= set(languages)
+    assert "en" not in languages
+    assert set(
+        fallback_languages({**work, "original_language": None}, "original")
+    ) == set(languages)
+    assert normalize_fallback_languages("auto") == "auto"
     with pytest.raises(ValueError):
         normalize_fallback_languages("original,xx")
+
+
+def test_discovery_is_bounded_fair_and_survives_restart(translation):
+    from tankarr.translation_store import TranslationStore
+
+    manager, database, _service, _source = translation
+    languages = ["ja", "fr", "pt", "vi", "it"]
+    assert manager.store.discovery_batch("manga-1", languages) == ["ja", "fr", "pt"]
+    restarted = TranslationStore(database)
+    assert restarted.discovery_batch("manga-1", languages) == ["vi", "it", "ja"]
+    assert restarted.discovery_batch("manga-1", []) == []
+
+
+@pytest.mark.asyncio
+async def test_known_unlisted_source_is_queued_without_network_search(
+    translation, monkeypatch
+):
+    manager, database, _service, _source = translation
+    database.update_manga("manga-1", {"translation_source_languages": "ja"})
+    manager.settings.translation_source_languages = "ja"
+    database.upsert_chapters(
+        "manga-1",
+        [
+            {
+                **chapter("foreign-pt", "2", language="pt"),
+                "provider": "suwayomi",
+            }
+        ],
+        monitor_new=False,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_missing",
+        lambda _id: [{"chapter": "2", "volume": "1", "expected": True}],
+    )
+    assert await manager.queue_missing("manga-1") == 1
+    assert manager.store.list()[0]["source"]["language"] == "pt"
+    manager.release_sources.discover_and_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_discovery_only_searches_three_languages_per_pass(
+    translation, monkeypatch
+):
+    manager, _database, _service, _source = translation
+    monkeypatch.setattr(
+        manager,
+        "_missing",
+        lambda _id: [{"chapter": None, "volume": "2", "expected": True}],
+    )
+    assert await manager.queue_missing("manga-1") == 0
+    calls = manager.release_sources.discover_and_refresh.await_args_list
+    assert len(calls) == 3
+    first = {call.kwargs["language"] for call in calls}
+    manager.release_sources.discover_and_refresh.reset_mock()
+    assert await manager.queue_missing("manga-1") == 0
+    assert len(manager.release_sources.discover_and_refresh.await_args_list) == 3
+    assert not first.intersection(
+        call.kwargs["language"]
+        for call in manager.release_sources.discover_and_refresh.await_args_list
+    )
 
 
 def test_translation_settings_defaults_secrets_and_validation(tmp_path):
@@ -246,9 +310,7 @@ async def test_native_first_and_foreign_queue_idempotence(translation, monkeypat
     wanted[0]["chapters"] = [missing]
     assert await manager.queue_missing("manga-1") == 1
     assert await manager.queue_missing("manga-1") == 0
-    manager.release_sources.discover_and_refresh.assert_called_with(
-        "manga-1", monitor_new=False, language="ja"
-    )
+    manager.release_sources.discover_and_refresh.assert_not_awaited()
     assert database.get_manga("manga-1")["preferred_language"] == "en"
     assert manager.store.list()[0]["source"]["language"] == "ja"
     assert not database.get_chapter(source["id"])["downloaded"]

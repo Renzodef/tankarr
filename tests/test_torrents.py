@@ -1317,6 +1317,7 @@ async def test_foreign_grab_uses_global_translation_setting(tmp_path: Path):
     service = FakeService(tmp_path)
     service.settings.translation_enabled = True
     service.settings.translation_source_languages = "original"
+    service.settings.translation_processor_url = "http://processor.test"
     qbit = FakeQBitTorrent(tmp_path / "download")
     manager = TorrentManager(
         database,

@@ -20,9 +20,10 @@ from tankarr.providers.base import ProviderRequestError
 from tankarr.service import local_page_content_sha256
 from tankarr.translation_policy import (
     eligible_source,
-    fallback_languages,
     matches_slot,
+    processor_languages,
     slot_key,
+    source_rank,
     validate_translation_url,
 )
 from tankarr.translation_store import TranslationStore
@@ -82,18 +83,41 @@ class TranslationManager:
         if not self.enabled(manga):
             return 0
         self.service.assert_mutations_allowed()
-        languages = fallback_languages(
-            manga, self.settings.translation_source_languages
-        )
+        languages = processor_languages(manga, self.settings)
         if not languages or not self._missing(manga_id):
             return 0
+        # Reuse any known foreign edition immediately, regardless of today's
+        # bounded provider search batch or a legacy manual language list.
+        queued = await self._queue_sources(manga_id, languages, limit=10)
+        known = self.store.slots(manga_id, manga["preferred_language"])
+        if queued >= 10 or all(
+            slot_key(item) in known for item in self._missing(manga_id)
+        ):
+            return queued
+        batch = self.store.discovery_batch(manga_id, languages)
         # Discovery uses exactly the normal identity checks, without changing the
         # preferred language or monitoring foreign releases as native downloads.
-        for language in languages:
-            await self.release_sources.discover_and_refresh(
-                manga_id, monitor_new=False, language=language
+        for language in batch:
+            if not self.enabled(self.database.get_manga(manga_id)):
+                return queued
+            try:
+                await self.release_sources.discover_and_refresh(
+                    manga_id, monitor_new=False, language=language
+                )
+            except (ProviderRequestError, httpx.HTTPError):
+                logger.warning("Translation source discovery temporarily unavailable")
+        queued += await self._queue_sources(manga_id, languages, limit=10 - queued)
+        if self.acquisition is not None:
+            queued += await self.acquisition.hunt(
+                manga_id, languages, search_languages=batch
             )
+        return queued
+
+    async def _queue_sources(
+        self, manga_id: str, languages: list[str], *, limit: int
+    ) -> int:
         async with self.service._mutation_lock:
+            self.service.assert_mutations_allowed()
             manga = self.database.get_manga(manga_id)
             if not self.enabled(manga):
                 return 0
@@ -103,12 +127,7 @@ class TranslationManager:
                 for source in self.database.list_all_chapters(manga_id)
                 if eligible_source(source, languages) and source["id"] not in blocked
             ]
-            candidates.sort(
-                key=lambda source: (
-                    languages.index(source["language"]),
-                    str(source["id"]),
-                )
-            )
+            candidates.sort(key=lambda source: source_rank(source, manga))
             existing = self.store.slots(manga_id, manga["preferred_language"])
             queued = 0
             for missing in self._missing(manga_id):
@@ -123,10 +142,8 @@ class TranslationManager:
                 self.store.create(manga_id, source, manga["preferred_language"])
                 existing.add(key)
                 queued += 1
-                if queued >= 10:
+                if queued >= limit:
                     break
-        if self.acquisition is not None:
-            queued += await self.acquisition.hunt(manga_id, languages)
         return queued
 
     def _missing(self, manga_id: str) -> list[dict]:

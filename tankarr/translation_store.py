@@ -13,6 +13,29 @@ class TranslationStore:
     def __init__(self, database: Database):
         self.database = database
 
+    def discovery_batch(
+        self, manga_id: str, languages: list[str], *, limit: int = 3
+    ) -> list[str]:
+        """Bound provider queries without permanently excluding any language."""
+        if not languages or limit < 1:
+            return []
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT cursor FROM translation_discovery WHERE manga_id=?", (manga_id,)
+            ).fetchone()
+            start = int(row[0]) % len(languages) if row else 0
+            count = min(limit, len(languages))
+            batch = [
+                languages[(start + offset) % len(languages)] for offset in range(count)
+            ]
+            connection.execute(
+                "INSERT INTO translation_discovery(manga_id,cursor) VALUES (?,?) "
+                "ON CONFLICT(manga_id) DO UPDATE SET cursor=excluded.cursor",
+                (manga_id, (start + count) % len(languages)),
+            )
+        return batch
+
     def get(self, job_id: str) -> dict:
         with self.database.connect() as connection:
             row = connection.execute(
