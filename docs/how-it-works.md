@@ -291,7 +291,7 @@ tuned in **Settings → General**:
   series that does not answer within `TANKARR_MONITOR_SERIES_TIMEOUT_SECONDS`
   (default 90) is recorded and left for six hours. All and Future series have
   new chapters queued; Existing and None series only have their metadata
-  refreshed, on that same schedule. Series imported locally are not polled.
+  refreshed, weekly. Series imported locally are not polled.
   The managed Suwayomi server is held only while series that read through it
   are refreshed. Covers that metadata refresh deferred are fetched in that
   same hold. Catalogue cleanup and compaction then run while it is

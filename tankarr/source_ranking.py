@@ -259,7 +259,7 @@ def completed_chapter_limit(
 
 
 def beyond_chapter_limit(release: dict[str, Any], frontier: Decimal | None) -> bool:
-    """Whether this release claims a chapter the publisher has not reached."""
+    """Whether a release exceeds the reliable total of a completed work."""
 
     if frontier is None:
         return False

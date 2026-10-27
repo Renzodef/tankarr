@@ -326,9 +326,13 @@ def reconcile_numbering(
                 )
             )
             source_label = canonical_number(current["source_chapter"])
-            reset_index = (
-                source_label is None or Decimal(source_label) <= 0
-            ) and written > 0
+            try:
+                reset_index = (
+                    source_label is None or Decimal(source_label) <= 0
+                ) and written > 0
+            except InvalidOperation:
+                # Ranges belong to volume reconciliation, not episode resets.
+                reset_index = False
             previous_manual = release.get(
                 "numbering_method"
             ) == "manual" and canonical_number(
