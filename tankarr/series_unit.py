@@ -637,6 +637,11 @@ def _prologue_releases(
             for item in zero
             if title_number(item.get("title")) == Decimal(0)
             and _positive_int(item.get("volume")) in {None, 1}
+            and re.search(
+                r"\b(?:prologue|episode|ep\.)\s*0\b",
+                str(item.get("title") or ""),
+                re.IGNORECASE,
+            )
         ]
     numbered = {
         int(number)

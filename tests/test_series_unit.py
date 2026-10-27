@@ -703,3 +703,11 @@ def test_a_webtoon_is_followed_in_episodes_even_when_it_has_ended():
     # An operator who asks for books on a webtoon still gets them.
     forced = {"id": "x", "status": "ended", "series_unit_override": "volumes"}
     assert resolve_series_unit(forced, webtoon, [])["unit"] == "volumes"
+
+
+def test_a_generic_zero_placeholder_is_not_an_explicit_prologue():
+    releases = [ch("0", title="Chapter 0")] + [
+        ch(str(number)) for number in range(1, 4)
+    ]
+    _info, selected = select_releases({"status": "ongoing"}, {}, releases)
+    assert "0" not in {item["chapter"] for item in selected}

@@ -193,3 +193,41 @@ def test_content_patterns_never_renumber_an_already_mapped_owned_file():
         item.update(downloaded=True, pages=20 + n, title="Episode")
     result = reconcile_numbering([*reference, *other])
     assert result["other-32"]["canonical_chapter"] == "32"
+
+
+def test_known_content_drift_does_not_reappear_as_a_new_unverified_tail():
+    owned = [
+        {**source_chapter("community", n), "downloaded": True} for n in range(1, 21)
+    ]
+    correspondence = {
+        **source_chapter("offset", 25),
+        "source_chapter": "25",
+        "canonical_chapter": "15",
+        "chapter": "15",
+        "numbering_method": "content_sequence_alignment",
+        "numbering_evidence": {"offset": 10, "anchors": 12},
+        "numbering_status": "mapped",
+    }
+    ambiguous = {
+        **source_chapter("offset", 35),
+        "canonical_chapter": None,
+        "numbering_status": "pending_evidence",
+        "numbering_method": "awaiting_secondary_official_evidence",
+        "downloaded": True,
+        "numbering_version": 6,
+    }
+    mirror = source_chapter("unverified", 35)
+    latest = source_chapter("community", 21)
+    annotated = {
+        **source_chapter("annotated", 21),
+        "title": "Episode 21 (ch. 21)",
+    }
+    result = reconcile_numbering(
+        [*owned, correspondence, ambiguous, mirror, latest, annotated]
+    )
+    assert result[ambiguous["id"]]["numbering_status"] == "pending_evidence"
+    assert result[mirror["id"]]["numbering_status"] == "pending_evidence"
+    assert result[latest["id"]]["canonical_chapter"] == "21"
+    assert result[latest["id"]]["numbering_status"] == "mapped"
+    assert result[annotated["id"]]["canonical_chapter"] == "21"
+    assert result[annotated["id"]]["numbering_status"] == "mapped"

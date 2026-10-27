@@ -462,9 +462,9 @@ async def test_future_modes_are_allowed_on_a_finished_work(
 
 
 @pytest.mark.asyncio
-async def test_official_upgrade_leaves_a_failing_source_alone(tmp_path: Path):
+async def test_preferred_source_upgrade_leaves_a_failing_source_alone(tmp_path: Path):
     """Replacing a file that works with one that cannot be fetched is not an
-    upgrade: the official release is skipped while its source is blocked or
+    upgrade: the preferred release is skipped while its source is blocked or
     no longer trusted, and the library keeps what it has."""
 
     database = Database(tmp_path / "tankarr.sqlite3")
@@ -521,20 +521,22 @@ async def test_official_upgrade_leaves_a_failing_source_alone(tmp_path: Path):
     for _ in range(database.SOURCE_DEMOTION_FAILURES):
         database.record_source_failure("manga-1", "suwayomi:official", reason="500")
 
-    from tankarr.official_upgrade import upgrade_candidates
+    from tankarr.source_ranking import SourceRanking
+    from tankarr.source_upgrade import preferred_source_upgrades
 
     chapters = database.list_chapters("manga-1", "en")
     hosts = frozenset({"tapas.io"})
-    assert [item["id"] for item in upgrade_candidates(chapters, hosts)] == [
-        "official-1"
-    ]
+    ranking = SourceRanking(backfill=("suwayomi:official", "suwayomi:scan"))
+    assert [
+        item["id"] for item in preferred_source_upgrades(chapters, ranking, hosts)
+    ] == ["official-1"]
 
     demoted = database.demoted_sources("manga-1")
     from tankarr.source_ranking import release_source_keys
 
     remaining = [
         item
-        for item in upgrade_candidates(chapters, hosts)
+        for item in preferred_source_upgrades(chapters, ranking, hosts)
         if not (set(release_source_keys(item)) & demoted)
     ]
     assert remaining == []

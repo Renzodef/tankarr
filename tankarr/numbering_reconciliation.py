@@ -108,6 +108,96 @@ def _page_sequences(pages: dict[int, int]) -> dict[tuple[int, ...], int | None]:
     return patterns
 
 
+def _quarantine_ambiguous_tails(
+    releases: list[dict[str, Any]],
+    decisions: dict[str, dict[str, Any]],
+    stable_owned: set[str],
+) -> None:
+    """Do not revive known numbering conflicts as apparently new chapters.
+
+    A proven content offset means raw episode numbers are not interchangeable
+    for this work. Sources with recent owned identity anchors can still extend
+    it immediately; other tails need a title or content correspondence first.
+    This uses the library's evidence, never a publisher's identity or head.
+    """
+    drifted = {
+        _source_identity(release)
+        for release in releases
+        if (decision := decisions[str(release["id"])])["numbering_method"]
+        == "content_sequence_alignment"
+        and int(decision["numbering_evidence"].get("anchors") or 0)
+        >= MIN_CONTENT_ANCHORS
+        and _integer(decision["source_chapter"]) is not None
+        and _integer(decision["canonical_chapter"]) is not None
+        and decision["source_chapter"] != decision["canonical_chapter"]
+    }
+    if not drifted:
+        return
+    owned_head = max(
+        (
+            number
+            for release in releases
+            if str(release["id"]) in stable_owned
+            and (number := _integer(decisions[str(release["id"])]["canonical_chapter"]))
+            is not None
+        ),
+        default=0,
+    )
+    if not owned_head:
+        return
+    anchors: dict[str, set[int]] = defaultdict(set)
+    for release in releases:
+        decision = decisions[str(release["id"])]
+        number = _integer(decision["canonical_chapter"])
+        if (
+            str(release["id"]) in stable_owned
+            and number is not None
+            and number >= owned_head - 10
+            and decision["source_chapter"] == decision["canonical_chapter"]
+        ):
+            anchors[_source_identity(release)].add(number)
+    trusted = {source for source, numbers in anchors.items() if len(numbers) >= 3}
+    trusted -= drifted
+    for release in releases:
+        decision = decisions[str(release["id"])]
+        number = _integer(decision["canonical_chapter"])
+        if (
+            str(release["id"]) in stable_owned
+            or _source_identity(release) in trusted
+            or number is None
+            or number <= owned_head
+            or decision["numbering_status"] != "mapped"
+            or (
+                re.search(
+                    r"\(ch(?:apter)?\.?\s*[-+]?\d",
+                    str(release.get("title") or ""),
+                    re.I,
+                )
+                and canonical_number(title_number(release.get("title")))
+                == decision["canonical_chapter"]
+            )
+            or decision["numbering_method"]
+            in {
+                "explicit_title",
+                "content_sequence_alignment",
+                "operator_correspondence",
+            }
+        ):
+            continue
+        decisions[str(release["id"])] = _decision(
+            release,
+            None,
+            status="pending_evidence",
+            method="awaiting_content_alignment",
+            confidence=0.0,
+            evidence={
+                "source": _source_identity(release),
+                "reason": "known_source_numbering_conflict",
+                "owned_reference": owned_head,
+            },
+        )
+
+
 def reconcile_numbering(
     releases: list[dict[str, Any]],
     *,
@@ -395,6 +485,7 @@ def reconcile_numbering(
             reference_pages.setdefault(number, pages)
     reference_patterns = _page_sequences(reference_pages)
     if not reference_patterns:
+        _quarantine_ambiguous_tails(chapter_releases, decisions, stable_owned)
         return decisions
     for source, source_releases in releases_by_source.items():
         if source == reference:
@@ -466,6 +557,7 @@ def reconcile_numbering(
                     confidence=0.0,
                     evidence={"source": source, "reference_source": reference},
                 )
+    _quarantine_ambiguous_tails(chapter_releases, decisions, stable_owned)
     return decisions
 
 
