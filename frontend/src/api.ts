@@ -8,10 +8,7 @@ import type {
   ArtworkSelectionUpdate,
   BackupInfo,
   AuthStatus,
-  CalendarRelease,
-  CalendarResponse,
   PublicationStatusOverride,
-  SeriesCalendar,
   CancelJobsResponse,
   Chapter,
   ChapterAutomaticSearchResponse,
@@ -103,7 +100,7 @@ export class ApiError extends Error {
 }
 
 // Keep navigation snapshots in memory, without retaining every series or
-// calendar range visited during a long-running session.
+// query range visited during a long-running session.
 const RESPONSE_CACHE_LIMIT = 32;
 const responseCache = new Map<string, { etag: string | null; value: unknown }>();
 const pendingReads = new Map<string, Promise<unknown>>();
@@ -654,13 +651,6 @@ export const api = {
   refreshKomga: () =>
     request<LibraryAlignment>("/api/system/komga/refresh", { method: "POST" }),
   providersStatus: () => request<ProviderProbe[]>("/api/providers/status"),
-  calendar: (start: string, end: string) => {
-    const parameters = new URLSearchParams({ start, end });
-    const path = `/api/calendar?${parameters}`;
-    return request<CalendarResponse>(path, undefined, path);
-  },
-  seriesCalendar: (mangaId: string) =>
-    request<SeriesCalendar>(`/api/manga/${encodeURIComponent(mangaId)}/calendar`),
   setChapterMonitored: (mangaId: string, chapterId: string, monitored: boolean) =>
     request<{ chapter_id: string; releases_updated: number }>(
       `/api/manga/${encodeURIComponent(mangaId)}/chapters/${encodeURIComponent(chapterId)}/monitored`,

@@ -58,7 +58,7 @@ test("mobile navigation closes with Escape and restores focus", async ({ page })
 test("mobile primary pages keep controls inside the viewport", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const route of ["", "series/browser-000", "wanted", "calendar", "activity", "history", "import", "settings", "settings?tab=translation", "settings?tab=indexers", "settings?tab=reader", "settings?tab=security", "settings?tab=data", "system"]) {
+  for (const route of ["", "series/browser-000", "wanted", "activity", "history", "import", "settings", "settings?tab=translation", "settings?tab=indexers", "settings?tab=reader", "settings?tab=security", "settings?tab=data", "system"]) {
     await page.goto(`/#/${route}`);
     await expect(page.locator(".content .page")).toBeVisible();
     await expect(page.locator(".content .spinner")).toHaveCount(0);

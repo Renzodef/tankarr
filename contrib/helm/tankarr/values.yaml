@@ -13,7 +13,7 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Plain environment variables. TZ drives log timestamps, the Calendar and the
+# Plain environment variables. TZ drives log timestamps and the
 # nightly maintenance window.
 env:
   TZ: Etc/UTC

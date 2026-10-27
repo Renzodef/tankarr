@@ -19,16 +19,13 @@ from tankarr.chapter_map import (
 )
 from tankarr.series_summary import publication_summary
 from tankarr.series_unit import (
-    acquisition_policy,
     is_volume_release,
     select_releases,
 )
 from tankarr.source_numbering import is_unpublished, numbered_prologue
 from tankarr.source_ranking import (
-    beyond_frontier,
-    official_frontier,
-    official_hosts,
-    release_host,
+    beyond_chapter_limit,
+    completed_chapter_limit,
 )
 
 _DOCUMENTED_EXTRAS = re.compile(
@@ -1015,46 +1012,11 @@ def build_chapter_index(
     if chapters_unit and (
         publication["status"] != "ended" or expected_chapter_total is None
     ):
-        # A running work has no trustworthy total. The official platform, when
-        # one is mapped, is the reference: its chapter count is what exists.
-        # Without it a continuing work uses the distinct available chapters,
-        # not the catalogue's cardinality or the largest chapter number. A finished
-        # work whose catalogue never recorded a total is in the same
-        # position: what the official platform published is the total.
-        hosts = official_hosts(
-            metadata.get("official_links"),
-            language=str(manga.get("preferred_language") or ""),
-        )
-        official_numbers = {
-            int(number)
-            # The platform's publication calendar is the reference: an episode
-            # dated in the future is announced, not published, so it is neither
-            # expected nor missing yet. A paid episode whose date has passed
-            # is published: Tapas sells every episode after the free ones.
-            for release in all_releases
-            if hosts
-            and release_host(release) in hosts
-            and not is_unpublished(release)
-            and (number := _decimal(release.get("chapter"))) is not None
-            and number == number.to_integral_value()
-            and number > 0
-        }
-        if official_numbers:
-            official_name = next(
-                (
-                    str(release.get("source_name") or release_host(release))
-                    for release in releases
-                    if release_host(release) in hosts
-                ),
-                "official source",
-            )
-            expected_chapter_total = max(official_numbers)
-            expected_chapter_source = f"official source ({official_name})"
-            reference_kind = "official"
-        else:
-            expected_chapter_total = None
-            expected_chapter_source = None
-            reference_kind = "available" if continuing else "none"
+        # Running works follow the chapters actually exposed by configured
+        # sources. Catalogue counts only bound completed works.
+        expected_chapter_total = None
+        expected_chapter_source = None
+        reference_kind = "available" if continuing else "none"
         if manual_expected_count is not None and manual_expected_unit == "chapter":
             expected_chapter_total = manual_expected_count
             expected_chapter_source = "manual edition override"
@@ -1174,10 +1136,8 @@ def build_chapter_index(
             expected_chapter_total = candidate
             expected_chapter_source = "catalogue total counts the prologue"
             reference_kind = "catalogue"
-    # Legacy verified publication counts have no language/calendar binding.
-    # Preserve them as evidence, but do not let an original-language number
-    # create missing translated chapters. Running references come only from
-    # the managed official calendar or releases in the configured language.
+    # Original-language catalogue counts do not create future translated
+    # chapters. The running sequence comes from available source releases.
     if sequence_end is not None and sequence_end > MAX_CANONICAL_SEQUENCE:
         sequence_end = None
         sequence_basis = None
@@ -1636,36 +1596,17 @@ def build_chapter_index(
             slot["series_status_ignored"] = True
             slot["monitored"] = False
 
-    # An aggregator can post the next chapter days before the official
-    # platform publishes it. MangaK and Weeb Central offered One Piece 1193
-    # on the morning of 2026-09-11 while MANGA Plus, the reference for this
-    # work, still ended at 1192 with the next issue a week away. The download
-    # gate already refuses that chapter under "prefer official", so counting
-    # it as a hole made one card say "1192 / 1192" and "1 missing" at once
-    # and promise a chapter nothing would ever fetch. The same frontier that
-    # governs acquisition governs the count, and only under the same policy:
-    # an operator who takes the first release available still wants it, and
-    # still sees it missing. What is already on disk is never reconsidered.
+    # Completed works retain the catalogue's final boundary. Running works
+    # have no publisher ceiling, so all available source chapters count.
     applied_frontier: Decimal | None = None
-    if (
-        chapters_unit
-        and not volume_sequence_mode
-        and acquisition_policy(manga) == "prefer_official"
-    ):
-        frontier = official_frontier(
-            releases,
-            official_hosts(
-                metadata.get("official_links"),
-                language=str(manga.get("preferred_language") or ""),
-            ),
+    if chapters_unit and not volume_sequence_mode:
+        frontier = completed_chapter_limit(
             metadata=metadata,
             status=publication["status"],
-            chapter_total=(
-                manga.get("expected_count_override")
-                if str(manga.get("expected_count_unit_override") or "").casefold()
-                == "chapter"
-                else None
-            ),
+            chapter_total=manga.get("expected_count_override")
+            if str(manga.get("expected_count_unit_override") or "").casefold()
+            == "chapter"
+            else None,
         )
         applied_frontier = frontier
         if frontier is not None:
@@ -1674,11 +1615,11 @@ def build_chapter_index(
                     not slot["expected"]
                     or slot["downloaded"]
                     or slot.get("chapter") is None
-                    or not beyond_frontier({"chapter": slot["chapter"]}, frontier)
+                    or not beyond_chapter_limit({"chapter": slot["chapter"]}, frontier)
                 ):
                     continue
                 slot["expected"] = False
-                slot["beyond_official_frontier"] = True
+                slot["beyond_catalogue_total"] = True
 
     # A complete, read chapter map names the edition's actual units. Its
     # cardinality is not a last chapter number: split releases may contain
@@ -1734,33 +1675,6 @@ def build_chapter_index(
             if slot.get("expected") and slot.get("chapter") is not None
         )
         expected_chapter_source = "available sources"
-
-    if reference_kind == "official" and not volume_sequence_mode:
-        # The largest written number is a position, not a cardinality. An
-        # official chapter 0 and a second season opener are published episodes.
-        hosts = official_hosts(
-            metadata.get("official_links"),
-            language=str(manga.get("preferred_language") or ""),
-        )
-        expected_chapter_total = max(
-            expected_chapter_total or 0,
-            len(
-                {
-                    label
-                    for release in all_releases
-                    if release_host(release) in hosts
-                    and not is_unpublished(release)
-                    and not is_volume_release(release)
-                    and (label := canonical_number(release.get("chapter"))) is not None
-                    and (number := _decimal(label)) is not None
-                    and number >= 0
-                    and (
-                        number == number.to_integral_value()
-                        or label in canonical_decimals
-                    )
-                }
-            ),
-        )
 
     expected_total = (
         expected_volume_total if volume_sequence_mode else expected_chapter_total
@@ -1923,17 +1837,15 @@ def build_chapter_index(
             slot for slot in slots if not (slot["special"] and not slot["expected"])
         ],
         "mapped_chapter_slots": mapped_chapter_slots,
-        # The official head this index counted against, so a later builder
+        # The completed catalogue limit, so a later builder
         # working from raw releases cannot reopen what it closed here. A
         # label, not a Decimal: this index is serialised into the payload.
-        "official_frontier": canonical_number(applied_frontier),
+        "completed_chapter_limit": canonical_number(applied_frontier),
         "expected_available_count": sum(1 for s in expected_slots if s["available"]),
         "expected_satisfied_count": sum(
             1 for s in expected_slots if s["downloaded"] or s["covered_by_volume"]
         ),
-        "latest_chapter": canonical_number(max(official_numbers))
-        if reference_kind == "official"
-        else max(
+        "latest_chapter": max(
             (
                 s["chapter"]
                 for s in expected_slots

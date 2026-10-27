@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 from tankarr.app import create_app
 from tankarr.config import Settings
@@ -126,7 +125,6 @@ def test_revision_query_work_does_not_grow_with_release_count(audit_app):
             connection.set_progress_handler(progress, 1)
             database.library_revision()
             database.wanted_revision()
-            database.calendar_revision()
             manga_revisions(database)
             connection.set_progress_handler(None, 0)
         return steps
@@ -314,6 +312,13 @@ def test_acquisition_explanations_share_the_real_gates_without_changing_selectio
                 "source_key": "mirror",
                 "source_url": "https://mirror.test/9",
             },
+            {
+                **chapter(7),
+                "id": "mirror-7",
+                "source_name": "Mirror",
+                "source_key": "mirror",
+                "volume": "7",
+            },
             {**chapter(8), "id": "italian-8", "language": "it"},
         ]
     )
@@ -343,7 +348,7 @@ def test_acquisition_explanations_share_the_real_gates_without_changing_selectio
         ("chapter-5", "blocked"),
         ("chapter-6", "job"),
         ("chapter-7", "ignored"),
-        ("ahead-9", "frontier"),
+        ("ahead-9", "selector"),
         ("italian-8", "language"),
     ):
         assert any(fragment in reason for reason in reasons.get(release_id, [])), (
@@ -355,145 +360,3 @@ def test_acquisition_explanations_share_the_real_gates_without_changing_selectio
     reasons = {}
     assert database.preferred_missing_releases("series", explain=reasons) == []
     assert "up to date" in reasons["chapter-1"][0]
-
-
-def test_calendar_signals_are_batched_and_invalidate_the_http_cache(
-    audit_app, monkeypatch
-):
-    database = audit_app.state.database
-    seed(database, mode="future")
-    database.save_series_metadata(
-        "series",
-        {
-            "official_links": [
-                {"url": "https://www.webtoons.com/en/example/list", "language": "en"}
-            ]
-        },
-        source_status=[],
-        artwork_path=None,
-        artwork_sha256=None,
-        artwork_media_type=None,
-    )
-    now = datetime.now(UTC)
-    database.upsert_chapters(
-        "series",
-        [
-            chapter(
-                number, publish_at=(now - timedelta(days=(5 - number) * 7)).isoformat()
-            )
-            for number in range(1, 5)
-        ],
-    )
-    database.upsert_release_source(
-        "series",
-        provider="suwayomi",
-        provider_manga_id="official",
-        title="series",
-        source_url="https://www.webtoons.com/en/example/list",
-        source_name="Webtoons.com (EN)",
-        language="en",
-        match_confidence=1,
-        match_reason="test",
-    )
-    with database.connect() as connection:
-        connection.execute(
-            "UPDATE manga_release_source SET source_role='primary_official' WHERE manga_id='series'"
-        )
-    monkeypatch.setattr(
-        database,
-        "publication_signals",
-        lambda *args: pytest.fail("N+1 publication lookup"),
-    )
-    client = TestClient(audit_app)
-    first = client.get("/api/calendar")
-    assert first.status_code == 200
-    assert first.json()["expected"]
-    database.record_release_source_result(
-        "series", "suwayomi", "official", publication_status="hiatus"
-    )
-    after = client.get(
-        "/api/calendar", headers={"If-None-Match": first.headers["etag"]}
-    )
-    assert after.status_code == 200
-    assert after.json()["expected"] == []
-
-
-def test_calendar_reads_one_snapshot_across_a_concurrent_writer(audit_app, monkeypatch):
-    database = audit_app.state.database
-    seed(database)
-    database.upsert_chapters("series", [chapter(1)])
-    decode = database._decode_manga
-    changed = False
-
-    def concurrent_write(row):
-        nonlocal changed
-        if not changed:
-            changed = True
-            writer = Database(database.path)
-            with writer.connect() as connection:
-                connection.execute(
-                    "UPDATE manga SET preferred_language='it' WHERE id='series'"
-                )
-                connection.execute(
-                    "DELETE FROM chapter_release WHERE manga_id='series'"
-                )
-        return decode(row)
-
-    monkeypatch.setattr(database, "_decode_manga", concurrent_write)
-    inputs = database.list_calendar_inputs()
-    assert changed
-    assert inputs[0]["manga"]["preferred_language"] == "en"
-    assert [release["id"] for release in inputs[0]["chapters"]] == ["chapter-1"]
-    assert database.list_all_chapters("series") == []
-
-
-def test_calendar_expires_at_a_publication_without_a_database_write(
-    audit_app, monkeypatch
-):
-    import tankarr.app as app_module
-    import tankarr.source_numbering as numbering
-
-    now = datetime(2030, 1, 1, 12, tzinfo=UTC)
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return now.astimezone(tz)
-
-    monkeypatch.setattr(app_module, "datetime", Clock)
-    monkeypatch.setattr(numbering, "datetime", Clock)
-    database = audit_app.state.database
-    seed(database, mode="future")
-    database.save_series_metadata(
-        "series",
-        {
-            "official_links": [
-                {"url": "https://www.webtoons.com/en/example/list", "language": "en"}
-            ]
-        },
-        source_status=[],
-        artwork_path=None,
-        artwork_sha256=None,
-        artwork_media_type=None,
-    )
-    database.upsert_chapters(
-        "series",
-        [
-            chapter(
-                number, publish_at=(now - timedelta(days=(5 - number) * 7)).isoformat()
-            )
-            for number in range(1, 5)
-        ]
-        + [chapter(5, publish_at=(now + timedelta(seconds=10)).isoformat())],
-    )
-    client = TestClient(audit_app)
-    first = client.get("/api/calendar")
-    assert first.status_code == 200
-    revision = database.calendar_revision()
-    now += timedelta(seconds=11)
-    after = client.get(
-        "/api/calendar", headers={"If-None-Match": first.headers["etag"]}
-    )
-    assert database.calendar_revision() == revision
-    assert after.status_code == 200
-    assert after.json() != first.json()

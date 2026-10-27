@@ -8,7 +8,6 @@ from tankarr.source_ranking import (
     SourceRanking,
     group_phase,
     normalize_source_list,
-    official_source_roles,
     release_phase,
     release_source_keys,
     source_class,
@@ -51,19 +50,7 @@ def test_source_classes_come_from_names_keys_or_providers():
     )
 
 
-def test_official_source_roles_separate_managed_and_original_editions():
-    roles = official_source_roles(
-        [
-            {"language": "en", "url": "https://www.webtoons.com/en/title/1"},
-            {"language": "ko", "url": "https://comic.naver.com/webtoon/list?titleId=1"},
-            {"language": "fr", "url": "https://www.webtoons.com/fr/title/1"},
-        ],
-        preferred_language="en",
-        original_language="ko",
-    )
-
-    assert roles["webtoons.com"] == "primary_official"
-    assert roles["comic.naver.com"] == "secondary_official"
+def test_curated_and_origin_source_classes():
     assert (
         source_class(provider="suwayomi", source_name="Weeb Central (EN)") == "scan_hq"
     )
@@ -123,7 +110,7 @@ def test_fresh_chapter_prefers_official_then_origin_then_scans():
     assert ranking.best(candidates[:2] + candidates[3:], now=NOW)["id"] in {"wc", "dex"}
 
 
-def test_prefer_official_policy_also_applies_to_backfill():
+def test_backfill_ranking_prefers_curated_scans_with_all_sources_eligible():
     ranking = SourceRanking()
     candidates = [
         release(
@@ -139,7 +126,7 @@ def test_prefer_official_policy_also_applies_to_backfill():
         ),
         release("wc", "suwayomi", source_name="Weeb Central (EN)", source_id="3"),
     ]
-    assert ranking.best(candidates, now=NOW)["id"] == "plus"
+    assert ranking.best(candidates, now=NOW)["id"] == "wc"
     volume = release(
         "vol",
         "suwayomi",
@@ -149,7 +136,7 @@ def test_prefer_official_policy_also_applies_to_backfill():
         chapter=None,
         unit="volume",
     )
-    first_available = SourceRanking(acquisition_policy="first_available")
+    first_available = SourceRanking()
     assert first_available.best(candidates + [volume], now=NOW)["id"] == "vol"
 
 
@@ -204,58 +191,6 @@ def test_normalize_source_list_validates_keys():
     )
     with pytest.raises(ValueError):
         normalize_source_list("suwayomi:bad key")
-
-
-def test_without_official_preference_the_first_release_out_wins():
-    ranking = SourceRanking.from_settings(prefer_official=False)
-    late_official = release(
-        "plus",
-        "suwayomi",
-        source_name="MANGA Plus by SHUEISHA (EN)",
-        source_id="4",
-        days_ago=1,
-    )
-    first_scan = release(
-        "wc", "suwayomi", source_name="Weeb Central (EN)", source_id="3", days_ago=3
-    )
-    later_scan = release(
-        "fire", "suwayomi", source_name="MangaFire (EN)", source_id="5", days_ago=2
-    )
-    assert ranking.best([late_official, later_scan, first_scan], now=NOW)["id"] == "wc"
-    # Same class: the earlier upload wins instead of the newest.
-    early = release(
-        "a", "suwayomi", source_name="MangaFire (EN)", source_id="5", days_ago=5
-    )
-    late = release(
-        "b", "suwayomi", source_name="MangaFire (EN)", source_id="5", days_ago=1
-    )
-    assert ranking.best([late, early], now=NOW)["id"] == "a"
-    assert (
-        SourceRanking.from_settings(prefer_official=True).best(
-            [late_official, first_scan], now=NOW
-        )["id"]
-        == "plus"
-    )
-
-
-def test_first_available_uses_publish_time_for_old_releases_too():
-    ranking = SourceRanking(acquisition_policy="first_available")
-    early_scan = release(
-        "scan",
-        "suwayomi",
-        source_name="MangaFire (EN)",
-        source_id="5",
-        days_ago=500,
-    )
-    later_official = release(
-        "official",
-        "suwayomi",
-        source_name="MANGA Plus by SHUEISHA (EN)",
-        source_id="4",
-        days_ago=400,
-    )
-
-    assert ranking.best([later_official, early_scan], now=NOW)["id"] == "scan"
 
 
 def test_official_hosts_from_the_catalogue_decide_which_release_is_official():
@@ -317,19 +252,17 @@ def test_official_hosts_from_the_catalogue_decide_which_release_is_official():
 def test_a_lone_catalogue_count_does_not_close_an_ended_works_frontier():
     # Hansel & Gretel: MangaBaka alone said "1 chapter"; nothing corroborated
     # it, and it closed the frontier of a 22-chapter series.
-    from tankarr.source_ranking import official_frontier
+    from tankarr.source_ranking import completed_chapter_limit
 
     metadata = {"chapter_count": 1, "count_confidence": {"chapter": "lone"}}
 
-    assert official_frontier([], frozenset(), metadata=metadata, status="ended") is None
+    assert completed_chapter_limit(metadata=metadata, status="ended") is None
 
     corroborated = {"chapter_count": 76, "count_confidence": {"chapter": "agreed"}}
-    assert (
-        official_frontier([], frozenset(), metadata=corroborated, status="ended") == 76
-    )
+    assert completed_chapter_limit(metadata=corroborated, status="ended") == 76
     # A record from before corroboration existed keeps its old standing.
     legacy = {"chapter_count": 55}
-    assert official_frontier([], frozenset(), metadata=legacy, status="ended") == 55
+    assert completed_chapter_limit(metadata=legacy, status="ended") == 55
 
 
 def test_series_source_preference_overrides_ranking_and_falls_back():

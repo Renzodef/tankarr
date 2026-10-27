@@ -407,17 +407,6 @@ const SECTIONS: SectionDef[] = [
     description: msg("Works are added from the MangaBaka catalogue; chapters come from the Suwayomi sources and Prowlarr indexers. Choose a source preference profile; automatic selection follows it for every matching chapter. Optional source lists let you refine the order."),
     fields: [
       {
-        key: "release_acquisition_policy",
-        label: msg("New release policy"),
-        hint: msg("This chooses the file only after every candidate has been mapped to the same canonical chapter. It never changes numbering or calendar dates."),
-        kind: "select",
-        options: [
-          ["prefer_official", msg("Prefer official when available")],
-          ["first_available", msg("First available")],
-          ["official_only", msg("Official only")],
-        ],
-      },
-      {
         key: "duplicate_cleanup_enabled",
         label: msg("Remove duplicate chapter files automatically"),
         hint: msg("When the volume↔chapter map proves a chapter file's content is inside a book already on disk, the chapter file is quarantined and removed on the monitor's cycle (up to 10 series per cycle). Off: duplicates are only reported on the series page."),
@@ -440,13 +429,7 @@ const SECTIONS: SectionDef[] = [
       },
       {
         key: "source_upgrade_enabled", label: msg("Upgrade to preferred sources automatically"),
-        hint: msg("Replace an owned chapter only with a strictly preferred source in the same language and numbering. The old file stays until the replacement is verified. Equal preferences, age and size never trigger replacement. When enabled, this profile also governs official upgrades."), kind: "boolean",
-      },
-      {
-        key: "official_upgrade_enabled",
-        label: msg("Upgrade to official releases"),
-        hint: msg("Independent from the acquisition policy: replace a non-official file when the same canonical chapter later appears on the publisher platform (up to 20 per series per cycle)."),
-        kind: "boolean",
+        hint: msg("Replace an owned chapter only with a strictly preferred source in the same language and numbering. The old file stays until the replacement is verified. Equal preferences, age and size never trigger replacement."), kind: "boolean",
       },
       {
         key: "preferred_unit",
@@ -617,7 +600,7 @@ const SECTIONS: SectionDef[] = [
   {
     title: msg("Metadata catalogues"),
     group: "metadata",
-    description: msg("MangaBaka is the only manga catalogue Tankarr queries: it identifies the work and already aggregates MangaUpdates, AniList, MAL and Kitsu. The calendar comes from the mapped official platform's own release dates."),
+    description: msg("MangaBaka is the only manga catalogue Tankarr queries: it identifies the work and already aggregates MangaUpdates, AniList, MAL and Kitsu. Running works follow the latest chapters on configured sources until MangaBaka marks them complete."),
     fields: [
       {
         key: "metadata_enabled",

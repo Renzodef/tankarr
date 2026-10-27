@@ -47,11 +47,8 @@ produced exactly the false positives you would predict: a two-page extra at
 1688px and a three-page one at 850px, both complete, full-resolution extras
 that this would otherwise have called unreadable.
 
-That leaves one gap worth naming: a source that chops an episode into ``310.1,
-310.2, 310.3`` produces decimals, and those escape this rule. They are caught
-instead by ``official_numbering``, which is the better answer for them - they
-are not low-quality chapter 310.1, they are chapters the official edition does
-not have.
+Split-part decimals are reconciled separately by the source numbering and
+chapter map; this quality check does not decide which chapter numbers exist.
 
 A verdict is never a reason to delete anything. It says the file came from a
 source that served less than the work has; replacing it is the caller's

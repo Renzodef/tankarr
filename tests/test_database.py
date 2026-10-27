@@ -7,58 +7,6 @@ from tankarr.database import Database, ReleaseBlocked, ReleaseSourceOwned
 from tankarr.source_ranking import SourceRanking
 
 
-def test_persists_primary_and_secondary_official_editions(tmp_path: Path):
-    database = Database(tmp_path / "tankarr.sqlite3")
-    database.initialize()
-    database.upsert_manga(
-        {
-            "id": "manga-1",
-            "title": "Example",
-            "description": "",
-            "cover_url": None,
-            "authors": [],
-            "original_language": "ko",
-        },
-        "en",
-    )
-    database.save_series_metadata(
-        "manga-1",
-        {
-            "official_links": [
-                {
-                    "url": "https://www.webtoons.com/en/example/list?title_no=1",
-                    "language": "en",
-                },
-                {
-                    "url": "https://www.webtoons.com/es/example/list?title_no=1",
-                    "language": "es",
-                },
-                {
-                    "url": "https://comic.naver.com/webtoon/list?titleId=1",
-                    "language": "ko",
-                },
-            ]
-        },
-        artwork_path=None,
-        artwork_sha256=None,
-        artwork_media_type=None,
-        source_status=[],
-    )
-
-    with database.connect() as connection:
-        rows = connection.execute(
-            "SELECT host, source_role FROM manga_official_source "
-            "WHERE manga_id=? ORDER BY host, source_url",
-            ("manga-1",),
-        ).fetchall()
-
-    assert [(row["host"], row["source_role"]) for row in rows] == [
-        ("comic.naver.com", "secondary_official"),
-        ("webtoons.com", "primary_official"),
-        ("webtoons.com", "alternative"),
-    ]
-
-
 def test_database_tracks_translation_language_and_jobs(tmp_path: Path):
     database = Database(tmp_path / "tankarr.sqlite3")
     database.initialize()
@@ -765,8 +713,8 @@ def test_pending_numbering_is_reconciled_automatically_on_refresh(tmp_path: Path
     )
     refreshed = database.get_chapter("source-412")
     assert refreshed["source_chapter"] == "412"
-    assert refreshed["chapter"] is None
-    assert refreshed["numbering_status"] == "pending_evidence"
+    assert refreshed["chapter"] == "412"
+    assert refreshed["numbering_status"] == "mapped"
 
 
 def test_numbering_shadow_reports_without_writing(tmp_path: Path):
@@ -809,11 +757,8 @@ def test_numbering_shadow_reports_without_writing(tmp_path: Path):
 
     report = database.shadow_numbering(["manga-shadow"])
 
-    assert report[0]["statuses"] == {"pending_evidence": 1}
-    assert (
-        database.get_chapter("pending-release")["numbering_status"]
-        == "pending_evidence"
-    )
+    assert report[0]["statuses"] == {"mapped": 1}
+    assert database.get_chapter("pending-release")["numbering_status"] == "mapped"
 
 
 def test_metadata_refresh_reconciles_without_touching_file_state_or_stale_jobs(
@@ -895,15 +840,12 @@ def test_metadata_refresh_reconciles_without_touching_file_state_or_stale_jobs(
 
     save_metadata()
 
-    unresolved = database.get_chapter("mirror-7")
-    assert unresolved["chapter"] is None
-    assert unresolved["numbering_status"] == "pending_evidence"
-    assert unresolved["numbering_method"] == ("awaiting_secondary_official_evidence")
-    # The final atomic claim rechecks the now-unresolved identity and removes
-    # stale work before any download or publication can start.
-    assert database.claim_queued_job(queued["id"], library_path) is None
-    with pytest.raises(KeyError):
-        database.get_job(queued["id"])
+    retained = database.get_chapter("mirror-7")
+    assert retained["chapter"] == "7"
+    assert retained["numbering_status"] == "mapped"
+    assert retained["numbering_method"] == "source_identity"
+    # Changing publisher metadata cannot invalidate an already owned file.
+    assert database.get_job(queued["id"])["status"] == "queued"
 
     downloaded = database.get_chapter("mirror-7")
     assert downloaded["downloaded"] is True
@@ -1155,40 +1097,6 @@ def test_initialize_turns_direct_provider_series_into_catalogue_works(tmp_path: 
     assert manga["provider"] == "catalogue" and manga["cover_url"] is None
     assert database.list_release_sources("m1") == []
     assert {c["id"] for c in database.list_all_chapters("m1")} == {"dex-1", "suwa-1"}
-
-
-def test_release_history_round_trips_dated_releases_only(tmp_path: Path):
-    database = Database(tmp_path / "tankarr.sqlite3")
-    database.initialize()
-    database.upsert_manga(
-        {
-            "id": "m1",
-            "title": "Rhythm",
-            "description": "",
-            "cover_url": None,
-            "authors": [],
-            "original_language": "ja",
-        },
-        "en",
-        "all",
-    )
-    stored = database.replace_release_history(
-        "m1",
-        "mangaupdates",
-        [
-            {"chapter": "1160", "volume": None, "release_date": "2026-08-16"},
-            {"chapter": "1161", "volume": "", "release_date": "2026-08-23"},
-            {"chapter": "Extra", "volume": "5", "release_date": None},
-            {"chapter": "1161", "volume": "", "release_date": "2026-08-23"},
-        ],
-    )
-    assert stored == 3
-    assert [
-        (r["chapter"], r["release_date"]) for r in database.list_release_history("m1")
-    ] == [
-        ("1160", "2026-08-16"),
-        ("1161", "2026-08-23"),
-    ]
 
 
 def test_queue_order_finishes_one_series_before_the_next_from_first_chapter(tmp_path):
@@ -2167,7 +2075,7 @@ def test_measurements_from_an_older_method_are_forgotten_once(tmp_path: Path):
     )
 
 
-def test_official_release_source_publication_status_is_kept_per_source(tmp_path):
+def test_source_publication_status_does_not_control_catalogue_state(tmp_path):
     database = Database(tmp_path / "tankarr.sqlite3")
     database.initialize()
     database.upsert_manga(
@@ -2202,22 +2110,24 @@ def test_official_release_source_publication_status_is_kept_per_source(tmp_path)
                 "WHERE manga_id='m1' AND provider_manga_id=?",
                 (role, pid),
             )
-    assert database.official_publication_status("m1") is None
+    assert "official" not in database.publication_signals("m1")
     # A refresh without details leaves the earlier word in place.
     database.record_release_source_result(
         "m1", "suwayomi", "wc-1", publication_status="hiatus"
     )
-    assert database.official_publication_status("m1") is None  # not an official source
+    assert "official" not in database.publication_signals(
+        "m1"
+    )  # not an official source
     database.record_release_source_result(
         "m1", "suwayomi", "wt-1", publication_status="On Hiatus"
     )
-    assert database.official_publication_status("m1") == "on_hiatus"
+    assert "official" not in database.publication_signals("m1")
     database.record_release_source_result("m1", "suwayomi", "wt-1")
-    assert database.official_publication_status("m1") == "on_hiatus"
+    assert "official" not in database.publication_signals("m1")
     database.record_release_source_result(
         "m1", "suwayomi", "wt-1", publication_status="ongoing"
     )
-    assert database.official_publication_status("m1") == "ongoing"
+    assert "official" not in database.publication_signals("m1")
 
 
 def test_publication_signals_and_pause_transitions(tmp_path):
@@ -2267,62 +2177,6 @@ def test_publication_signals_and_pause_transitions(tmp_path):
     back = database.record_publication_pause("m1", paused=False, sources=[])
     assert back["paused"] is True and back["sources"] == ["myanimelist"]
     assert database.publication_pause("m1")["paused"] is False
-
-
-def test_official_release_after_catalogue_pause_resumes_calendar(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    database = Database(tmp_path / "tankarr.sqlite3")
-    database.initialize()
-    database.upsert_manga(
-        {"id": "m1", "title": "Example", "provider": "catalogue", "status": "hiatus"},
-        "en",
-        "none",
-    )
-    database.upsert_release_source(
-        "m1",
-        provider="suwayomi",
-        provider_manga_id="official-1",
-        title="Example",
-        source_url="https://publisher.example/series/1",
-        source_name="Publisher (EN)",
-        language="en",
-        match_confidence=1.0,
-        match_reason="test",
-        verified_by="test",
-    )
-    now = datetime.now(UTC)
-    pause = (now - timedelta(days=2)).isoformat()
-    old_release = (now - timedelta(days=3)).isoformat()
-    with database.connect() as connection:
-        connection.execute(
-            "UPDATE manga_release_source SET source_role='primary_official', publication_status='ongoing' "
-            "WHERE manga_id='m1'"
-        )
-        connection.execute(
-            "INSERT INTO metadata_source_record (manga_id, entity_type, entity_key, source, external_id, "
-            "match_confidence, match_reason, data_json, raw_json, fetched_at) "
-            "VALUES ('m1','work','','mangabaka','1',1.0,'test','{\"status\":\"hiatus\"}','{}',?)",
-            (pause,),
-        )
-        connection.execute(
-            "INSERT INTO chapter_release (id,manga_id,chapter,title,language,provider,publish_at,"
-            "source_url,first_seen_at,updated_at,source_name) "
-            "VALUES ('chapter-1','m1','1','Chapter 1','en','suwayomi',?,"
-            "'https://publisher.example/chapter/1',?,?, 'Publisher (EN)')",
-            (old_release, old_release, old_release),
-        )
-    assert "official_resume" not in database.publication_signals("m1")
-
-    new_release = (now - timedelta(days=1)).isoformat()
-    with database.connect() as connection:
-        connection.execute(
-            "UPDATE chapter_release SET publish_at=? WHERE id='chapter-1'",
-            (new_release,),
-        )
-    assert database.publication_signals("m1")["official_resume"] == "published"
-    calendar = database.list_calendar_inputs()[0]
-    assert calendar["publication_signals"]["official_resume"] == "published"
 
 
 def test_official_season_opening_is_included_in_manga_chapter_count(tmp_path):

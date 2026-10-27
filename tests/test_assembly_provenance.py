@@ -80,9 +80,9 @@ def test_invalid_provenance_is_rejected(changes):
     assert assembly_provenance({**proof(), **changes}) is None
 
 
-@pytest.mark.parametrize("policy", ["prefer_official", "first_available"])
-def test_external_book_outranks_assembly_even_when_older_or_smaller(policy):
-    ranking = SourceRanking.from_settings(acquisition_policy=policy)
+@pytest.mark.parametrize("profile", ["balanced", "curated"])
+def test_external_book_outranks_assembly_even_when_older_or_smaller(profile):
+    ranking = SourceRanking.from_settings(preference_profile=profile)
     candidate = assembled()
     candidate.update(pages=700, version=9, publish_at="2020-01-01T00:00:00Z")
     external = {

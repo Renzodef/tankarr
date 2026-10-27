@@ -213,9 +213,6 @@ class ReleaseSourceManager:
         self.database = database
         self.providers = providers
         self._lock = asyncio.Lock()
-        # How an official platform's page is read for its own status flag;
-        # replaceable in tests. None → httpx.
-        self.fetch_page = None
 
     @staticmethod
     def _provider_label(provider: Provider) -> str:
@@ -281,96 +278,6 @@ class ReleaseSourceManager:
         if provider_name == "suwayomi":
             return str(candidate.get("source_id") or "unknown")
         return "provider"
-
-    async def _official_status(
-        self, provider: Any, mapping: dict[str, Any]
-    ) -> str | None:
-        """The publication status an official platform reports for the work.
-
-        Only official sources are asked (one details call per refresh); any
-        failure is not a refresh failure, the chapters already came through.
-        """
-
-        if str(mapping.get("source_role") or "") not in {
-            "primary_official",
-            "secondary_official",
-        }:
-            return None
-        getter = getattr(provider, "get_manga", None)
-        if getter is None:
-            return None
-        try:
-            details = await getter(str(mapping["provider_manga_id"]))
-        except Exception:  # noqa: BLE001 - a details hiccup must not lose chapters
-            return None
-        status = str((details or {}).get("status") or "").strip().casefold()
-        # The Webtoons extension reports "ongoing" for a title the site itself
-        # flags "On hiatus" (unORDINARY, 2026-09-05). The page carries the
-        # flag in plain JSON; read it when the extension has no pause to
-        # report, so a break shows as a pause instead of an overdue chapter.
-        if status not in {"hiatus", "on_hiatus"}:
-            page_status = await self._webtoons_page_status(
-                str(mapping.get("source_url") or "")
-            )
-            if page_status:
-                status = page_status
-        return status or None
-
-    _WEBTOONS_STATUS = re.compile(r'"titleStatusString"\s*:\s*"([^"]{1,40})"')
-    # The desktop and mobile pages also carry the creator's note
-    # ("unOrdinary will return!") while a title is paused.
-    _WEBTOONS_RETURN_NOTE = re.compile(r"will\s+return", re.IGNORECASE)
-
-    # Only the mobile site embeds the title JSON (with titleStatusString);
-    # the desktop page does not carry it, and m.webtoons.com redirects a
-    # desktop browser back to the desktop page. Ask as a phone.
-    _MOBILE_USER_AGENT = (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 "
-        "Safari/604.1"
-    )
-
-    @staticmethod
-    def webtoons_status_url(url: str) -> str | None:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        if not host.endswith("webtoons.com"):
-            return None
-        return parts._replace(netloc="m.webtoons.com").geturl()
-
-    async def _webtoons_page_status(self, url: str) -> str | None:
-        mobile_url = self.webtoons_status_url(url)
-        if mobile_url is None:
-            return None
-        try:
-            if self.fetch_page is not None:
-                text = await self.fetch_page(mobile_url)
-            else:
-                from tankarr.http import async_client
-
-                async with async_client(
-                    timeout=8.0,
-                    follow_redirects=True,
-                    headers={"User-Agent": self._MOBILE_USER_AGENT},
-                ) as client:
-                    response = await client.get(mobile_url)
-                    response.raise_for_status()
-                    text = response.text
-        except Exception:  # noqa: BLE001 - the page is a bonus, never a failure
-            return None
-        match = self._WEBTOONS_STATUS.search(text or "")
-        if not match:
-            if self._WEBTOONS_RETURN_NOTE.search(text or ""):
-                return "hiatus"
-            return None
-        flag = match.group(1).strip().casefold()
-        if "hiatus" in flag:
-            return "hiatus"
-        if "complet" in flag or "end" in flag:
-            return "completed"
-        if "ongoing" in flag or "releas" in flag:
-            return "ongoing"
-        return None
 
     async def refresh_mappings(
         self,
@@ -477,7 +384,6 @@ class ReleaseSourceManager:
                     manga_id,
                     provider_name,
                     str(mapping["provider_manga_id"]),
-                    publication_status=await self._official_status(provider, mapping),
                 )
                 seen += int(result["seen"])
                 new_ids.extend(result["new_chapter_ids"])

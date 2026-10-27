@@ -19,7 +19,6 @@ await mkdir(output, { recursive: true });
 const pages = [
   { name: "library", hash: "#/", ready: ".poster-card" },
   { name: "series", hash: "#/series/cartographers-daughter", ready: "h1" },
-  { name: "calendar", hash: "#/calendar", ready: ".calendar-day, .calendar-cell, main" },
   { name: "wanted", hash: "#/wanted", ready: ".wanted-table tbody tr" },
   { name: "system", hash: "#/system", ready: "h2:has-text('Scheduled tasks')" },
   { name: "settings", hash: "#/settings", ready: "h1.page-title:has-text('Settings')" },

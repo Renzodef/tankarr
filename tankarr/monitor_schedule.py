@@ -11,36 +11,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-HOT_DAYS = 14
-WARM_DAYS = 90
 DAILY_SECONDS = 86400.0
 WEEKLY_SECONDS = 7 * DAILY_SECONDS
-# A timed-out or failed series stays out of the next cycles. Source-level
-# cooldowns still apply on top of this once it is checked again.
 ERROR_FLOOR_SECONDS = 6 * 3600.0
-# Leave the tail of the budget for series that are not publishing, so a
-# large set of active series cannot postpone the rest forever.
 HOT_BUDGET_SHARE = 0.75
-
-# Finished or paused works are not expected to publish. Hiatus is paused
-# here even though the library still counts it as continuing: a chapter in
-# the hot window puts it back on the frequent schedule anyway.
-STALE_STATUSES = frozenset(
-    {
-        "completed",
-        "complete",
-        "ended",
-        "finished",
-        "cancelled",
-        "canceled",
-        "hiatus",
-        "on_hiatus",
-        "paused",
-        "abandoned",
-        "dropped",
-        "discontinued",
-    }
-)
 
 
 def parse_timestamp(value: object) -> datetime | None:
@@ -82,23 +56,11 @@ def series_interval_seconds(
     now: datetime,
     monitor_interval: float,
 ) -> float:
-    """How long to wait after a successful check before refreshing again.
+    """Use the global watch interval until the catalogue marks a work ended."""
 
-    A chapter from the last ``HOT_DAYS`` uses the monitor interval whatever
-    the catalogue status says, so a series that just resumed or just ended
-    is still seen promptly. An ongoing series with no dated chapter, and any
-    series that is not explicitly finished or paused and published within
-    ``WARM_DAYS``, waits a day. Everything else waits a week.
-    """
+    from tankarr.series_summary import TERMINAL_STATUSES
 
-    age = None
-    if newest_publish_at is not None:
-        age = (now - newest_publish_at).total_seconds()
-    if age is not None and age <= HOT_DAYS * 86400:
-        return float(monitor_interval)
-    if status not in STALE_STATUSES and (age is None or age <= WARM_DAYS * 86400):
-        return DAILY_SECONDS
-    return WEEKLY_SECONDS
+    return WEEKLY_SECONDS if status in TERMINAL_STATUSES else float(monitor_interval)
 
 
 def is_hot(interval: float, monitor_interval: float) -> bool:

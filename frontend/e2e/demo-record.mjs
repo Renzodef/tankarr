@@ -132,7 +132,6 @@ try {
   }
   for (const href of authors) await visit(href, "h1");
 
-  await visit("#/calendar", "main");
   for (const label of [/next/i, /previous/i, /today/i]) {
     const button = page.getByRole("button", { name: label }).first();
     if (await button.isVisible().catch(() => false)) {

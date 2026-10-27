@@ -83,14 +83,6 @@ class FakeService:
             "replace": replace,
         }
 
-    async def refresh_official_edition_evidence(self, manga_id: str) -> int:
-        return 0
-
-    async def align_with_official_edition(
-        self, manga_id: str, *, dry_run: bool = False
-    ) -> dict:
-        return {"manga_id": manga_id, "deleted": 0, "errors": [], "surplus": []}
-
     async def audit_library_page_quality(self, *, limit: int | None = None) -> dict:
         return {"measured": 0, "degraded": []}
 
@@ -106,93 +98,6 @@ class RecordingWorker:
 
     async def enqueue(self, job_id: int) -> None:
         self.enqueued.append(job_id)
-
-
-@pytest.mark.asyncio
-async def test_official_replacement_is_opt_in(tmp_path: Path):
-    database = Database(tmp_path / "tankarr.sqlite3")
-    database.initialize()
-    settings = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
-    service = FakeService(database, [])
-    service.settings = settings  # type: ignore[attr-defined]
-    monitor = ReleaseMonitor(
-        settings,
-        database,
-        service,  # type: ignore[arg-type]
-        RecordingWorker(),  # type: ignore[arg-type]
-    )
-
-    assert settings.prefer_official_releases is True
-    assert settings.official_upgrade_enabled is False
-    assert await monitor.upgrade_to_official() == 0
-
-
-@pytest.mark.asyncio
-async def test_official_upgrade_is_independent_from_acquisition_policy(tmp_path: Path):
-    database = Database(tmp_path / "tankarr.sqlite3")
-    database.initialize()
-    database.upsert_manga(
-        {
-            "id": "manga-1",
-            "title": "Example",
-            "description": "",
-            "cover_url": None,
-            "authors": [],
-            "original_language": "ja",
-            "monitored": True,
-        },
-        "en",
-        "all",
-    )
-    database.save_series_metadata(
-        "manga-1",
-        {
-            "official_links": [
-                {"url": "https://tapas.io/series/example", "language": "en"}
-            ]
-        },
-        artwork_path=None,
-        artwork_sha256=None,
-        artwork_media_type=None,
-        source_status=[],
-    )
-    database.upsert_chapters(
-        "manga-1",
-        [
-            {
-                **chapter("scan-1", "1"),
-                "provider": "suwayomi",
-                "source_key": "suwayomi:scan",
-                "source_name": "Scanlator",
-                "source_url": "https://scans.test/1",
-            },
-            {
-                **chapter("official-1", "1"),
-                "provider": "suwayomi",
-                "source_key": "suwayomi:tapas",
-                "source_name": "Tapas (EN)",
-                "source_url": "https://tapas.io/episode/1",
-            },
-        ],
-    )
-    database.mark_chapter_downloaded("scan-1", tmp_path / "scan.cbz")
-    settings = Settings(
-        data_dir=tmp_path / "data",
-        library_dir=tmp_path / "library",
-        release_acquisition_policy="first_available",
-        official_upgrade_enabled=True,
-    )
-    service = FakeService(database, [])
-    service.settings = settings  # type: ignore[attr-defined]
-    monitor = ReleaseMonitor(
-        settings,
-        database,
-        service,  # type: ignore[arg-type]
-        RecordingWorker(),  # type: ignore[arg-type]
-    )
-
-    assert await monitor.upgrade_to_official() == 1
-    assert service.manual_downloads == [("official-1", True)]
 
 
 @pytest.mark.asyncio
@@ -322,7 +227,6 @@ async def test_manual_wanted_recovery_queues_missing_releases_once(tmp_path: Pat
         "searched": 0,
         "queued": 1,
         "upgraded": 0,
-        "aligned": {"deleted": 0, "series": 0, "enabled": True},
         "quality": {
             "measured": 0,
             "degraded": 0,

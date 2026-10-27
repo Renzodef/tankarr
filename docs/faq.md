@@ -25,7 +25,7 @@ trigger their scans and publish metadata and covers to them.
 
 ### Is there a Sonarr or Radarr for manga?
 
-That is the gap Tankarr fills: monitored series, Wanted, Activity, Calendar,
+That is the gap Tankarr fills: monitored series, Wanted, Activity,
 History, interactive search and Prowlarr indexers with qBittorrent and SABnzbd,
 for manga and comics.
 

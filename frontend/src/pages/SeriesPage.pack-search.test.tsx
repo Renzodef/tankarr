@@ -18,7 +18,6 @@ function setup() {
   vi.spyOn(api, "manga").mockImplementation(async (id) => manga(id));
   vi.spyOn(api, "seriesUnits").mockImplementation(async (id) => ({ manga_id: id, mode: "flat", series_unit: "chapters", form: "chapters", edition_book_count: null, expected_book_count: null, warning: null, hints: [], books: [], unassigned_chapters: [] }));
   vi.spyOn(api, "jobs").mockResolvedValue([]);
-  vi.spyOn(api, "seriesCalendar").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "readerLink").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "torrents").mockResolvedValue([]);
   return { health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) };

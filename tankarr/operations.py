@@ -29,8 +29,6 @@ from tankarr.readers import _managed_library_books, effective_reader_kind
 from tankarr.settings_store import preview_settings
 
 ACQUISITION_PREFERENCES = {
-    "release_acquisition_policy",
-    "official_upgrade_enabled",
     "preferred_unit",
     "source_priority_fresh",
     "release_preference_profile",

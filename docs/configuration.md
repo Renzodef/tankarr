@@ -53,7 +53,7 @@ The Settings page saves through the settings API, `PUT /api/settings`, which
 uses the variable names in lower case without the prefix (`downloads_paused`
 for `TANKARR_DOWNLOADS_PAUSED`). The API also accepts some settings that have no
 field on the page: `downloads_paused`, `provider_priority`,
-`official_edition_alignment_enabled`, `page_quality_recovery_enabled`,
+`page_quality_recovery_enabled`,
 `metadata_enabled`, `suwayomi_language`, `suwayomi_public_url`,
 `setup_completed_at`, `komga_link_enabled`, `komga_url`, `komga_library_id`,
 `komga_auth_method`, `komga_api_key`, `komga_username`, `komga_password` and
@@ -90,7 +90,7 @@ The image also reads four variables that Tankarr itself never sees:
 | --- | --- | --- |
 | `PUID`, `PGID` | `1000`, `1000` | User and group the application runs as when the container starts as root: the owner of your folders. See [File permissions](installation.md#file-permissions). |
 | `UMASK` | `022` | Permissions mask of the files Tankarr writes; `002` makes them group-writable. |
-| `TZ` | `Etc/UTC` | Time zone of log timestamps, the Calendar and the nightly maintenance window. |
+| `TZ` | `Etc/UTC` | Time zone of log timestamps and the nightly maintenance window. |
 
 ## Docker Compose variables
 
@@ -149,8 +149,8 @@ yourself ignores it.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TANKARR_MONITOR_ENABLED` | `true` | Run the release monitor. When `false`, the scheduled Wanted search does not run either. Settings → General. |
-| `TANKARR_MONITOR_INTERVAL_SECONDS` | `1800` | Pause between two monitor cycles, in seconds: 5 to 86400 (the Settings page accepts 60 to 86400). A cycle refreshes only series that are due, then sleeps for this long, so the gap is the full interval and not the interval minus the cycle. A series with a chapter in the last 14 days is due this often, including one marked completed or on hiatus. An ongoing series, or one with no publication status, is due once a day when it has no dated chapter or its newest is between 14 and 90 days old, and once a week after that. A completed, cancelled or paused series is due once a week unless a chapter landed in the last 14 days. A series that has never been checked is due immediately, and a restart continues with whatever is still due. 1800 (30 minutes) leaves the managed Suwayomi server off between cycles when `TANKARR_SUWAYOMI_IDLE_SHUTDOWN_MINUTES` is left at its default. Settings → General (advanced). |
-| `TANKARR_MONITOR_CYCLE_BUDGET_SECONDS` | `480` | How long one monitor cycle may spend refreshing series, in seconds: 30 to 3600. Further series that are already due wait for later cycles, oldest first, with series that published in the last 14 days going first. Once three quarters of the budget is used, the rest is left for series that are not publishing, unless none of those are waiting. 480 is 8 minutes, inside the default 30-minute pause, so the managed Suwayomi server can stop and catalogue cleanup can run. Restart required. |
+| `TANKARR_MONITOR_INTERVAL_SECONDS` | `1800` | Global pause between monitor cycles, in seconds: 5 to 86400 (Settings accepts 60 to 86400). All unfinished series, including hiatus and undated works, use this interval regardless of their newest release date. MangaBaka publication status takes precedence; completed works are checked weekly. Never-checked series are due immediately. Checks are sequential and resume oldest first after a restart. Settings → General (advanced). |
+| `TANKARR_MONITOR_CYCLE_BUDGET_SECONDS` | `480` | How long one monitor cycle may spend refreshing series, in seconds: 30 to 3600. Further series that are already due wait for later cycles, oldest first, with unfinished series going first. Once three quarters of the budget is used, the rest is left for series that are not publishing, unless none of those are waiting. 480 is 8 minutes, inside the default 30-minute pause, so the managed Suwayomi server can stop and catalogue cleanup can run. Restart required. |
 | `TANKARR_MONITOR_SERIES_TIMEOUT_SECONDS` | `90` | How long one series may take to refresh, in seconds: 5 to 300. A series that does not answer is recorded as a failure and left for at least six hours, instead of stalling the cycle. Restart required. |
 | `TANKARR_WANTED_SEARCH_ENABLED` | `true` | Run the Wanted search on a schedule. The upgrade and cleanup passes described under [Sources and acquisition preferences](#sources-and-acquisition-preferences) run at the end of every Wanted pass. Settings → General. |
 | `TANKARR_WANTED_SEARCH_INTERVAL_SECONDS` | `21600` | Time between scheduled Wanted passes, in seconds: 900 to 604800 (21600 is 6 hours). Settings → General (advanced). |
@@ -161,18 +161,14 @@ yourself ignores it.
 These settings decide which release Tankarr takes when several sources offer
 the same chapter or book, and what it may do with files you already have. A
 chapter published in the last 21 days counts as new; anything older is
-backlog. The release policy itself, `TANKARR_RELEASE_ACQUISITION_POLICY`, is
-described under [Advanced](#advanced).
+backlog. All configured sources remain eligible; publisher editions do not limit the latest chapter.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TANKARR_PREFER_OFFICIAL_RELEASES` | `true` | Older form of the release policy: `true` means `prefer_official`, `false` means `first_available`. Used only while `TANKARR_RELEASE_ACQUISITION_POLICY` is unset and no policy has been saved on the Settings page. Restart required. |
 | `TANKARR_RELEASE_PREFERENCE_PROFILE` | `balanced` | Which kind of source comes first: `balanced` keeps Tankarr's normal order for new chapters and backlog, `official` puts publisher platforms first, `curated` puts curated scanlation catalogues first. Language and numbering rules always apply, and the source lists below take precedence. Settings → Sources. |
 | `TANKARR_SOURCE_PRIORITY_FRESH` | *empty* | Optional source order for new chapters, comma-separated, for example `suwayomi:mangaplus,suwayomi:weebcentral`. Each entry is a provider (`suwayomi`), `provider:source-id` or `provider:source-name`, using letters, digits, `-` and `_`. A source name of 4 or more characters also matches longer names that start with it. Unlisted sources come after the listed ones, in their usual order. Settings → Sources. |
 | `TANKARR_SOURCE_PRIORITY_BACKFILL` | *empty* | The same for backlog chapters and for upgrades. Empty: the order of `TANKARR_PROVIDER_PRIORITY`. Settings → Sources. |
 | `TANKARR_SOURCE_UPGRADE_ENABLED` | `false` | Replace a chapter you own when a strictly preferred source offers the same chapter in the same language and numbering. The old file stays until the replacement is verified. Runs during each Wanted pass. Settings → Sources. |
-| `TANKARR_OFFICIAL_UPGRADE_ENABLED` | `false` | Replace a non-official file when the same chapter later appears on the work's official platform, whatever the release policy. Runs during each Wanted pass. Settings → Sources. |
-| `TANKARR_OFFICIAL_EDITION_ALIGNMENT_ENABLED` | `true` | Keep monitored series on the numbering of the official edition in the series language: chapter files numbered beyond what the publisher has released belong to another edition and are moved to the recycle bin during each Wanted pass. Set to `false` to keep them. Restart required. |
 | `TANKARR_PAGE_QUALITY_RECOVERY_ENABLED` | `true` | During each Wanted pass, compare imported chapters with the page size of the rest of the series and download a replacement for those that carry only a fraction of it, when another source has the chapter. Nothing is deleted without a replacement. Restart required. |
 | `TANKARR_DUPLICATE_CLEANUP_ENABLED` | `true` | When the map of chapters to volumes, checked against the pages, proves that a chapter file is already inside a book you own, move the chapter file to the recycle bin during the next Wanted pass (at most 10 series per pass). When `false`, duplicates are only reported on the series page. Settings → Sources. |
 | `TANKARR_PREFERRED_UNIT` | `volumes` | `volumes` or `chapters`: which of the two Tankarr collects when both whole books and chapters could complete a finished work. A work that is still running follows chapters unless only books exist. Settings → Sources. |
@@ -491,7 +487,6 @@ Internal settings and service addresses that rarely need changing.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TANKARR_RELEASE_ACQUISITION_POLICY` | *unset* | The **New release policy** of Settings → Sources: `prefer_official` (official platforms first when they have the chapter) or `first_available` (the earliest published release wins; source order only breaks ties). Unset: follows `TANKARR_PREFER_OFFICIAL_RELEASES`. The retired value `official_only` stops Tankarr at startup. Settings → Sources. |
 | `TANKARR_PROVIDER_PRIORITY` | `suwayomi` | Order of the direct chapter-download providers. `suwayomi` is currently the only one; an unknown name stops Tankarr at startup. It is also the backlog order when `TANKARR_SOURCE_PRIORITY_BACKFILL` is empty. Restart required. |
 | `TANKARR_LEGACY_LIBRARY_ROOTS` | *empty* | Comma-separated absolute paths where an earlier setup of this installation kept its library, for example a host path used before moving to Docker. Files recorded under them are looked up at the same relative path inside the current library directory; `/library` is always treated this way. Restart required. |
 | `TANKARR_SETUP_COMPLETED_AT` | *unset* | When the first-run setup checklist was completed: an ISO 8601 timestamp with a time zone, stored in UTC. The checklist writes it; while it is unset and a required check fails, the web interface opens the checklist. |

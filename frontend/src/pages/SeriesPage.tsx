@@ -47,7 +47,6 @@ import type {
   Job,
   LibraryStatusOverride,
   Manga,
-  SeriesCalendar,
   MangaSummary,
   MetadataCorrelationSource,
   MonitorMode,
@@ -200,7 +199,6 @@ export default function SeriesPage({ id }: { id: string }) {
   useEffect(() => setSeriesPackSearchId(null), [id]);
   const [fileDeletion, setFileDeletion] = useState<FileDeletionTarget | null>(null);
   const [chapterSearch, setChapterSearch] = useState<ChapterSearchTarget | null>(null);
-  const [calendar, setCalendar] = useState<SeriesCalendar | null>(null);
   const activeJobsRef = useRef(false);
   const mounted = useRef(false);
   const seriesRequest = useRef<{ controller: AbortController; promise: Promise<void> } | null>(null);
@@ -283,22 +281,6 @@ export default function SeriesPage({ id }: { id: string }) {
       jobsRequest.current = null;
     };
   }, [load, loadJobs]);
-
-  const calendarRevision = manga?.id === id ? manga.downloaded_count : null;
-  useEffect(() => {
-    let alive = true;
-    void api
-      .seriesCalendar(id)
-      .then((next) => {
-        if (alive) setCalendar(next);
-      })
-      .catch(() => {
-        if (alive) setCalendar(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [id, calendarRevision]);
 
   const readerBookRevision = manga?.id === id ? manga.downloaded_count : null;
 
@@ -880,20 +862,7 @@ export default function SeriesPage({ id }: { id: string }) {
       manga.chapter_index.unresolved_expected_count > 0 &&
       (manga.chapter_index.expected_available_count ?? 0) > 0 ? (
         (() => {
-          // A chapter the official platform already lists with a date is not
-          // "missing from the sources": it is simply not out yet.
-          const announced = (calendar?.expected ?? []).filter((item) => !item.estimated);
           const unit = manga.chapter_index.series_unit ?? "chapters";
-          if (announced.length > 0 && manga.chapter_index.unresolved_expected_count <= announced.length) {
-            const first = announced[0];
-            return (
-              <div className="banner banner-info">
-                <Icon name="info" />
-                {t("The catalogue counts {expected} {unit}; {available} are out. Chapter {chapter} is announced by the official platform for {date}", { expected: manga.chapter_index.expected_count, unit, available: manga.chapter_index.expected_available_count, chapter: first.chapter, date: calendarDate(first.expected_at) })}
-                {announced.length > 1 ? ` ${t("(and {count} more after it)", { count: announced.length - 1 })}` : ""}.
-              </div>
-            );
-          }
           return (
             <div className="banner banner-info">
               <Icon name="info" />
@@ -909,7 +878,6 @@ export default function SeriesPage({ id }: { id: string }) {
         </p>
       ) : null}
 
-      {calendar ? <SeriesCalendarSection calendar={calendar} /> : null}
 
       {unitsError ? <LoadError message={unitsError} retryLabel={t("Retry books and chapters")} retry={() => void load(true)} loading={loading} hasData={Boolean(units?.manga_id === manga.id)} /> : null}
       <TranslationPanel key={manga.id} manga={manga} />
@@ -2756,89 +2724,4 @@ function renderDescription(text: string): ReactNode[] {
       ))}
     </p>
   ));
-}
-
-function calendarTime(value: string): string {
-  const moment = new Date(value);
-  if (Number.isNaN(moment.getTime())) return "";
-  return new Intl.DateTimeFormat(locale(), { hour: "2-digit", minute: "2-digit" }).format(moment);
-}
-
-function calendarDate(value: string): string {
-  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
-  const date = new Date(year, month - 1, day, 12);
-  const thisYear = new Date().getFullYear();
-  return new Intl.DateTimeFormat(locale(), {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    ...(year !== thisYear ? { year: "numeric" } : {}),
-  }).format(date);
-}
-
-const RECENT_RELEASE_WINDOW_DAYS = 90;
-
-function SeriesCalendarSection({ calendar }: { calendar: SeriesCalendar }) {
-  const { expected, cadence, reason } = calendar;
-  // A finished work has no calendar; a paused one gets one line; a running
-  // work gets the section only when it has a rhythm to show. Old scanlation
-  // dates are not "recent releases".
-  if (reason === "ended") return null;
-  if (reason === "paused") {
-    return (
-      <p className="muted small series-calendar">
-        {t("Publication is paused: no upcoming chapter is expected until it resumes.")}
-      </p>
-    );
-  }
-  const cutoff = Date.now() - RECENT_RELEASE_WINDOW_DAYS * 24 * 3600 * 1000;
-  const recent = calendar.recent.filter((item) => {
-    const [year, month, day] = item.released_at.slice(0, 10).split("-").map(Number);
-    return new Date(year, month - 1, day, 12).getTime() >= cutoff;
-  });
-  if (expected.length === 0 && recent.length === 0) return null;
-  return (
-    <section className="series-calendar" aria-label={t("Release calendar")}>
-      <h2>{t("Calendar")}</h2>
-      {expected.length > 0 ? (
-        <ul className="series-calendar-list">
-          {expected.map((item) => (
-            <li key={item.chapter} className={item.overdue_days > 0 ? "overdue" : undefined}>
-              <strong>{t("Chapter {number}", { number: item.chapter })}</strong> · {item.estimated ? t("expected") : t("announced")}{" "}
-              {calendarDate(item.expected_at)}
-              {!item.estimated && item.published_at ? ` · ${calendarTime(item.published_at)}` : ""}
-              <span className="muted small">
-                {" "}
-                {!item.estimated ? "· " + t("date listed by the official platform") : null}
-                {item.overdue_days > 0
-                  ? ` · ${tn(item.overdue_days, "{count} day overdue", "{count} days overdue")}`
-                  : ""}
-                {item.downloaded
-                  ? " · " + t("downloaded")
-                  : item.official
-                    ? " · " + t("available on the official platform")
-                    : item.available
-                      ? " · " + t("listed by a source")
-                      : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {recent.length > 0 ? (
-        <p className="muted small">
-          {t("Recent releases:")}{" "}
-          {recent
-            .map((item) => t("ch. {chapter} ({date})", { chapter: item.chapter, date: calendarDate(item.released_at) }))
-            .join(", ")}
-          {calendar.source ? ` · ${t("from {source}", { source: calendar.source })}` : ""}
-        </p>
-      ) : null}
-      {cadence ? (
-        <p className="muted small">
-          {t("Expected dates follow the {cadence} rhythm of the release history (last: chapter {chapter} on {date}). A date the official platform already lists is shown as announced; a skipped week shows as overdue.", { cadence: cadence.label, chapter: cadence.last_chapter, date: calendarDate(cadence.last_release_at) })}
-        </p>
-      ) : null}
-    </section>
-  );
 }

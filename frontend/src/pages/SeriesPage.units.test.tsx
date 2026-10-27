@@ -15,7 +15,6 @@ it("does not show a second book count for a continuing chapter series", async ()
     library_count: { unit: "chapter", available_count: 2, downloaded_count: 1, expected_count: 2, total_count: 2, missing_count: 1, reference_kind: "available", latest_chapter: "2" },
   } as unknown as Manga);
   vi.spyOn(api, "jobs").mockResolvedValue([]);
-  vi.spyOn(api, "seriesCalendar").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "readerLink").mockRejectedValue(new Error("Unavailable"));
   const context = { health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) };
   render(<AppContext.Provider value={context}><SeriesPage id="example" /></AppContext.Provider>);
@@ -71,7 +70,6 @@ it("ignores a late units response after navigating to another series", async () 
   vi.spyOn(api, "seriesUnits").mockImplementation((id) => id === "old" ? oldUnits : Promise.resolve(unitData(id, "New series boundaries")));
   vi.spyOn(api, "manga").mockImplementation(async (id) => ({ id, title: `Series ${id}`, authors: [], description: "", preferred_language: "en", provider: "local", chapter_count: 0, downloaded_count: 0, chapters: [], monitored: true, monitor_mode: "all", available_languages: ["en"] } as unknown as Manga));
   vi.spyOn(api, "jobs").mockResolvedValue([]);
-  vi.spyOn(api, "seriesCalendar").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "readerLink").mockRejectedValue(new Error("Unavailable"));
   const context = { health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) };
   const page = (id: string) => <AppContext.Provider value={context}><SeriesPage id={id} /></AppContext.Provider>;
@@ -93,7 +91,6 @@ it("reports the actual book search outcome instead of a generic success", async 
   vi.spyOn(api, "seriesUnits").mockResolvedValue(units);
   vi.spyOn(api, "manga").mockResolvedValue({ id: "example", title: "Example", authors: [], description: "", preferred_language: "en", provider: "local", chapter_count: 0, downloaded_count: 0, chapters: [], monitored: true, monitor_mode: "all", available_languages: ["en"] } as unknown as Manga);
   vi.spyOn(api, "jobs").mockResolvedValue([]);
-  vi.spyOn(api, "seriesCalendar").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "readerLink").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "automaticSearchChapter").mockResolvedValue({ manga_id: "example", chapter: null, volume: "1", state: "no_match", queued: 0, grabbed: 0, message: "No matching releases found.", errors: [] });
   const context = { health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) };
@@ -107,7 +104,6 @@ it("opens the series audit only from its explicit action", async () => {
   vi.spyOn(api, "seriesUnits").mockResolvedValue({ manga_id: "example", mode: "flat", series_unit: "chapters", edition_book_count: null, expected_book_count: null, warning: null, hints: [], books: [], unassigned_chapters: [] });
   vi.spyOn(api, "manga").mockResolvedValue({ id: "example", title: "Example", authors: [], description: "", preferred_language: "en", provider: "local", chapter_count: 0, downloaded_count: 0, chapters: [], monitored: true, monitor_mode: "all", available_languages: ["en"] } as unknown as Manga);
   vi.spyOn(api, "jobs").mockResolvedValue([]);
-  vi.spyOn(api, "seriesCalendar").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "readerLink").mockRejectedValue(new Error("Unavailable"));
   vi.spyOn(api, "seriesAudit").mockResolvedValue({ manga_id: "example", revision: "a".repeat(64), files: [], sources: [] });
   const context = { health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) };
@@ -125,7 +121,6 @@ it("shows the bookmarked book and page, and refreshes after returning from anoth
   vi.spyOn(api, "seriesUnits").mockResolvedValue({ manga_id: "example", mode: "flat", series_unit: "chapters", edition_book_count: null, expected_book_count: null, warning: null, hints: [], books: [], unassigned_chapters: [] });
   vi.spyOn(api, "manga").mockResolvedValue({ id: "example", title: "Example", authors: [], description: "", preferred_language: "en", provider: "local", chapter_count: 1, downloaded_count: 1, chapters: [], monitored: true, monitor_mode: "all", available_languages: ["en"] } as unknown as Manga);
   vi.spyOn(api, "jobs").mockResolvedValue([]);
-  vi.spyOn(api, "seriesCalendar").mockRejectedValue(new Error("Unavailable"));
   const link = { reader: "tankarr" as const, configured: true, available: true, url: "#/reader/book-1", bookmark: null };
   const reader = vi.spyOn(api, "readerLink").mockResolvedValue(link);
   const context = { health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) };

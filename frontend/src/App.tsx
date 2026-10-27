@@ -29,7 +29,6 @@ import { msg, t } from "./i18n";
 const ActivityPage = lazy(() => import("./pages/ActivityPage"));
 const AddPage = lazy(() => import("./pages/AddPage"));
 const AuthorPage = lazy(() => import("./pages/AuthorPage"));
-const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const BookmarksPage = lazy(() => import("./pages/BookmarksPage"));
 const ImportPage = lazy(() => import("./pages/ImportPage"));
 const SetupPage = lazy(() => import("./pages/SetupPage"));
@@ -218,7 +217,6 @@ const NAV_ITEMS: NavItem[] = [
   { path: "#/", page: "library", label: msg("Comics"), icon: "comics", activePages: ["library", "series", "author"] },
   { path: "#/add", page: "add", label: msg("Add New"), icon: "add", subitem: true },
   { path: "#/import", page: "import", label: msg("Library Import"), icon: "upload", subitem: true },
-  { path: "#/calendar", page: "calendar", label: msg("Calendar"), icon: "calendar", groupStart: true },
   { path: "#/bookmarks", page: "bookmarks", label: msg("Bookmarks"), icon: "bookmark" },
   {
     path: "#/activity",
@@ -244,8 +242,6 @@ const PageRouter = memo(function PageRouter({ route, finishSetup }: { route: Rou
       return <SeriesPage key={route.id} id={route.id} />;
     case "reader":
       return <ReaderPage key={route.id} id={route.id} initialPage={route.initialPage} />;
-    case "calendar":
-      return <CalendarPage />;
     case "bookmarks":
       return <BookmarksPage />;
     case "import":

@@ -87,25 +87,8 @@ class Settings(BaseSettings):
     # Explicit source order per phase (comma-separated keys such as
     # "suwayomi:mangaplus,weebcentral"). Empty = class-based defaults;
     # backfill additionally inherits provider_priority.
-    # Acquisition is applied only after releases have been mapped to the same
-    # canonical chapter.  None keeps the legacy boolean/environment variable
-    # working until the operator saves the new policy from Settings.
-    release_acquisition_policy: (
-        Literal["prefer_official", "first_available", "official_only"] | None
-    ) = None
-    prefer_official_releases: bool = True
-    # Replacing an owned file consumes bandwidth and removes its provenance.
-    # Keep this quality-upgrade pass opt-in; official sources are still
-    # preferred for content that is genuinely missing.
-    official_upgrade_enabled: bool = False
     source_upgrade_enabled: bool = False
     release_preference_profile: Literal["balanced", "official", "curated"] = "balanced"
-    # Keep the library on the numbering of the official edition in the
-    # operator's language: chapters past what the publisher has released are
-    # chapters of another edition, and are removed. Only ever acts on an
-    # enforceable frontier (see ``official_numbering``), and the download gate
-    # already refuses to re-acquire past it, so the alignment converges.
-    official_edition_alignment_enabled: bool = True
     # Measure imported chapters against the series' own page geometry and
     # replace the ones that carry a fraction of it, when another source has
     # the chapter. Never deletes without a replacement.
@@ -365,15 +348,8 @@ class Settings(BaseSettings):
             fresh=self.source_priority_fresh,
             backfill=self.source_priority_backfill,
             provider_priority=self.provider_priority_order,
-            acquisition_policy=self.effective_release_acquisition_policy,
             preference_profile=self.release_preference_profile,
         )
-
-    @property
-    def effective_release_acquisition_policy(self) -> str:
-        if self.release_acquisition_policy:
-            return self.release_acquisition_policy
-        return "prefer_official" if self.prefer_official_releases else "first_available"
 
     @field_validator("suwayomi_mode")
     @classmethod

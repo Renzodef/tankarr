@@ -1,4 +1,4 @@
-"""Compact JSON bytes for the large payloads (library, series, Wanted, Calendar).
+"""Compact JSON bytes for the large payloads (library, series, Wanted).
 
 ``orjson`` encodes them several times faster than the standard library and
 is a normal dependency; a source installation without its wheel still works,

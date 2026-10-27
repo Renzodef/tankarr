@@ -328,38 +328,6 @@ def _seed_series(database: Database, count: int, *, downloaded: bool = False) ->
             )
 
 
-def test_calendar_resolves_every_unit_from_its_own_snapshot(
-    tmp_path: Path, monkeypatch
-):
-    """Three queries per series made the unit choice a third of a cold render."""
-
-    from tankarr import series_unit
-
-    settings = Settings(
-        data_dir=tmp_path / "data",
-        library_dir=tmp_path / "library",
-        monitor_enabled=False,
-        metadata_enabled=False,
-        komga_link_enabled=False,
-    )
-    provision_library_identity(settings)
-    app = create_app(settings)
-    _seed_series(app.state.database, 5)
-    installed = series_unit.unit_context
-    assert installed is not None
-    per_series_lookups: list[str] = []
-
-    def counting(manga_id: str):
-        per_series_lookups.append(manga_id)
-        return installed(manga_id)
-
-    monkeypatch.setattr(series_unit, "unit_context", counting)
-    with TestClient(app) as client:
-        response = client.get("/api/calendar?days=30&ahead=30")
-    assert response.status_code == 200
-    assert per_series_lookups == []
-
-
 def test_library_orphans_read_tracked_paths_in_one_query(tmp_path: Path, monkeypatch):
     """The System page scanned every release of every series for one column."""
 
@@ -584,57 +552,6 @@ def test_a_catalogue_failure_is_visible_on_system_and_monitor_status(
     )
     assert body["suwayomi"]["catalogue_error"] == error
     assert "compact failed" in body["suwayomi"]["compact_error"]
-
-
-def test_calendar_windows_of_one_revision_share_the_decoded_snapshot(
-    tmp_path: Path, monkeypatch
-):
-    """Moving from one month to the next decoded every release again: 2.6 s
-    for 1,500 series. One revision decodes once; a library change decodes
-    anew."""
-
-    settings = Settings(
-        data_dir=tmp_path / "data",
-        library_dir=tmp_path / "library",
-        monitor_enabled=False,
-        metadata_enabled=False,
-        komga_link_enabled=False,
-    )
-    provision_library_identity(settings)
-    app = create_app(settings)
-    database = app.state.database
-    _seed_series(database, 3)
-    snapshots: list[int] = []
-    original = database.list_calendar_inputs
-
-    def counting():
-        snapshots.append(1)
-        return original()
-
-    monkeypatch.setattr(database, "list_calendar_inputs", counting)
-    with TestClient(app) as client:
-        assert client.get("/api/calendar?days=14&ahead=14").status_code == 200
-        assert client.get("/api/calendar?days=30&ahead=30").status_code == 200
-        assert (
-            client.get("/api/calendar?start=2026-09-01&end=2026-09-30").status_code
-            == 200
-        )
-        assert len(snapshots) == 1
-        database.upsert_chapters(
-            "bulk-0",
-            [
-                {
-                    **chapter(),
-                    "id": "bulk-0-chapter-9",
-                    "chapter": "9",
-                    "volume": None,
-                    "pages": 20,
-                    "publish_at": "2026-09-21T00:00:00Z",
-                }
-            ],
-        )
-        assert client.get("/api/calendar?days=14&ahead=14").status_code == 200
-        assert len(snapshots) == 2
 
 
 def test_the_complete_wanted_payload_is_rendered_only_when_asked_for(

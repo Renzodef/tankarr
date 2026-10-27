@@ -35,7 +35,6 @@ the built-in reader, nothing to install.
 </p>
 <p align="center">
   <a href="https://renzodef.github.io/tankarr/screenshots/"><img src="docs/assets/screenshots/series.webp" width="49%" alt="A series page with the publisher's release rhythm and the chapter list"></a>
-  <a href="https://renzodef.github.io/tankarr/screenshots/"><img src="docs/assets/screenshots/calendar.webp" width="49%" alt="The Calendar week view with released, available and expected chapters"></a>
 </p>
 <p align="center"><sub>A fictional library, generated for the documentation. <a href="https://renzodef.github.io/tankarr/screenshots/">More screenshots</a>.</sub></p>
 
@@ -56,7 +55,7 @@ the built-in reader, nothing to install.
 - **A library that stays clean.** Consistent naming, `ComicInfo.xml` metadata,
   covers, hash-checked atomic imports, a recycle bin, and page-quality checks
   that replace unreadable downloads.
-- **The *arr experience.** Library, Calendar, Activity queue, Wanted, History,
+- **The *arr experience.** Library, Activity queue, Wanted, History,
   interactive release search, monitoring profiles, and a System page with
   health checks, scheduled tasks, logs and one-click backups.
 - **In your language.** The interface is available in English and Italian,
@@ -144,7 +143,7 @@ Release notes are on the [releases page](https://github.com/Renzodef/tankarr/rel
 
 **Is Tankarr a "Sonarr for manga"?**
 Yes. It brings the Sonarr and Radarr workflow (monitored series, a Wanted list,
-a download queue, release profiles and a calendar) to manga, manhwa, manhua,
+a download queue, release profiles) to manga, manhwa, manhua,
 webtoons and comics, and it integrates with the same tools: Prowlarr,
 qBittorrent and SABnzbd.
 
