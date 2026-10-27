@@ -70,6 +70,13 @@ other project.
   series rows and the raw counts, not the canonical chapter coverage that
   decodes every release; skipping it took the status call from 170 ms to
   60 ms.
+- **Idle statistics reuse.** The System snapshot checks six transactional
+  revision counters every 30 seconds and recomputes only sections whose
+  inputs changed. Download progress and unchanged metadata refreshes do not
+  rescan the catalogue. Database triggers also track external writes, and
+  counts and revisions share one consistent read transaction. Volume metadata
+  coverage uses a set lookup instead of scanning a series' releases for each
+  metadata row.
 - **One classification per release.** Unit selection tested each release
   for "is this a book" up to seven times per render across normalisation,
   coverage and the prologue rule, and parsed each label eleven times. The
@@ -105,6 +112,11 @@ Most of the cost of a cold start is on the server: reading releases and
 rebuilding canonical indices. On slow links, transferring cover images also
 matters. Returning to a list within the same tab is immediate, but opening a
 completely cold catalogue is not.
+
+Managed Suwayomi stops after its configured idle timeout. Ordinary monitor
+passes do not start a second JVM just to compact a growing catalogue: standalone
+compaction belongs to daily maintenance. A cleanup that deletes catalogue rows
+can still compact them during that cleanup pass.
 
 ## First paint after a restart
 

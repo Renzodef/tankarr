@@ -163,6 +163,7 @@ from tankarr.source_alerts import challenged_source_names, source_outages
 from tankarr.source_circuit import source_gate_key
 from tankarr.source_numbering import is_not_yet_released
 from tankarr.source_ranking import is_official_release, official_hosts
+from tankarr.status_snapshot import read_status_updates
 from tankarr.stump import StumpLibraryClient
 from tankarr.suwayomi_bootstrap import (
     FLARESOLVERR_EXTENSIONS,
@@ -687,20 +688,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     status_snapshot_stop = threading.Event()
     status_snapshot_threads: list[threading.Thread] = []
 
+    status_snapshot_revisions: dict[str, int] = {}
+
     def _refresh_status_snapshot() -> None:
-        manga = database.manga_totals()
-        chapters = database.chapter_totals()
-        jobs = database.job_counts()
-        coverage = database.metadata_overview()
-        alert_rows = database.list_status_alert_rows()
-        release_sources = database.list_all_release_sources()
+        revisions, updates = read_status_updates(database, status_snapshot_revisions)
         with status_snapshot_lock:
-            status_snapshot["manga"] = manga
-            status_snapshot["chapters"] = chapters
-            status_snapshot["jobs"] = jobs
-            status_snapshot["coverage"] = coverage
-            status_snapshot["alert_rows"] = alert_rows
-            status_snapshot["release_sources"] = release_sources
+            status_snapshot.update(updates)
+            status_snapshot_revisions.update(revisions)
             status_snapshot["ready"] = True
 
     def _status_snapshot_loop() -> None:
@@ -956,7 +950,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return False
 
     async def after_monitor_suwayomi_batch() -> None:
-        """Clean and compact once the monitor has released Suwayomi.
+        """Clean once the monitor has released Suwayomi.
 
         The batch flag is already clear, so this is the window idle shutdown
         and the catalogue pass both need. A pass younger than the cleanup
@@ -967,7 +961,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not settings.suwayomi_managed:
             return
         await maintain_suwayomi_catalogue()
-        await compact_managed_suwayomi_catalogue()
+        # Growth alone is not a reason to launch another JVM after every
+        # refresh. Daily maintenance owns standalone compaction; a cleanup
+        # that actually deletes rows still compacts as part of that pass.
 
     async def during_monitor_suwayomi_hold() -> None:
         """Fetch covers that metadata skipped, while this cycle holds Suwayomi."""
