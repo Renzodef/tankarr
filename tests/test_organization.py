@@ -487,6 +487,50 @@ async def test_organizer_defers_without_blocking_while_job_is_active(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_migration_and_startup_keep_an_ambiguous_owned_file(tmp_path: Path):
+    database, service, _komga = make_service(tmp_path)
+    work = manga()
+    known = chapter()
+    ambiguous = {**chapter(), "id": "unknown-copy", "title": "Chapter 1"}
+    database.upsert_manga(work, "en", "all")
+    database.upsert_chapters(work["id"], [known, ambiguous])
+    known_path = final_library_path(service.settings.library_dir, work, known)
+    unknown_path = final_library_path(
+        service.settings.library_dir,
+        work,
+        {**ambiguous, "chapter": None, "canonical_chapter": None},
+    )
+    known_path.parent.mkdir(parents=True)
+    known_path.write_bytes(b"the established chapter")
+    unknown_path.write_bytes(b"a different chapter with a wrong provider label")
+    for item, path in ((known, known_path), (ambiguous, unknown_path)):
+        database.mark_chapter_downloaded(item["id"], path, sha256(path))
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE chapter_release SET chapter=NULL, canonical_chapter=NULL, "
+            "primary_chapter=NULL, numbering_status='pending_evidence', "
+            "numbering_method='awaiting_official_evidence', numbering_version=6 "
+            "WHERE id=?",
+            (ambiguous["id"],),
+        )
+
+    database.initialize()
+    result = await service.organize_library()
+
+    assert not result["organization_blocked"], result["warnings"]
+    assert result["duplicates_removed"] == 0
+    assert known_path.read_bytes() == b"the established chapter"
+    assert (
+        unknown_path.read_bytes() == b"a different chapter with a wrong provider label"
+    )
+    assert database.get_chapter(known["id"])["downloaded"]
+    pending = database.get_chapter(ambiguous["id"])
+    assert pending["downloaded"]
+    assert pending["canonical_chapter"] is None
+    assert pending["numbering_evidence"]["reason"] == "owned_numbering_collision"
+
+
+@pytest.mark.asyncio
 async def test_organizer_keeps_one_copy_when_two_downloads_share_a_chapter(
     tmp_path: Path,
 ):

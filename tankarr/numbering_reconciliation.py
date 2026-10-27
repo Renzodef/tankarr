@@ -20,7 +20,7 @@ from tankarr.source_numbering import (
     title_number,
 )
 
-NUMBERING_VERSION = 7
+NUMBERING_VERSION = 8
 MIN_CONTENT_ANCHORS = 10
 MIN_TITLE_ANCHORS = 5
 
@@ -106,6 +106,58 @@ def _page_sequences(pages: dict[int, int]) -> dict[tuple[int, ...], int | None]:
             continue
         patterns[pattern] = start if pattern not in patterns else None
     return patterns
+
+
+def _protect_owned_numbering_collisions(
+    releases: list[dict[str, Any]],
+    decisions: dict[str, dict[str, Any]],
+    stable_owned: set[str],
+) -> None:
+    """A raw label cannot prove that two existing files are duplicates.
+
+    Restoring a formerly unmapped file must not let library organization delete
+    the established chapter it happens to collide with. Keep both files until
+    content or an operator proves their correspondence.
+    """
+    owners: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for release in releases:
+        decision = decisions[str(release["id"])]
+        if str(release["id"]) in stable_owned:
+            owners[
+                (str(release.get("language") or ""), decision["canonical_chapter"])
+            ].append(release)
+    for release in releases:
+        decision = decisions[str(release["id"])]
+        if (
+            not release.get("downloaded")
+            or str(release["id"]) in stable_owned
+            or decision["numbering_status"] != "mapped"
+            or decision["numbering_method"]
+            in {"content_sequence_alignment", "operator_correspondence"}
+        ):
+            continue
+        collisions = owners.get(
+            (str(release.get("language") or ""), decision["canonical_chapter"]), []
+        )
+        if not collisions or any(
+            release.get("library_sha256")
+            and release["library_sha256"] == owner.get("library_sha256")
+            for owner in collisions
+        ):
+            continue
+        decisions[str(release["id"])] = _decision(
+            release,
+            None,
+            status="pending_evidence",
+            method="awaiting_content_alignment",
+            confidence=0.0,
+            evidence={
+                "reason": "owned_numbering_collision",
+                "source_chapter": decision["source_chapter"],
+                "claimed_chapter": decision["canonical_chapter"],
+                "owned_releases": sorted(str(owner["id"]) for owner in collisions),
+            },
+        )
 
 
 def _quarantine_ambiguous_tails(
@@ -485,6 +537,7 @@ def reconcile_numbering(
             reference_pages.setdefault(number, pages)
     reference_patterns = _page_sequences(reference_pages)
     if not reference_patterns:
+        _protect_owned_numbering_collisions(chapter_releases, decisions, stable_owned)
         _quarantine_ambiguous_tails(chapter_releases, decisions, stable_owned)
         return decisions
     for source, source_releases in releases_by_source.items():
@@ -557,6 +610,7 @@ def reconcile_numbering(
                     confidence=0.0,
                     evidence={"source": source, "reference_source": reference},
                 )
+    _protect_owned_numbering_collisions(chapter_releases, decisions, stable_owned)
     _quarantine_ambiguous_tails(chapter_releases, decisions, stable_owned)
     return decisions
 
