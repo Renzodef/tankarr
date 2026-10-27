@@ -50,6 +50,7 @@ from tankarr.source_ranking import (
     release_host,
     release_source_keys,
 )
+from tankarr.status_snapshot import install_status_revision_triggers
 from tankarr.torrent_sources import EXTERNAL_IMPORT_PROVIDERS, TORRENT_IMPORT_PROVIDERS
 
 SCHEMA = """
@@ -1529,6 +1530,7 @@ class Database:
                     ("No download source linked yet", previous),
                 )
             install_revision_triggers(connection)
+            install_status_revision_triggers(connection)
             if previous_version < SCHEMA_VERSION:
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
@@ -6508,19 +6510,19 @@ class Database:
                     (SELECT COUNT(*) FROM series_metadata
                      WHERE last_error IS NOT NULL) AS series_errors,
                     (SELECT COUNT(*) FROM volume_metadata v
-                     WHERE EXISTS (SELECT 1 FROM chapter_release c
-                                   WHERE c.manga_id = v.manga_id
-                                     AND c.volume = v.volume_key
-                                     AND (c.release_unit = 'volume'
-                                          OR NULLIF(trim(c.chapter), '') IS NULL)))
+                     WHERE (v.manga_id, v.volume_key) IN (
+                         SELECT manga_id, volume FROM chapter_release
+                         WHERE release_unit = 'volume'
+                            OR NULLIF(trim(chapter), '') IS NULL
+                     ))
                         AS volumes_enriched,
                     (SELECT COUNT(*) FROM volume_metadata v
                      WHERE v.artwork_path IS NOT NULL
-                       AND EXISTS (SELECT 1 FROM chapter_release c
-                                   WHERE c.manga_id = v.manga_id
-                                     AND c.volume = v.volume_key
-                                     AND (c.release_unit = 'volume'
-                                          OR NULLIF(trim(c.chapter), '') IS NULL)))
+                       AND (v.manga_id, v.volume_key) IN (
+                         SELECT manga_id, volume FROM chapter_release
+                         WHERE release_unit = 'volume'
+                            OR NULLIF(trim(chapter), '') IS NULL
+                     ))
                         AS volumes_with_artwork,
                     (SELECT COUNT(*) FROM metadata_source_record) AS source_records,
                     (SELECT COUNT(*) FROM metadata_sync_state

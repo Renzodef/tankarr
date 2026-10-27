@@ -5,6 +5,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -12,6 +13,40 @@ from tankarr.config import Settings
 from tankarr.monitor import ReleaseMonitor
 from tankarr.suwayomi_runtime import SuwayomiDeferred, SuwayomiRuntime
 from tests.test_suwayomi_runtime import fake_installed, python_command
+
+
+@pytest.mark.asyncio
+async def test_monitor_batch_does_not_launch_a_standalone_compaction_jvm(
+    tmp_path, monkeypatch
+):
+    from tankarr import app as app_module
+    from tests.test_performance import provision_library_identity
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        suwayomi_enabled=True,
+        suwayomi_mode="managed",
+        suwayomi_catalogue_cleanup_enabled=False,
+        suwayomi_catalogue_compact=True,
+        suwayomi_idle_shutdown_minutes=2,
+    )
+    provision_library_identity(settings)
+    app = app_module.create_app(settings)
+    runtime = app.state.suwayomi_runtime
+    runtime.database_path.parent.mkdir(parents=True, exist_ok=True)
+    with runtime.database_path.open("wb") as stream:
+        stream.truncate(100 * 1024 * 1024)
+    monkeypatch.setattr(runtime, "installed", lambda: {"path": tmp_path / "server.jar"})
+    execute = Mock()
+    monkeypatch.setattr(app_module, "execute_h2", execute)
+    try:
+        await app.state.monitor.after_suwayomi_batch()
+        execute.assert_not_called()
+        assert not runtime.running
+    finally:
+        await runtime.aclose()
+        app.state.database.close()
 
 
 def _runtime(tmp_path, *, minutes: int = 10) -> SuwayomiRuntime:
