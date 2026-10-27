@@ -1,6 +1,67 @@
 from __future__ import annotations
 
+import pytest
+
 from tankarr.numbering_reconciliation import reconcile_numbering
+
+
+@pytest.mark.parametrize("long_reference", [False, True])
+def test_restoring_owned_unknown_number_does_not_make_it_a_duplicate(long_reference):
+    owned = [
+        {
+            **release(f"owned-{number}", "library", number, pages=number + 20),
+            "downloaded": True,
+            "library_sha256": f"owned-hash-{number}",
+        }
+        for number in (range(1, 15) if long_reference else [8])
+    ]
+    ambiguous = {
+        **release("unknown", "library", 8, pages=15),
+        "downloaded": True,
+        "canonical_chapter": None,
+        "chapter": None,
+        "numbering_status": "pending_evidence",
+        "numbering_method": "awaiting_official_evidence",
+        "numbering_version": 6,
+        "library_sha256": "different-content",
+    }
+    newest = release("newest", "library", 15)
+
+    decisions = reconcile_numbering([*owned, ambiguous, newest])
+
+    assert decisions["unknown"]["canonical_chapter"] is None
+    assert decisions["unknown"]["numbering_status"] == "pending_evidence"
+    assert (
+        decisions["unknown"]["numbering_evidence"]["reason"]
+        == "owned_numbering_collision"
+    )
+    assert decisions["owned-8"]["canonical_chapter"] == "8"
+    assert decisions["newest"]["canonical_chapter"] == "15"
+    repeated = reconcile_numbering(
+        [*owned, {**ambiguous, **decisions["unknown"]}, newest]
+    )
+    assert repeated["unknown"]["canonical_chapter"] is None
+
+
+def test_identical_owned_archive_can_confirm_a_recovered_duplicate_number():
+    owned = {
+        **release("known", "library", 8),
+        "downloaded": True,
+        "library_sha256": "same-archive",
+    }
+    recovered = {
+        **release("unknown", "mirror", 8),
+        "downloaded": True,
+        "canonical_chapter": None,
+        "chapter": None,
+        "numbering_status": "pending_evidence",
+        "numbering_version": 6,
+        "library_sha256": "same-archive",
+    }
+
+    assert (
+        reconcile_numbering([owned, recovered])["unknown"]["canonical_chapter"] == "8"
+    )
 
 
 def release(
