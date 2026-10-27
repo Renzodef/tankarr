@@ -212,6 +212,8 @@ def old_database(context):
             "UPDATE manga_release_source SET last_error='HTTP 503', last_checked_at='2026-08-01T00:00:00+00:00'"
         )
         connection.execute("UPDATE manga SET last_check_error='Monitor failed'")
+        # Version 2 predates the status trigger that reads these newer columns.
+        connection.execute("DROP TRIGGER system_status_alert_rows_manga_update")
         connection.execute("ALTER TABLE manga_release_source DROP COLUMN error_since")
         connection.execute("ALTER TABLE manga DROP COLUMN primary_source_error")
         connection.execute("ALTER TABLE manga DROP COLUMN primary_source_error_since")
