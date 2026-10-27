@@ -72,7 +72,8 @@ class Settings(BaseSettings):
     default_language: str = "en"
     search_languages: str = "en"
     translation_enabled: bool = False
-    translation_source_languages: str = "original"
+    # Legacy setting, ignored by automatic source selection.
+    translation_source_languages: str = "auto"
     translation_processor_url: str | None = None
     translation_processor_token: str | None = Field(default=None, repr=False)
     translation_ai_url: str | None = None

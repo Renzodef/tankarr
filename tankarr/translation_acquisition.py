@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import re
 import shutil
 from pathlib import Path
 
 from tankarr.archive import package_cbz_validated
 from tankarr.chapter_mapping import canonical_number
+from tankarr.importer import ARCHIVE_SUFFIXES
 from tankarr.languages import SUPPORTED_LANGUAGES
 from tankarr.release_kind import classify_release, title_matches_release
-from tankarr.translation_policy import matches_slot, slot_key
+from tankarr.translation_policy import matches_slot, slot_key, source_rank
+
+logger = logging.getLogger(__name__)
 
 
 def release_language(title: str, language: str) -> bool:
@@ -72,11 +76,16 @@ class TranslationAcquisition:
                         message="Translation imported; waiting to apply download retention policy",
                     )
 
-    async def hunt(self, manga_id: str, languages: list[str]) -> int:
+    async def hunt(
+        self,
+        manga_id: str,
+        languages: list[str],
+        *,
+        search_languages: list[str] | None = None,
+    ) -> int:
         manga = self.database.get_manga(manga_id)
         if (
             not self.manager.enabled(manga)
-            or not self.manager.settings.prowlarr_enabled
             or manga.get("edition_book_count") is not None
         ):
             # A differently sized edition requires explicit book/chapter assignment.
@@ -102,49 +111,98 @@ class TranslationAcquisition:
         titles = list(
             dict.fromkeys([manga["title"], *target.get("alternate_titles", [])])
         )[:3]
-        grabbed = 0
-        for language in languages:
-            for title in titles:
-                releases = await self.torrents.prowlarr.search(
-                    title, language=language, limit=50
+        candidates = {}
+        archive = getattr(self.torrents, "internet_archive", None)
+        if archive is not None and archive.enabled:
+            try:
+                # One unrestricted Archive search, not one search per language.
+                releases = await archive.search_translation(manga["title"], limit=50)
+            except Exception as error:  # noqa: BLE001 - Archive must not hide indexer candidates
+                logger.warning(
+                    "Translation Archive search unavailable (%s)", type(error).__name__
                 )
-                for release in sorted(
-                    releases, key=lambda item: -int(item.get("seeders") or 0)
-                ):
-                    if not release_language(
-                        release.get("title", ""), language
-                    ) or not title_matches_release(title, release["title"]):
-                        continue
-                    kind = classify_release(title=release["title"], language=language)
-                    if kind.kind not in {"volume", "pack"}:
-                        continue
-                    volumes = kind.volumes if kind.kind == "pack" else (kind.volume,)
-                    selected = {
-                        f"volume:{canonical_number(volume)}" for volume in volumes
-                    } & missing
-                    if not selected:
-                        continue
-                    if (
-                        release.get("protocol", "torrent") == "torrent"
-                        and int(release.get("seeders") or 0) <= 0
+            else:
+                for release in releases:
+                    if release.get("language") in languages and title_matches_release(
+                        manga["title"], release["title"]
                     ):
+                        candidates[(release["provider"], str(release["id"]))] = dict(
+                            release
+                        )
+        if self.manager.settings.prowlarr_enabled:
+            for language in (
+                search_languages if search_languages is not None else languages[:3]
+            ):
+                if language not in languages:
+                    continue
+                for title in titles:
+                    try:
+                        releases = await self.torrents.prowlarr.search(
+                            title, language=language, limit=50
+                        )
+                    except Exception as error:  # noqa: BLE001 - retain working direct-download candidates
+                        logger.warning(
+                            "Translation indexer search unavailable (%s)",
+                            type(error).__name__,
+                        )
                         continue
-                    request = {
-                        "source_language": language,
-                        "target_language": manga["preferred_language"],
-                        "slots": sorted(selected),
-                    }
-                    provider = str(release.get("provider") or "prowlarr")
-                    self.torrents._release_cache[
-                        (manga_id, provider, str(release["id"]))
-                    ] = (asyncio.get_running_loop().time(), dict(release))
-                    await self.torrents.grab(
-                        manga_id, provider, str(release["id"]), translation=request
-                    )
-                    missing -= selected
-                    grabbed += 1
-                    if not missing or grabbed >= 2:
-                        return grabbed
+                    for release in releases:
+                        if release_language(
+                            release.get("title", ""), language
+                        ) and title_matches_release(title, release["title"]):
+                            candidates[
+                                (
+                                    str(release.get("provider") or "prowlarr"),
+                                    str(release["id"]),
+                                )
+                            ] = {**release, "language": language}
+        grabbed = 0
+        for release in sorted(
+            candidates.values(), key=lambda item: source_rank(item, manga)
+        ):
+            language = release["language"]
+            current = self.database.get_manga(manga_id)
+            if (
+                not self.manager.enabled(current)
+                or current["preferred_language"] != manga["preferred_language"]
+                or current.get("edition_book_count") is not None
+            ):
+                return grabbed
+            self.manager.service.assert_mutations_allowed()
+            kind = classify_release(title=release["title"], language=language)
+            if kind.kind not in {"volume", "pack"}:
+                continue
+            volumes = kind.volumes if kind.kind == "pack" else (kind.volume,)
+            selected = {
+                f"volume:{canonical_number(volume)}" for volume in volumes
+            } & missing
+            selected &= {
+                slot_key(item) for item in self.manager._missing(manga_id)
+            } - self.manager.store.slots(manga_id, manga["preferred_language"])
+            if not selected:
+                continue
+            if (
+                release.get("protocol", "torrent") == "torrent"
+                and int(release.get("seeders") or 0) <= 0
+            ):
+                continue
+            request = {
+                "source_language": language,
+                "target_language": manga["preferred_language"],
+                "slots": sorted(selected),
+            }
+            provider = str(release.get("provider") or "prowlarr")
+            self.torrents._release_cache[(manga_id, provider, str(release["id"]))] = (
+                asyncio.get_running_loop().time(),
+                dict(release),
+            )
+            await self.torrents.grab(
+                manga_id, provider, str(release["id"]), translation=request
+            )
+            missing -= selected
+            grabbed += 1
+            if not missing or grabbed >= 2:
+                return grabbed
         return grabbed
 
     async def stage_torrent(self, job: dict, content: Path) -> dict:
@@ -186,7 +244,7 @@ class TranslationAcquisition:
             if (
                 not path.is_relative_to(scan["root"].resolve())
                 or path.is_symlink()
-                or path.suffix.casefold() not in {".cbz", ".zip"}
+                or path.suffix.casefold() not in ARCHIVE_SUFFIXES
             ):
                 continue
             volume = canonical_number(item.get("volume"))

@@ -2061,7 +2061,6 @@ export function EditModal({
   const [title, setTitle] = useState(manga.title);
   const [language, setLanguage] = useState(manga.preferred_language);
   const [translationEnabled, setTranslationEnabled] = useState(Boolean(manga.translation_enabled));
-  const [translationLanguages, setTranslationLanguages] = useState(manga.translation_source_languages ?? "");
   const [mode, setMode] = useState<MonitorMode>(manga.monitor_mode);
   const [readerMode, setReaderMode] = useState<"automatic" | "manga" | "webtoon">(
     manga.reader_mode_override ?? "automatic",
@@ -2207,7 +2206,6 @@ export function EditModal({
       }
       if (language !== manga.preferred_language) changes.preferred_language = language;
       if (translationEnabled !== Boolean(manga.translation_enabled)) changes.translation_enabled = translationEnabled;
-      if (translationLanguages !== (manga.translation_source_languages ?? "")) changes.translation_source_languages = translationLanguages;
       if (mode !== manga.monitor_mode) changes.monitor_mode = mode;
       if (readerMode !== (manga.reader_mode_override ?? "automatic")) {
         changes.reader_mode = readerMode;
@@ -2560,11 +2558,7 @@ export function EditModal({
           {t("Translate missing books and chapters into the selected language")}
         </label>
         <p className="muted small">{t("Requires translation to be enabled and an AI provider configured in Settings → Translation. Releases in the requested language have priority.")}</p>
-        {translationEnabled ? <>
-          <label htmlFor="series-translation-languages">{t("Source languages, in order")}</label>
-          <input id="series-translation-languages" className="input" value={translationLanguages} disabled={saving} placeholder={t("Use global settings")} onChange={(event) => setTranslationLanguages(event.target.value)} />
-          <p className="muted small">{t("Optional override, for example original,ja,fr. Leave empty to use the global language order.")}</p>
-        </> : null}
+        {translationEnabled ? <p className="muted small">{t("Tankarr automatically selects a source in any supported language. No source-language list is required.")}</p> : null}
       </div>
       <div className="form-row">
         <label>{t("Monitor")}</label>
