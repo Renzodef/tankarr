@@ -65,3 +65,11 @@ def test_the_entrypoint_never_leaves_the_application_as_root():
         text = (ROOT / name).read_text(encoding="utf-8")
         for variable in ("PUID", "PGID", "UMASK"):
             assert variable in text, f"{name} does not offer {variable}"
+
+
+def test_the_image_reaps_orphaned_processes():
+    # Tankarr must not be PID 1: orphans such as a healthcheck curl whose
+    # shell timed out would be re-parented to it and never reaped.
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "        tini \\\n" in dockerfile
+    assert 'ENTRYPOINT ["tini", "--", "docker-entrypoint.sh"]' in dockerfile
