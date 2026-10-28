@@ -34,6 +34,8 @@ AUTO_MATCH_MIN_MARGIN = 0.06
 # counting its chapters is cheaper than asking a human to confirm it.
 COUNT_CORROBORATION_FLOOR = 0.55
 MAX_IDENTITY_QUERIES = 4
+# Chapter lists of one series fetched at the same time during a refresh.
+MAPPING_FETCH_CONCURRENCY = 3
 
 
 def _page_key(url: str) -> tuple[str, str]:
@@ -295,6 +297,12 @@ class ReleaseSourceManager:
         seen = 0
         new_ids: list[str] = []
         statuses: list[dict[str, Any]] = []
+        # Mappings that are fetched, with the slot of their status. Their
+        # chapter lists are fetched a few at a time, then recorded one by one
+        # in mapping order. Fetching every source in turn let one slow
+        # extension hold a long series until the monitor's per-series timeout
+        # cancelled the refresh, before any result was recorded.
+        jobs: list[tuple[dict[str, Any], Provider, str, int]] = []
         for mapping in self.database.list_release_sources(manga_id):
             if errors_only and not str(mapping.get("last_error") or "").strip():
                 continue
@@ -348,104 +356,158 @@ class ReleaseSourceManager:
                     }
                 )
                 continue
-            try:
-                chapters = await provider.list_chapters(
-                    str(mapping["provider_manga_id"]), language
-                )
-                self.database.record_source_circuit(gate_key)
-                refusal = implausible_chapter_list(chapters, target)
-                if refusal:
-                    # The mapping stays (a human may look), its list does not
-                    # enter the index: nothing of it is wanted or downloaded.
-                    self.database.record_release_source_result(
-                        manga_id,
-                        provider_name,
-                        str(mapping["provider_manga_id"]),
-                        error=f"Chapter list refused: {refusal}",
+            jobs.append((mapping, provider, gate_key, len(statuses)))
+            statuses.append({})
+
+        semaphore = asyncio.Semaphore(MAPPING_FETCH_CONCURRENCY)
+
+        async def fetch(
+            mapping: dict[str, Any], provider: Provider
+        ) -> tuple[list[dict[str, Any]] | None, Exception | None]:
+            async with semaphore:
+                try:
+                    chapters = await provider.list_chapters(
+                        str(mapping["provider_manga_id"]), language
                     )
-                    statuses.append(
-                        {
-                            "provider": provider_name,
-                            "label": self._provider_label(provider),
-                            "state": "refused",
-                            "provider_manga_id": mapping["provider_manga_id"],
-                            "title": mapping["title"],
-                            "error": f"Chapter list refused: {refusal}",
-                        }
-                    )
-                    continue
-                result = await asyncio.to_thread(
-                    self.database.upsert_chapters,
-                    manga_id,
-                    chapters,
-                    monitor_new=monitor_new,
-                )
-                self.database.record_release_source_result(
-                    manga_id,
-                    provider_name,
-                    str(mapping["provider_manga_id"]),
-                )
+                except Exception as exc:  # noqa: BLE001 - recorded below
+                    return None, exc
+                return chapters, None
+
+        fetched = await asyncio.gather(
+            *(fetch(mapping, provider) for mapping, provider, _, _ in jobs)
+        )
+        for (mapping, provider, gate_key, slot), (chapters, failure) in zip(
+            jobs, fetched, strict=True
+        ):
+            status, result = await self._record_mapping_fetch(
+                manga_id,
+                mapping,
+                provider,
+                gate_key,
+                target,
+                chapters,
+                failure,
+                monitor_new=monitor_new,
+            )
+            if result is not None:
                 seen += int(result["seen"])
                 new_ids.extend(result["new_chapter_ids"])
-                statuses.append(
-                    {
-                        "provider": provider_name,
-                        "label": self._provider_label(provider),
-                        "state": "matched",
-                        "provider_manga_id": mapping["provider_manga_id"],
-                        "title": mapping["title"],
-                        "releases": int(result["seen"]),
-                        "new": len(result["new_chapter_ids"]),
-                        "confidence": mapping["match_confidence"],
-                        "reason": mapping["match_reason"],
-                    }
-                )
-            except StaleSuwayomiIdentity as exc:
-                # The mapping points into a Suwayomi database that no longer
-                # exists; discovery will map the series again on this one.
-                self.database.delete_release_source(
-                    manga_id, provider_name, str(mapping["provider_manga_id"])
-                )
-                logger.info(
-                    "Dropped stale %s mapping %s for %s: %s",
-                    provider_name,
-                    mapping["provider_manga_id"],
-                    manga_id,
-                    exc,
-                )
-                statuses.append(
-                    {
-                        "provider": provider_name,
-                        "label": self._provider_label(provider),
-                        "state": "stale",
-                        "provider_manga_id": mapping["provider_manga_id"],
-                        "error": str(exc)[:300],
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001 - one source must not hide others
-                if isinstance(
-                    exc, (ProviderRequestError, ProviderUnavailableError, TimeoutError)
-                ):
-                    self.database.record_source_circuit(
-                        gate_key, error=type(exc).__name__, detail=str(exc)
-                    )
-                message = f"{type(exc).__name__}: {exc}"[:1000]
+            statuses[slot] = status
+        return {"seen": seen, "new_chapter_ids": new_ids, "sources": statuses}
+
+    async def _record_mapping_fetch(
+        self,
+        manga_id: str,
+        mapping: dict[str, Any],
+        provider: Provider,
+        gate_key: str,
+        target: dict[str, Any],
+        chapters: list[dict[str, Any]] | None,
+        failure: Exception | None,
+        *,
+        monitor_new: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Record one fetched chapter list, or its failure, and describe it."""
+
+        provider_name = str(mapping["provider"])
+        try:
+            if failure is not None:
+                raise failure
+            chapters = chapters or []
+            self.database.record_source_circuit(gate_key)
+            refusal = implausible_chapter_list(chapters, target)
+            if refusal:
+                # The mapping stays (a human may look), its list does not
+                # enter the index: nothing of it is wanted or downloaded.
                 self.database.record_release_source_result(
                     manga_id,
                     provider_name,
                     str(mapping["provider_manga_id"]),
-                    error=message,
+                    error=f"Chapter list refused: {refusal}",
                 )
-                statuses.append(
+                return (
                     {
                         "provider": provider_name,
                         "label": self._provider_label(provider),
-                        "state": "error",
+                        "state": "refused",
                         "provider_manga_id": mapping["provider_manga_id"],
-                        "error": message,
-                    }
+                        "title": mapping["title"],
+                        "error": f"Chapter list refused: {refusal}",
+                    },
+                    None,
                 )
-        return {"seen": seen, "new_chapter_ids": new_ids, "sources": statuses}
+            result = await asyncio.to_thread(
+                self.database.upsert_chapters,
+                manga_id,
+                chapters,
+                monitor_new=monitor_new,
+            )
+            self.database.record_release_source_result(
+                manga_id,
+                provider_name,
+                str(mapping["provider_manga_id"]),
+            )
+            return (
+                {
+                    "provider": provider_name,
+                    "label": self._provider_label(provider),
+                    "state": "matched",
+                    "provider_manga_id": mapping["provider_manga_id"],
+                    "title": mapping["title"],
+                    "releases": int(result["seen"]),
+                    "new": len(result["new_chapter_ids"]),
+                    "confidence": mapping["match_confidence"],
+                    "reason": mapping["match_reason"],
+                },
+                result,
+            )
+        except StaleSuwayomiIdentity as exc:
+            # The mapping points into a Suwayomi database that no longer
+            # exists; discovery will map the series again on this one.
+            self.database.delete_release_source(
+                manga_id, provider_name, str(mapping["provider_manga_id"])
+            )
+            logger.info(
+                "Dropped stale %s mapping %s for %s: %s",
+                provider_name,
+                mapping["provider_manga_id"],
+                manga_id,
+                exc,
+            )
+            return (
+                {
+                    "provider": provider_name,
+                    "label": self._provider_label(provider),
+                    "state": "stale",
+                    "provider_manga_id": mapping["provider_manga_id"],
+                    "error": str(exc)[:300],
+                },
+                None,
+            )
+        except Exception as exc:  # noqa: BLE001 - one source must not hide others
+            if isinstance(
+                exc, (ProviderRequestError, ProviderUnavailableError, TimeoutError)
+            ):
+                self.database.record_source_circuit(
+                    gate_key, error=type(exc).__name__, detail=str(exc)
+                )
+            message = f"{type(exc).__name__}: {exc}"[:1000]
+            self.database.record_release_source_result(
+                manga_id,
+                provider_name,
+                str(mapping["provider_manga_id"]),
+                error=message,
+            )
+            return (
+                {
+                    "provider": provider_name,
+                    "label": self._provider_label(provider),
+                    "state": "error",
+                    "provider_manga_id": mapping["provider_manga_id"],
+                    "error": message,
+                },
+                None,
+            )
 
     async def _discover_provider(
         self,

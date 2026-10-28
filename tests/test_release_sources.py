@@ -709,3 +709,81 @@ async def test_refreshing_a_mapped_source_refuses_a_list_that_turned_unrelated(
     assert len(database.list_chapters("origin-id", "en")) == 1  # nothing new entered
     mapping = database.list_release_sources("origin-id")[0]
     assert str(mapping["last_error"]).startswith("Chapter list refused")
+
+
+@pytest.mark.asyncio
+async def test_refresh_fetches_mapped_sources_concurrently_and_keeps_their_order(
+    tmp_path: Path,
+):
+    # One slow source must not hold the others: a refresh that fetched them in
+    # turn let a single stalled extension exceed the per-series timeout.
+    import asyncio
+    import time
+
+    class SlowProvider(FakeProvider):
+        name = "suwayomi"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.running = 0
+            self.peak = 0
+
+        async def list_chapters(self, manga_id: str, language: str):
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+            try:
+                await asyncio.sleep(0.3)
+                if manga_id == "suwayomi-broken":
+                    raise TimeoutError("stalled")
+                return await super().list_chapters(manga_id, language)
+            finally:
+                self.running -= 1
+
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    seed(database)
+    provider = SlowProvider(
+        [],
+        {
+            "suwayomi-a": [chapter("suwayomi-a-1", "1")],
+            "suwayomi-c": [chapter("suwayomi-c-2", "2")],
+        },
+    )
+    for provider_manga_id, source in (
+        ("suwayomi-a", "Alpha (EN)"),
+        ("suwayomi-broken", "Beta (EN)"),
+        ("suwayomi-c", "Gamma (EN)"),
+    ):
+        database.upsert_release_source(
+            "origin-id",
+            provider="suwayomi",
+            provider_manga_id=provider_manga_id,
+            title="V.B. Rose",
+            source_url=None,
+            source_name=source,
+            language="en",
+            match_confidence=1.0,
+            match_reason="test",
+        )
+    manager = ReleaseSourceManager(database, {"suwayomi": provider})
+
+    started = time.monotonic()
+    result = await manager.refresh_mappings("origin-id", monitor_new=True)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.8
+    assert provider.peak == 3
+    assert [
+        (item["provider_manga_id"], item["state"]) for item in result["sources"]
+    ] == [
+        ("suwayomi-a", "matched"),
+        ("suwayomi-broken", "error"),
+        ("suwayomi-c", "matched"),
+    ]
+    assert result["seen"] == 2
+    errors = {
+        item["provider_manga_id"]: item["last_error"]
+        for item in database.list_release_sources("origin-id")
+    }
+    assert errors["suwayomi-broken"].startswith("TimeoutError")
+    assert not errors["suwayomi-a"] and not errors["suwayomi-c"]
