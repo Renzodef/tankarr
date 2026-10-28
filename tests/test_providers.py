@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -97,3 +98,37 @@ async def test_provider_http_gives_up_after_max_attempts():
             await client.get_json("https://api.example.com/data")
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_http_can_give_up_after_the_first_timeout():
+    # A slow request is not sent again: the server is still busy with it.
+    route = respx.post("https://api.example.com/slow")
+    route.side_effect = httpx.ReadTimeout("slow")
+    client = ProviderHTTP(requests_per_second=1000, backoff_base_seconds=0.01)
+    try:
+        with pytest.raises(ProviderUnavailableError, match="ReadTimeout"):
+            await client.request(
+                "POST",
+                "https://api.example.com/slow",
+                timeout=5.0,
+                retry_timeouts=False,
+            )
+    finally:
+        await client.aclose()
+    assert route.call_count == 1
+    assert route.calls[0].request.extensions["timeout"]["read"] == 5.0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_http_retries_timeouts_by_default():
+    route = respx.get("https://api.example.com/data")
+    route.side_effect = [httpx.ReadTimeout("slow"), Response(200, json={"ok": True})]
+    client = ProviderHTTP(requests_per_second=1000, backoff_base_seconds=0.01)
+    try:
+        assert await client.get_json("https://api.example.com/data") == {"ok": True}
+    finally:
+        await client.aclose()
+    assert route.call_count == 2

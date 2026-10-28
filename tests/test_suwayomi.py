@@ -1022,3 +1022,33 @@ async def test_corrupt_page_retries_only_that_page(tmp_path, recovers):
         assert second.call_count == 1
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_chapter_list_fetch_waits_longer_but_is_sent_only_once(monkeypatch):
+
+    client = provider()
+    calls: list[tuple[bool, dict]] = []
+
+    async def graphql(_query, variables, **options):
+        calls.append((variables["input"]["fetchChapters"], options))
+        return {"fetchMangaAndChapters": None}
+
+    monkeypatch.setattr(client, "_graphql", graphql)
+    try:
+        with pytest.raises(ProviderRequestError):
+            await client.list_chapters("suwayomi-5", "en")
+        with pytest.raises(ProviderRequestError):
+            await client.get_manga("suwayomi-5")
+    finally:
+        await client.aclose()
+
+    assert calls[0] == (
+        True,
+        {
+            "start": True,
+            "timeout": suwayomi_provider.CHAPTER_FETCH_TIMEOUT_SECONDS,
+            "retry_timeouts": False,
+        },
+    )
+    assert calls[1] == (False, {"start": True})

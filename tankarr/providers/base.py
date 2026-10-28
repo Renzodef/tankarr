@@ -158,11 +158,24 @@ class ProviderHTTP:
         json: Any = None,
         data: Any = None,
         priority: int = 20,
+        timeout: float | None = None,
+        retry_timeouts: bool = True,
     ) -> httpx.Response:
+        """Send one request with rate limiting and retries.
+
+        ``timeout`` overrides the client timeout for this request only.
+        ``retry_timeouts=False`` gives up after the first timeout: for a
+        request that asks a server to do slow work, sending it again only
+        starts the same slow work over while the first copy still runs.
+        """
+
         last_error: str = "no attempts were made"
         last_status: int | None = None
         retry_statuses: list[int] = []
         total_rate_wait = 0.0
+        extra: dict[str, Any] = {}
+        if timeout is not None:
+            extra["timeout"] = httpx.Timeout(timeout)
         for attempt in range(self.max_attempts):
             total_rate_wait += await self.limiter.acquire(priority)
             started = asyncio.get_running_loop().time()
@@ -174,9 +187,12 @@ class ProviderHTTP:
                     headers=headers,
                     json=json,
                     data=data,
+                    **extra,
                 )
             except httpx.TransportError as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
+                if not retry_timeouts and isinstance(exc, httpx.TimeoutException):
+                    break
                 if attempt + 1 < self.max_attempts:
                     await asyncio.sleep(self._retry_delay(attempt, None))
                 continue

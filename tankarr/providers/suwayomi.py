@@ -136,6 +136,12 @@ IMAGE_SUFFIXES = {
 # semaphore remains the hard concurrency bound; this limiter only prevents a
 # burst from overwhelming the JVM when more than one operation shares it.
 LOCAL_REQUESTS_PER_SECOND = 24.0
+# Fetching a chapter list makes Suwayomi read the whole list from the remote
+# site first: a long series on a slow or challenged extension can need close to
+# a minute. The request is sent once with a longer timeout instead of being
+# repeated: after a timeout the server is still busy with the first copy, and
+# four 30 s attempts used to hold one series for over two minutes.
+CHAPTER_FETCH_TIMEOUT_SECONDS = 60.0
 PRIORITY_PAGE = 0
 PRIORITY_PREPARE = 5
 PRIORITY_UI = 10
@@ -295,8 +301,12 @@ class SuwayomiProvider(Provider):
         headers: dict[str, str] | None = None,
         json: Any = None,
         priority: int = PRIORITY_REFRESH,
+        **options: Any,
     ) -> httpx.Response:
-        """Retry once with a native simple-login session when required."""
+        """Retry once with a native simple-login session when required.
+
+        ``options`` (``timeout``, ``retry_timeouts``) reach ProviderHTTP.
+        """
 
         generation = self._session_generation
         try:
@@ -307,6 +317,7 @@ class SuwayomiProvider(Provider):
                 headers=headers,
                 json=json,
                 priority=priority,
+                **options,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 401:
@@ -319,6 +330,7 @@ class SuwayomiProvider(Provider):
             headers=headers,
             json=json,
             priority=priority,
+            **options,
         )
 
     def _engine(self, *, start: bool = True) -> AbstractAsyncContextManager[None]:
@@ -343,9 +355,12 @@ class SuwayomiProvider(Provider):
         *,
         priority: int | None = None,
         start: bool = True,
+        **options: Any,
     ) -> dict[str, Any]:
         async with self._engine(start=start):
-            return await self._graphql_request(query, variables, priority=priority)
+            return await self._graphql_request(
+                query, variables, priority=priority, **options
+            )
 
     async def _graphql_request(
         self,
@@ -353,6 +368,7 @@ class SuwayomiProvider(Provider):
         variables: dict[str, Any],
         *,
         priority: int | None = None,
+        **options: Any,
     ) -> dict[str, Any]:
         if priority is None:
             if query == PAGES_MUTATION:
@@ -367,6 +383,7 @@ class SuwayomiProvider(Provider):
             urljoin(self.base_url, "api/graphql"),
             json={"query": query, "variables": variables},
             priority=priority,
+            **options,
         )
         payload = self._graphql_payload(response)
         errors = payload.get("errors") or []
@@ -377,6 +394,7 @@ class SuwayomiProvider(Provider):
                 urljoin(self.base_url, "api/graphql"),
                 json={"query": query, "variables": variables},
                 priority=priority,
+                **options,
             )
             payload = self._graphql_payload(response)
             errors = payload.get("errors") or []
@@ -675,6 +693,11 @@ class SuwayomiProvider(Provider):
         self, manga_id: str, *, fetch_chapters: bool, start: bool = True
     ) -> dict[str, Any]:
         identifier = self._numeric_id(manga_id, "manga")
+        options: dict[str, Any] = (
+            {"timeout": CHAPTER_FETCH_TIMEOUT_SECONDS, "retry_timeouts": False}
+            if fetch_chapters
+            else {}
+        )
         data = await self._graphql(
             DETAIL_MUTATION,
             {
@@ -685,6 +708,7 @@ class SuwayomiProvider(Provider):
                 }
             },
             start=start,
+            **options,
         )
         payload = data.get("fetchMangaAndChapters")
         if not isinstance(payload, dict) or not isinstance(payload.get("manga"), dict):
