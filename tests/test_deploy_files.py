@@ -70,6 +70,15 @@ def test_the_entrypoint_never_leaves_the_application_as_root():
 def test_the_image_reaps_orphaned_processes():
     # Tankarr must not be PID 1: orphans such as a healthcheck curl whose
     # shell timed out would be re-parented to it and never reaped.
+    # tini is started by the entrypoint after it drops root, so PID 1 never
+    # runs as root either.
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "        tini \\\n" in dockerfile
-    assert 'ENTRYPOINT ["tini", "--", "docker-entrypoint.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["docker-entrypoint.sh"]' in dockerfile
+    entrypoint = (ROOT / "docker-entrypoint.sh").read_text(encoding="utf-8")
+    assert (
+        'setpriv --reuid=tankarr --regid=tankarr --init-groups tini -- "$@"'
+        in entrypoint
+    )
+    assert 'exec tini -- "$@"' in entrypoint
+    assert 'exec "$@"' not in entrypoint

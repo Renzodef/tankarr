@@ -3,6 +3,8 @@
 # starts as root: the convention of the LinuxServer and hotio images the other
 # *arr applications ship with. A container started with `--user` (or `user:`
 # in Compose) never reaches the root branch and simply runs as that user.
+# Either way the application runs under tini, which stays PID 1 (without
+# root) and reaps orphaned processes such as timed-out healthcheck curls.
 set -eu
 
 umask "${UMASK:-022}"
@@ -31,7 +33,7 @@ if [ "$(id -u)" = "0" ]; then
         fi
     done
     export HOME=/home/tankarr
-    exec setpriv --reuid=tankarr --regid=tankarr --init-groups "$@"
+    exec setpriv --reuid=tankarr --regid=tankarr --init-groups tini -- "$@"
 fi
 
 # Started with --user: the uid may not exist in /etc/passwd, and HOME then
@@ -39,4 +41,4 @@ fi
 if [ ! -w "${HOME:-/}" ] && [ -w /config ]; then
     export HOME=/config
 fi
-exec "$@"
+exec tini -- "$@"
