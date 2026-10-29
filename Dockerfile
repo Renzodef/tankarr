@@ -42,6 +42,7 @@ RUN apt-get update \
         tesseract-ocr-eng \
         tesseract-ocr-osd \
         tesseract-ocr-all \
+        tini \
         unar \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 tankarr \
@@ -84,5 +85,9 @@ EXPOSE 8787
 VOLUME ["/config", "/library"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8787/api/ready || exit 1
+# The entrypoint hands PID 1 to tini (after dropping root), which reaps
+# orphaned processes. Without it Tankarr is PID 1: a healthcheck `curl` that
+# outlives its timed-out shell is re-parented to Tankarr, which never waits
+# for it, and stays a zombie.
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["tankarr"]
