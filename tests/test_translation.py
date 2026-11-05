@@ -17,7 +17,11 @@ from tankarr.database import Database
 from tankarr.service import TankarrService
 from tankarr.settings_store import SECRET_PLACEHOLDER, settings_view, update_settings
 from tankarr.translation import TranslationManager
-from tankarr.translation_policy import fallback_languages, normalize_fallback_languages
+from tankarr.translation_policy import (
+    fallback_languages,
+    normalize_fallback_languages,
+    source_mapping_language,
+)
 from tests.test_deletion import (
     RecordingKomga,
     chapter,
@@ -88,6 +92,14 @@ def output_archive(manager, job, tmp_path, **changes):
         archive.write(page, "00001.png")
         archive.writestr("translation.json", json.dumps(receipt))
     return output
+
+
+def test_source_mapping_prefers_the_series_language():
+    assert source_mapping_language("en", ["zh", "en"], translation_enabled=True) == "en"
+    assert source_mapping_language("en", [], translation_enabled=False) == "en"
+    assert source_mapping_language("en", ["zh"], translation_enabled=True) == "zh"
+    with pytest.raises(ValueError, match="series language"):
+        source_mapping_language("en", ["zh"], translation_enabled=False)
 
 
 def test_automatic_sources_ignore_legacy_lists_and_accept_unknown_original():
@@ -287,6 +299,63 @@ async def test_local_ocr_provider_and_library_import(translation):
     assert imported["language"] == "it"
     assert imported["provider"] == "translated"
     assert not manager.directory(job).exists()
+
+
+@pytest.mark.asyncio
+async def test_preferred_release_blocks_translation_of_another_language(
+    translation, monkeypatch
+):
+    manager, database, service, _source = translation
+    database.upsert_chapters(
+        "manga-1",
+        [
+            {
+                **chapter("foreign-zh", "1", language="zh"),
+                "provider": "suwayomi",
+            }
+        ],
+        monitor_new=False,
+    )
+    usable = {
+        "chapter": "1",
+        "volume": "1",
+        "expected": False,
+        "provider": "suwayomi",
+    }
+    monkeypatch.setattr(
+        service,
+        "list_wanted",
+        lambda: [{"manga": {"id": "manga-1"}, "chapters": [usable]}],
+    )
+    assert await manager.queue_missing("manga-1") == 0
+    assert manager.store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_missing_preferred_release_queues_any_other_language(
+    translation, monkeypatch
+):
+    manager, database, _service, _source = translation
+    database.upsert_chapters(
+        "manga-1",
+        [
+            {
+                **chapter("foreign-zh", "2", language="zh"),
+                "provider": "suwayomi",
+            }
+        ],
+        monitor_new=False,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_missing",
+        lambda _id: [{"chapter": "2", "volume": "1", "expected": True}],
+    )
+    assert await manager.queue_missing("manga-1") == 1
+    job = manager.store.list()[0]
+    assert job["source"]["language"] == "zh"
+    assert job["target_language"] == "en"
+    manager.release_sources.discover_and_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio

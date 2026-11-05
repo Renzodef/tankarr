@@ -75,7 +75,7 @@ from tankarr.http import async_client
 from tankarr.importer import LanguageReviewRequired, LibraryImporter
 from tankarr.internet_archive import InternetArchiveClient
 from tankarr.komga import KomgaClient
-from tankarr.languages import normalize_language_code
+from tankarr.languages import SUPPORTED_LANGUAGE_CODES, normalize_language_code
 from tankarr.library_reader import ReaderIndependentLibrary
 from tankarr.library_snapshot import changed_inputs, manga_revisions
 from tankarr.logs import (
@@ -188,6 +188,7 @@ from tankarr.suwayomi_runtime import (
 )
 from tankarr.tasks import ScheduledTask, TaskBusy, TaskNotRunnable, TaskRegistry
 from tankarr.torrents import ORPHAN_SWEEP_INTERVAL_SECONDS, TorrentManager
+from tankarr.translation_policy import source_mapping_language
 from tankarr.updates import UpdateChecker
 from tankarr.url_base import UrlBaseMiddleware
 from tankarr.verified_books import register_verified_book_routes
@@ -538,7 +539,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     service.set_komga_refresh_post_scan(lambda: metadata.sync_all_to_komga(force=False))
     worker = DownloadWorker(database, service)
-    release_sources = ReleaseSourceManager(database, providers)
+    release_sources = ReleaseSourceManager(
+        database,
+        providers,
+        translation_enabled=lambda: settings.translation_enabled,
+    )
     from tankarr.translation import TranslationManager
 
     translations = TranslationManager(settings, database, service, release_sources)
@@ -3465,15 +3470,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=404,
                 detail=f"Unknown or disabled provider: {request.provider}",
             )
-        language = str(manga["preferred_language"])
-        if not adapter.supports_language(language):
+        preferred = str(manga["preferred_language"])
+        translation_on = bool(settings.translation_enabled)
+        if not translation_on and not adapter.supports_language(preferred):
             raise HTTPException(409, "Source does not support the series language")
         try:
             detail = await adapter.get_manga(request.provider_manga_id)
-            if (
-                detail.get("available_languages")
-                and language not in detail["available_languages"]
-            ):
+            try:
+                language = source_mapping_language(
+                    preferred,
+                    list(detail.get("available_languages") or []),
+                    translation_enabled=translation_on,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    409, "Source does not support the series language"
+                ) from exc
+            if not adapter.supports_language(language):
                 raise HTTPException(409, "Source does not support the series language")
             chapters = await adapter.list_chapters(request.provider_manga_id, language)
         except HTTPException:
@@ -3509,12 +3522,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if request.prefer:
             source_id = str(detail.get("source_id") or "")
-            preferred = (
+            preferred_source = (
                 f"{request.provider}:{source_id}" if source_id else request.provider
             )
-            database.update_manga(manga_id, {"preferred_source_key": preferred})
+            database.update_manga(manga_id, {"preferred_source_key": preferred_source})
             await service.rerank_queued_jobs(manga_id)
         queued = await monitor.queue_missing(manga_id) if monitor_new else 0
+        # Preferred-language downloads are queued above. A source in another
+        # language fills only the slots those downloads cannot.
+        if translation_on and language != preferred.casefold():
+            queued += await translations.queue_missing(manga_id)
         return {
             "mapping": mapping,
             "releases": int(inserted["seen"]),
@@ -3530,26 +3547,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             manga = database.get_manga(manga_id)
         except KeyError:
             raise HTTPException(404, "Manga not found") from None
-        language = str(manga["preferred_language"])
+        preferred = str(manga["preferred_language"]).casefold()
+        translation_on = bool(settings.translation_enabled)
         candidates = []
         errors = []
+        seen: set[tuple[str, str]] = set()
+
+        async def search_languages(adapter) -> list[str]:
+            languages = [preferred]
+            catalog = getattr(adapter, "source_catalog", None)
+            if not translation_on or catalog is None:
+                return languages
+            try:
+                async with asyncio.timeout(15):
+                    listed = await catalog(tuple(SUPPORTED_LANGUAGE_CODES))
+            except Exception:  # noqa: BLE001 - the series language search still runs
+                return languages
+            for item in listed:
+                if not item.get("enabled", True):
+                    continue
+                code = str(item.get("language") or "").strip().casefold()
+                if code and code not in languages and adapter.supports_language(code):
+                    languages.append(code)
+            return languages
+
         for name, adapter in providers.items():
             if name in {
                 "local",
                 str(manga.get("provider") or ""),
-            } or not adapter.supports_language(language):
+            } or not adapter.supports_language(preferred):
                 continue
             try:
+                languages = await search_languages(adapter)
                 async with asyncio.timeout(60):
-                    found, _ = await adapter.search_with_diagnostics(
-                        q.strip(), language, limit=20
-                    )
+                    found = []
+                    for search_language in languages:
+                        try:
+                            batch, _ = await adapter.search_with_diagnostics(
+                                q.strip(), search_language, limit=20
+                            )
+                        except Exception:  # noqa: BLE001 - one language must not hide the others
+                            if search_language == preferred:
+                                raise
+                            continue
+                        found.extend(batch)
                 for item in found:
-                    if (
-                        item.get("available_languages")
-                        and language not in item["available_languages"]
-                    ):
+                    offered = [
+                        str(code).strip().casefold()
+                        for code in item.get("available_languages") or []
+                        if str(code).strip()
+                    ]
+                    if offered and preferred not in offered:
+                        if not translation_on:
+                            continue
+                        candidate_language = offered[0]
+                    else:
+                        candidate_language = preferred
+                    identity = (name, str(item["id"]))
+                    if identity in seen:
                         continue
+                    seen.add(identity)
                     candidates.append(
                         {
                             "provider": name,
@@ -3557,7 +3614,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "title": str(item["title"]),
                             "source_name": item.get("source_name") or name,
                             "source_id": item.get("source_id"),
-                            "language": language,
+                            "language": candidate_language,
                         }
                     )
             except TimeoutError:

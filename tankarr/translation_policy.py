@@ -45,6 +45,34 @@ def fallback_languages(manga: dict, default: str = "auto") -> list[str]:
     )
 
 
+def source_mapping_language(
+    preferred: str,
+    offered: list[str] | None,
+    *,
+    translation_enabled: bool,
+) -> str:
+    """Language stored for one manually mapped download source.
+
+    The series language wins when the source offers it. Another language is
+    accepted only while global translation is on, so those chapters can be
+    translated into the series language.
+    """
+
+    preferred_code = str(preferred or "").strip().casefold()
+    if not preferred_code:
+        raise ValueError("Source does not support the series language")
+    languages: list[str] = []
+    for item in offered or []:
+        code = str(item or "").strip().casefold()
+        if code and code not in languages:
+            languages.append(code)
+    if not languages or preferred_code in languages:
+        return preferred_code
+    if translation_enabled:
+        return languages[0]
+    raise ValueError("Source does not support the series language")
+
+
 def processor_languages(manga: dict, settings) -> list[str]:
     languages = fallback_languages(manga)
     if not settings.translation_processor_url:
