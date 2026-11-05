@@ -29,6 +29,7 @@ from tankarr.providers.base import (
 )
 from tankarr.source_circuit import circuit_delay_seconds, http_overload
 from tankarr.source_numbering import renumber_from_titles
+from tankarr.unit_strategy import whole_book_number
 
 logger = logging.getLogger(__name__)
 
@@ -983,23 +984,11 @@ class SuwayomiProvider(Provider):
 
     _VOLUME_IN_NAME = re.compile(r"\b(?:vol(?:ume)?\.?|v\.)\s*0*(\d+)\b", re.IGNORECASE)
     # A chapter entry whose name is nothing but a volume marker ("Volume 21",
-    # "Vol. 3", "Volume 2: The Storm") is a whole book that the source lists
-    # in its chapter list, numbered by its running index. Weeb Central does
-    # this for Nana: 21 "chapters" of 180-280 pages that are the 21 volumes.
-    # Taking the index as a chapter number puts a book in a chapter slot and
-    # leaves the real chapters to be downloaded again from another source.
-    # French aggregators add the edition: "Volume 12 VF". A language tag after
-    # the number does not make the entry a chapter.
-    _WHOLE_BOOK_NAME = re.compile(
-        r"^\s*(?:vol(?:ume)?\.?|tome|book)\s*0*(\d+)"
-        r"(?:\s*[\[(]?\s*(?:vf|vostfr|vo|va|vus|fr|en|eng|es|esp|it|ita|raw|hd)"
-        r"\s*[\])]?)?"
-        r"\s*(?:[:\-\u2013\u2014|].*)?$",
-        re.IGNORECASE,
-    )
-    _CHAPTER_MARKER = re.compile(
-        r"\b(?:chapter|chap\.?|ch\.?|episode|ep\.?)\s*\d", re.IGNORECASE
-    )
+    # "Vol. 3", "第3卷") is a whole book that the source lists in its chapter
+    # list, numbered by its running index. Weeb Central does this for Nana:
+    # 21 "chapters" of 180-280 pages that are the 21 volumes. Taking the
+    # index as a chapter number puts a book in a chapter slot and leaves the
+    # real chapters to be downloaded again from another source.
 
     def _parse_chapter(
         self,
@@ -1016,9 +1005,9 @@ class SuwayomiProvider(Provider):
         name = str(item.get("name") or "")
         volume_match = self._VOLUME_IN_NAME.search(name)
         source_chapter = self._number(item.get("chapterNumber"))
-        whole_book = self._WHOLE_BOOK_NAME.match(name)
-        if whole_book is not None and not self._CHAPTER_MARKER.search(name):
-            volume: str | None = str(int(whole_book.group(1)))
+        book_number = whole_book_number(name)
+        if book_number is not None:
+            volume: str | None = str(book_number)
             chapter: str | None = None
             release_unit = "volume"
         else:

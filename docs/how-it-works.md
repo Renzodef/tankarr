@@ -178,6 +178,22 @@ books can complete a finished work, **Preferred unit** in
 **Settings → Sources → Download sources** decides; the default is
 **Whole volumes (books)**.
 
+**Follow volumes when chapters cannot finish the series**
+(`TANKARR_AUTO_UNIT_STRATEGY`, on by default) makes that choice before a grab
+is queued. It switches a series to books only when three things are true: the
+catalogue (or the edition count you set) names how many books the work has,
+mapped sources offer every one of those books, and chapter releases do not
+offer every chapter. The series language is tried first. A book in another
+language counts only while translation fallback is on, and only when the
+series language cannot finish that unit. A title that is only a volume
+(`Volume 3`, `第3卷`) is a book even when the source numbered it as a chapter.
+The switch stores its reason on the series, leaves chapter releases that have
+no file unmonitored, and cancels queued chapter grabs. Files already in the
+library stay. A unit you set on the series is not changed, and a webtoon stays
+on episodes. A finished work whose books are already on disk follows books
+even if chapter releases also exist, so Wanted stops asking for chapter files
+that were never downloaded.
+
 ### Which chapter is in which book
 
 Book membership comes from evidence: the sources' own volume tags, a map you
