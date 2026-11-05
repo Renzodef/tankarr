@@ -114,8 +114,50 @@ def test_source_picker_rejects_a_source_in_another_language(tmp_path):
             },
         )
         assert response.status_code == 409
+        assert (
+            response.json()["detail"] == "Source does not support the series language"
+        )
         assert not app.state.database.list_release_sources("origin-id")
         assert app.state.database.get_manga("origin-id")["preferred_source_key"] is None
+
+
+def test_translation_maps_another_language_and_keeps_the_series_language(tmp_path):
+    app = app_at(tmp_path)
+    provider = app.state.providers["suwayomi"]
+    provider.languages = ["zh"]
+    provider.supports_language = lambda language: bool(str(language).strip())
+    app.state.settings.translation_enabled = True
+    app.state.settings.translation_ai_url = "https://ai.example.test/v1"
+    app.state.settings.translation_ai_model = "example-model"
+    app.state.settings.translation_ai_api_key = "ai-test-secret"
+    with TestClient(app) as client:
+        found = client.get("/api/manga/origin-id/release-source-candidates?q=Fixture")
+        assert found.status_code == 200
+        assert found.json()["candidates"][0]["language"] == "zh"
+        mapped = client.post(
+            "/api/manga/origin-id/release-sources",
+            json={"provider": "suwayomi", "provider_manga_id": "source-entry"},
+        )
+        assert mapped.status_code == 201, mapped.text
+    database = app.state.database
+    assert database.get_manga("origin-id")["preferred_language"] == "en"
+    assert database.list_release_sources("origin-id")[0]["language"] == "zh"
+    stored = database.list_all_chapters("origin-id")
+    assert stored
+    assert {chapter["language"] for chapter in stored} == {"zh"}
+
+
+def test_translation_still_maps_a_series_language_source(tmp_path):
+    app = app_at(tmp_path)
+    app.state.providers["suwayomi"].languages = ["en", "zh"]
+    app.state.settings.translation_enabled = True
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/manga/origin-id/release-sources",
+            json={"provider": "suwayomi", "provider_manga_id": "source-entry"},
+        )
+        assert response.status_code == 201, response.text
+    assert app.state.database.list_release_sources("origin-id")[0]["language"] == "en"
 
 
 @pytest.mark.parametrize(

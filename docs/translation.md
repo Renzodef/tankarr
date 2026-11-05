@@ -9,9 +9,10 @@ Translation to apply it to all monitored series with missing books or chapters,
 including series added later. There is no per-series translation switch. The
 series language remains the destination language. Source languages are selected
 automatically: any language supported by the processing backend can supply a
-missing book or chapter. There is no language list to maintain, globally or per
-series. Old per-series translation switches and saved language lists are retained
-for compatibility but ignored; existing jobs and files are preserved.
+missing book or chapter. There is no language list to maintain. The deprecated
+global source-language setting is kept for old clients and does not restrict
+acquisition. Per-series translation switches and language lists are removed on
+upgrade; existing jobs and files are preserved.
 
 Tankarr considers known sources in every language on every pass. It prefers an
 already downloaded source, then the original language, identity match,
@@ -51,10 +52,18 @@ clear the URL to return to local processing. The processor token authenticates
 Tankarr to that service and is separate from the AI provider key. Never enter
 your Tankarr login in these fields.
 
-Tankarr searches normal sources first. Monitored missing slots without an
-obtainable native release can use a verified foreign source with matching chapter
-or book numbering. Existing identity and numbering checks apply to discovery;
-foreign releases are not marked for ordinary downloads. Up to ten translations
+Tankarr searches the series language first. A release in that language is
+downloaded as usual. When no usable release in the series language exists for a
+missing chapter or book, and translation is enabled, Tankarr may take a source
+in any other language and translate it into the series language. A Suwayomi
+source in another language can be mapped for that purpose. When translation is
+off, a source that does not offer the series language is still refused, and
+nothing is acquired from another language.
+
+Monitored missing slots without an obtainable native release can use a verified
+foreign source with matching chapter or book numbering. Existing identity and
+numbering checks apply to discovery; foreign releases are not marked for
+ordinary downloads. Up to ten translations
 are queued per series per Wanted pass, with at most two external processor jobs
 outstanding or one local job running.
 The original archive stays in staging. Only a validated translation enters the

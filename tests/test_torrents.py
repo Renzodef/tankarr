@@ -1332,11 +1332,12 @@ async def test_foreign_grab_uses_global_translation_setting(tmp_path: Path):
         item,
     )
     request = {"source_language": "ja", "target_language": "en", "slots": ["volume:1"]}
-    assert not database.get_manga("kamui")["translation_enabled"]
+    stored = database.get_manga("kamui")
+    assert "translation_enabled" not in stored
+    assert "translation_source_languages" not in stored
     grabbed = await manager.grab("kamui", "prowlarr", item["id"], translation=request)
     assert qbit.added
     assert grabbed["language_evidence"]["translation_request"] == request
-    database.update_manga("kamui", {"translation_enabled": True})
     service.settings.translation_enabled = False
     with pytest.raises(ValueError, match="Translation fallback is disabled"):
         await manager.grab("kamui", "prowlarr", item["id"], translation=request)

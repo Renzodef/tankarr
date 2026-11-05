@@ -25,11 +25,13 @@ def normalize_fallback_languages(raw: str) -> str:
 
 
 def fallback_languages(manga: dict, default: str = "auto") -> list[str]:
-    """All known source languages, ranked internally, never an operator list.
+    """Every supported source language except the series' preferred one.
 
-    ``default`` and the old per-series field are accepted for compatibility but
-    cannot exclude a usable edition. Discovery rotates through this order in
-    bounded batches; known candidates are considered in every pass.
+    Ranked by the original language, then languages the catalogue already
+    lists. ``default`` is retained for callers and does not narrow the set.
+    A language list on the series record is not consulted. Discovery rotates
+    through this order in bounded batches; known candidates are considered
+    in every pass.
     """
     original = str(manga.get("original_language") or "").casefold()
     available = set(manga.get("available_languages") or [])
@@ -41,6 +43,34 @@ def fallback_languages(manga: dict, default: str = "auto") -> list[str]:
             language,
         ),
     )
+
+
+def source_mapping_language(
+    preferred: str,
+    offered: list[str] | None,
+    *,
+    translation_enabled: bool,
+) -> str:
+    """Language stored for one manually mapped download source.
+
+    The series language wins when the source offers it. Another language is
+    accepted only while global translation is on, so those chapters can be
+    translated into the series language.
+    """
+
+    preferred_code = str(preferred or "").strip().casefold()
+    if not preferred_code:
+        raise ValueError("Source does not support the series language")
+    languages: list[str] = []
+    for item in offered or []:
+        code = str(item or "").strip().casefold()
+        if code and code not in languages:
+            languages.append(code)
+    if not languages or preferred_code in languages:
+        return preferred_code
+    if translation_enabled:
+        return languages[0]
+    raise ValueError("Source does not support the series language")
 
 
 def processor_languages(manga: dict, settings) -> list[str]:

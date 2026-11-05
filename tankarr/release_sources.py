@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -211,9 +212,16 @@ class ReleaseSourceManager:
     Tankarr series and remains refreshable by the normal monitoring cycle.
     """
 
-    def __init__(self, database: Database, providers: dict[str, Provider]):
+    def __init__(
+        self,
+        database: Database,
+        providers: dict[str, Provider],
+        *,
+        translation_enabled: Callable[[], bool] | None = None,
+    ):
         self.database = database
         self.providers = providers
+        self._translation_enabled = translation_enabled or (lambda: False)
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -302,7 +310,8 @@ class ReleaseSourceManager:
         # in mapping order. Fetching every source in turn let one slow
         # extension hold a long series until the monitor's per-series timeout
         # cancelled the refresh, before any result was recorded.
-        jobs: list[tuple[dict[str, Any], Provider, str, int]] = []
+        jobs: list[tuple[dict[str, Any], Provider, str, int, str, bool]] = []
+        requested = language.strip().casefold()
         for mapping in self.database.list_release_sources(manga_id):
             if errors_only and not str(mapping.get("last_error") or "").strip():
                 continue
@@ -320,9 +329,19 @@ class ReleaseSourceManager:
                 )
                 continue
             mapping_language = str(mapping.get("language") or "").strip().casefold()
+            foreign = bool(mapping_language and mapping_language != requested)
+            # A mapped source in another language is a translation input. It is
+            # refreshed in its own language only while global translation is on,
+            # and its chapters are not queued as native downloads.
+            if foreign and self._translation_enabled():
+                fetch_language = mapping_language
+                fetch_monitor_new = False
+            else:
+                fetch_language = language
+                fetch_monitor_new = monitor_new
             if (
-                mapping_language and mapping_language != language.strip().casefold()
-            ) or not provider.supports_language(language):
+                foreign and not self._translation_enabled()
+            ) or not provider.supports_language(fetch_language):
                 # An unavailable language says nothing about source health.
                 # In particular, adapters may return [] without making a
                 # request when they do not support the selected language.
@@ -356,29 +375,46 @@ class ReleaseSourceManager:
                     }
                 )
                 continue
-            jobs.append((mapping, provider, gate_key, len(statuses)))
+            jobs.append(
+                (
+                    mapping,
+                    provider,
+                    gate_key,
+                    len(statuses),
+                    fetch_language,
+                    fetch_monitor_new,
+                )
+            )
             statuses.append({})
 
         semaphore = asyncio.Semaphore(MAPPING_FETCH_CONCURRENCY)
 
         async def fetch(
-            mapping: dict[str, Any], provider: Provider
+            mapping: dict[str, Any], provider: Provider, fetch_language: str
         ) -> tuple[list[dict[str, Any]] | None, Exception | None]:
             async with semaphore:
                 try:
                     chapters = await provider.list_chapters(
-                        str(mapping["provider_manga_id"]), language
+                        str(mapping["provider_manga_id"]), fetch_language
                     )
                 except Exception as exc:  # noqa: BLE001 - recorded below
                     return None, exc
                 return chapters, None
 
         fetched = await asyncio.gather(
-            *(fetch(mapping, provider) for mapping, provider, _, _ in jobs)
+            *(
+                fetch(mapping, provider, fetch_language)
+                for mapping, provider, _, _, fetch_language, _ in jobs
+            )
         )
-        for (mapping, provider, gate_key, slot), (chapters, failure) in zip(
-            jobs, fetched, strict=True
-        ):
+        for (
+            mapping,
+            provider,
+            gate_key,
+            slot,
+            _fetch_language,
+            fetch_monitor_new,
+        ), (chapters, failure) in zip(jobs, fetched, strict=True):
             status, result = await self._record_mapping_fetch(
                 manga_id,
                 mapping,
@@ -387,7 +423,7 @@ class ReleaseSourceManager:
                 target,
                 chapters,
                 failure,
-                monitor_new=monitor_new,
+                monitor_new=fetch_monitor_new,
             )
             if result is not None:
                 seen += int(result["seen"])

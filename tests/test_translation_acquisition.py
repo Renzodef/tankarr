@@ -136,7 +136,6 @@ async def test_archive_fallback_accepts_unlisted_language_without_prowlarr(
     acquisition = setup_acquisition(manager, monkeypatch)
     manager.settings.prowlarr_enabled = False
     manager.settings.translation_source_languages = "ja"
-    database.update_manga("manga-1", {"translation_source_languages": "ja"})
     add_archive(
         acquisition,
         [

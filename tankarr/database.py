@@ -88,8 +88,6 @@ CREATE TABLE IF NOT EXISTS manga (
     monitored INTEGER NOT NULL DEFAULT 1,
     auto_download INTEGER NOT NULL DEFAULT 0,
     assemble_books_automatically INTEGER NOT NULL DEFAULT 0,
-    translation_enabled INTEGER NOT NULL DEFAULT 0,
-    translation_source_languages TEXT NOT NULL DEFAULT '',
     monitor_initialized INTEGER NOT NULL DEFAULT 0,
     last_checked_at TEXT,
     last_check_error TEXT,
@@ -924,7 +922,7 @@ def clean_release_title(value: object) -> str:
 
 # Increment whenever initialize adds or changes a schema migration. The marker is
 # committed only after initialization succeeds; upgrades are backed up beforehand.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class Database:
@@ -1078,15 +1076,10 @@ class Database:
                 "INSERT OR IGNORE INTO torrent_ledger (info_hash, added_at) "
                 "SELECT info_hash, created_at FROM torrent_download"
             )
-            self._ensure_column(
-                connection, "manga", "translation_enabled", "INTEGER NOT NULL DEFAULT 0"
-            )
-            self._ensure_column(
-                connection,
-                "manga",
-                "translation_source_languages",
-                "TEXT NOT NULL DEFAULT ''",
-            )
+            # Translation is the global Settings switch only. Older databases
+            # stored a per-series opt-in and language list that nothing reads.
+            self._drop_column(connection, "manga", "translation_enabled")
+            self._drop_column(connection, "manga", "translation_source_languages")
             self._ensure_column(connection, "manga", "reader_mode_override", "TEXT")
             self._ensure_column(
                 connection, "manga", "reader_direction_override", "TEXT"
@@ -2074,8 +2067,6 @@ class Database:
             "auto_download",
             "assemble_books_automatically",
             "status_override",
-            "translation_enabled",
-            "translation_source_languages",
             "library_status_override",
             "verified_chapter_count",
             "verified_chapter_source",
@@ -2084,13 +2075,6 @@ class Database:
             "edition_book_count",
         }
         selected = {key: value for key, value in updates.items() if key in allowed}
-        if "translation_source_languages" in selected:
-            from tankarr.translation_policy import normalize_fallback_languages
-
-            raw = str(selected["translation_source_languages"] or "").strip()
-            selected["translation_source_languages"] = (
-                normalize_fallback_languages(raw) if raw else ""
-            )
         if "edition_book_count" in selected:
             raw_books = selected["edition_book_count"]
             if raw_books is None or str(raw_books).strip().casefold() == "automatic":
@@ -9663,7 +9647,9 @@ class Database:
         result["manual_metadata"] = json.loads(
             result.pop("manual_metadata_json", None) or "null"
         )
-        result["translation_enabled"] = bool(result.get("translation_enabled", False))
+        # Never publish the removed per-series translation columns.
+        result.pop("translation_enabled", None)
+        result.pop("translation_source_languages", None)
         source_title = str(result.get("title") or "")
         metadata_title = str(result.get("metadata_title") or "").strip() or None
         title_override = str(result.get("title_override") or "").strip() or None
@@ -9842,6 +9828,20 @@ class Database:
         }
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _drop_column(
+        connection: sqlite3.Connection,
+        table: str,
+        column: str,
+    ) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            return
+        connection.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
 
     @staticmethod
     def _remeasure_page_quality_if_needed(connection: sqlite3.Connection) -> int:
