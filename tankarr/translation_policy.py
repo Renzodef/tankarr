@@ -25,11 +25,13 @@ def normalize_fallback_languages(raw: str) -> str:
 
 
 def fallback_languages(manga: dict, default: str = "auto") -> list[str]:
-    """All known source languages, ranked internally, never an operator list.
+    """Every supported source language except the series' preferred one.
 
-    ``default`` and the old per-series field are accepted for compatibility but
-    cannot exclude a usable edition. Discovery rotates through this order in
-    bounded batches; known candidates are considered in every pass.
+    Ranked by the original language, then languages the catalogue already
+    lists. ``default`` is retained for callers and does not narrow the set.
+    A language list on the series record is not consulted. Discovery rotates
+    through this order in bounded batches; known candidates are considered
+    in every pass.
     """
     original = str(manga.get("original_language") or "").casefold()
     available = set(manga.get("available_languages") or [])

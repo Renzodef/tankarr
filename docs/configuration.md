@@ -473,8 +473,8 @@ language. Enable it once here for all monitored series; see
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TANKARR_TRANSLATION_ENABLED` | `false` | Allow translation fallback globally for monitored series with missing books or chapters, including newly added series. No per-series opt-in is required. It only runs when the AI provider URL, model and API key are set. Settings → Translation. |
-| `TANKARR_TRANSLATION_SOURCE_LANGUAGES` | `auto` | Deprecated compatibility setting. Source languages are now selected automatically from every language supported by the processing backend. Existing global and per-series lists no longer restrict acquisition; no manual list is needed. |
+| `TANKARR_TRANSLATION_ENABLED` | `false` | Allow translation fallback globally for every monitored series with missing books or chapters, including newly added series. There is no per-series switch. It only runs when the AI provider URL, model and API key are set. Settings → Translation. |
+| `TANKARR_TRANSLATION_SOURCE_LANGUAGES` | `auto` | Deprecated compatibility setting. Source languages are selected automatically from every language supported by the processing backend. This global value does not restrict acquisition. |
 | `TANKARR_TRANSLATION_AI_URL` | *unset* | Base URL of an AI provider with an OpenAI-compatible chat API, including its API path when the provider needs one. HTTP or HTTPS, without credentials, query or fragment. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_MODEL` | *empty* | Model identifier at that provider. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_API_KEY` | *unset* | API key of the AI provider. An external processor, when configured, receives it too. Secret; stored in the secrets file. Settings → Translation. |

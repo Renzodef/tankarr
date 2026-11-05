@@ -80,9 +80,17 @@ def test_global_setting_controls_series_search_and_legacy_flags_are_ignored(
 ):
     manager, database, _service, _source = translation
     client = client_for(manager)
-    assert not database.get_manga("manga-1")["translation_enabled"]
+    stored = database.get_manga("manga-1")
+    assert "translation_enabled" not in stored
+    assert "translation_source_languages" not in stored
     assert client.post("/api/manga/manga-1/translations/search").status_code == 200
-    database.update_manga("manga-1", {"translation_enabled": True})
+    database.update_manga(
+        "manga-1",
+        {"translation_enabled": True, "translation_source_languages": "fr"},
+    )
+    ignored = database.get_manga("manga-1")
+    assert "translation_enabled" not in ignored
+    assert "translation_source_languages" not in ignored
     manager.settings.translation_enabled = False
     response = client.post("/api/manga/manga-1/translations/search")
     assert response.status_code == 400

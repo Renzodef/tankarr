@@ -9,9 +9,10 @@ Translation to apply it to all monitored series with missing books or chapters,
 including series added later. There is no per-series translation switch. The
 series language remains the destination language. Source languages are selected
 automatically: any language supported by the processing backend can supply a
-missing book or chapter. There is no language list to maintain, globally or per
-series. Old per-series translation switches and saved language lists are retained
-for compatibility but ignored; existing jobs and files are preserved.
+missing book or chapter. There is no language list to maintain. The deprecated
+global source-language setting is kept for old clients and does not restrict
+acquisition. Per-series translation switches and language lists are removed on
+upgrade; existing jobs and files are preserved.
 
 Tankarr considers known sources in every language on every pass. It prefers an
 already downloaded source, then the original language, identity match,

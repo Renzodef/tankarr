@@ -93,10 +93,15 @@ def output_archive(manager, job, tmp_path, **changes):
 def test_automatic_sources_ignore_legacy_lists_and_accept_unknown_original():
     assert normalize_fallback_languages(" Original,fr,ja,FR ") == "original,fr,ja"
     work = {"preferred_language": "en", "original_language": "ja"}
-    languages = fallback_languages({**work, "translation_source_languages": "fr"}, "ja")
+    languages = fallback_languages(work, "ja")
     assert languages[0] == "ja"
     assert {"pt", "vi", "fr", "ar", "zh"} <= set(languages)
     assert "en" not in languages
+    # A leftover series language list cannot narrow acquisition.
+    assert (
+        fallback_languages({**work, "translation_source_languages": "fr"}, "fr")
+        == languages
+    )
     assert set(
         fallback_languages({**work, "original_language": None}, "original")
     ) == set(languages)
@@ -121,7 +126,6 @@ async def test_known_unlisted_source_is_queued_without_network_search(
     translation, monkeypatch
 ):
     manager, database, _service, _source = translation
-    database.update_manga("manga-1", {"translation_source_languages": "ja"})
     manager.settings.translation_source_languages = "ja"
     database.upsert_chapters(
         "manga-1",
@@ -287,12 +291,74 @@ async def test_local_ocr_provider_and_library_import(translation):
 
 @pytest.mark.asyncio
 async def test_disabled_fallback_never_discovers_or_downloads(translation):
-    manager, database, service, _source = translation
-    database.update_manga("manga-1", {"translation_enabled": True})
+    manager, _database, _service, _source = translation
     manager.settings.translation_enabled = False
     assert await manager.queue_missing("manga-1") == 0
     manager.release_sources.discover_and_refresh.assert_not_called()
     assert manager.store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_global_switch_is_the_only_translation_gate(translation):
+    manager, database, _service, _source = translation
+    database.upsert_manga(
+        {**manga(), "id": "manga-2", "title": "Second", "provider": "catalogue"},
+        "en",
+        "all",
+    )
+    for manga_id in ("manga-1", "manga-2"):
+        stored = database.get_manga(manga_id)
+        assert "translation_enabled" not in stored
+        assert "translation_source_languages" not in stored
+        assert manager.enabled(stored)
+        ignored = database.update_manga(
+            manga_id,
+            {"translation_enabled": False, "translation_source_languages": "ja"},
+        )
+        assert "translation_enabled" not in ignored
+        assert "translation_source_languages" not in ignored
+    manager.settings.translation_enabled = False
+    for manga_id in ("manga-1", "manga-2"):
+        assert not manager.enabled(database.get_manga(manga_id))
+        assert await manager.queue_missing(manga_id) == 0
+    manager.release_sources.discover_and_refresh.assert_not_called()
+
+
+def test_upgrade_drops_per_series_translation_columns(tmp_path):
+    from tankarr.database import SCHEMA_VERSION
+
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    database = Database(settings.database_path)
+    database.initialize()
+    database.upsert_manga({**manga(), "provider": "catalogue"}, "en", "all")
+    with database.connect() as connection:
+        names = {row[1] for row in connection.execute("PRAGMA table_info(manga)")}
+        assert "translation_enabled" not in names
+        assert "translation_source_languages" not in names
+        connection.execute(
+            "ALTER TABLE manga ADD COLUMN translation_enabled "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
+        connection.execute(
+            "ALTER TABLE manga ADD COLUMN translation_source_languages "
+            "TEXT NOT NULL DEFAULT ''"
+        )
+        connection.execute(
+            "UPDATE manga SET translation_enabled=1, "
+            "translation_source_languages='fr' WHERE id='manga-1'"
+        )
+        connection.execute("PRAGMA user_version=9")
+    database.initialize(before_migration=lambda: None)
+    with database.connect() as connection:
+        names = {row[1] for row in connection.execute("PRAGMA table_info(manga)")}
+        assert "translation_enabled" not in names
+        assert "translation_source_languages" not in names
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    stored = database.get_manga("manga-1")
+    assert stored["preferred_language"] == "en"
+    assert stored["title"] == "Example"
+    assert "translation_enabled" not in stored
+    assert "translation_source_languages" not in stored
 
 
 @pytest.mark.asyncio
@@ -529,7 +595,7 @@ async def test_active_jobs_are_prioritized_across_series_and_history(
     await manager.tick()
     assert [call.args[0]["id"] for call in manager.process.await_args_list] == [
         running["id"],
-        # Legacy per-series flags no longer pause a queue under the global switch.
+        # Every series stays eligible while the global switch is on.
         backlog_jobs[0]["id"] if backlog == "disabled" else queued["id"],
     ]
     assert {running["id"], queued["id"]} <= {
