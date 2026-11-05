@@ -27,6 +27,7 @@ from tankarr.source_ranking import (
     beyond_chapter_limit,
     completed_chapter_limit,
 )
+from tankarr.unit_strategy import strategy_record, strategy_unit_reason
 
 _DOCUMENTED_EXTRAS = re.compile(
     r"\b(?:includes?|contains?)\s+"
@@ -1855,7 +1856,10 @@ def build_chapter_index(
             default=None,
         ),
         "series_unit": unit_info["unit"],
-        "series_unit_reason": unit_info["reason"],
+        "series_unit_reason": strategy_unit_reason(
+            manga, unit_info["unit"], unit_info["reason"]
+        ),
+        "series_unit_strategy": strategy_record(manga) or None,
         "series_unit_override": unit_info["override"],
         "unit_coverage": unit_info["coverage"],
         "dropped_releases": unit_info["dropped"],

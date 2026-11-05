@@ -949,6 +949,38 @@ def test_parse_chapter_reads_a_language_tag_after_the_volume_number():
         assert release["release_unit"] == "chapter", name
 
 
+def test_parse_chapter_treats_a_cjk_volume_title_as_a_whole_book():
+    """Dm5 and ManHuaGui list tankobon as 第1卷…第6卷 inside the chapter list."""
+
+    provider = _bare_provider()
+    for name, volume in (
+        ("第1卷", "1"),
+        ("第01巻", "1"),
+        ("第6卷", "6"),
+        ("第6卷：完结", "6"),
+        ("【第3卷】", "3"),
+        ("1권", "1"),
+        ("제12권", "12"),
+    ):
+        release = provider._parse_chapter(
+            {"id": 7, "name": name, "chapterNumber": 1},
+            language="zh",
+            source={"id": "5", "displayName": "Dm5"},
+        )
+        assert release["release_unit"] == "volume", name
+        assert release["volume"] == volume, name
+        assert release["chapter"] is None, name
+
+    for name in ("第1话", "第3話", "第4章", "第1卷 Chapter 2"):
+        release = provider._parse_chapter(
+            {"id": 8, "name": name, "chapterNumber": 4},
+            language="zh",
+            source={"id": "5"},
+        )
+        assert release["release_unit"] == "chapter", name
+        assert release["chapter"] == "4", name
+
+
 def test_parse_chapter_keeps_chapter_numbers_when_the_name_names_a_chapter():
     provider = _bare_provider()
     for name, volume, chapter, raw_number in (

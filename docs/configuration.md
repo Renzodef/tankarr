@@ -172,6 +172,7 @@ backlog. All configured sources remain eligible; publisher editions do not limit
 | `TANKARR_PAGE_QUALITY_RECOVERY_ENABLED` | `true` | During each Wanted pass, compare imported chapters with the page size of the rest of the series and download a replacement for those that carry only a fraction of it, when another source has the chapter. Nothing is deleted without a replacement. Restart required. |
 | `TANKARR_DUPLICATE_CLEANUP_ENABLED` | `true` | When the map of chapters to volumes, checked against the pages, proves that a chapter file is already inside a book you own, move the chapter file to the recycle bin during the next Wanted pass (at most 10 series per pass). When `false`, duplicates are only reported on the series page. Settings → Sources. |
 | `TANKARR_PREFERRED_UNIT` | `volumes` | `volumes` or `chapters`: which of the two Tankarr collects when both whole books and chapters could complete a finished work. A work that is still running follows chapters unless only books exist. Settings → Sources. |
+| `TANKARR_AUTO_UNIT_STRATEGY` | `true` | When the catalogue's books are all offered and its chapters are not, follow books instead of leaving chapter Wanted open. The preferred language is used first. Another language counts only while translation fallback is on. Chapter releases that have no file are unmonitored and their queued grabs are cancelled; downloaded chapter files stay. A unit chosen on the series is kept. A webtoon is left on episodes. Settings → Sources. |
 
 ## Suwayomi
 

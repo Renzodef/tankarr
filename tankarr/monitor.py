@@ -588,6 +588,18 @@ class ReleaseMonitor:
         task.add_done_callback(clear)
         return dict(await asyncio.shield(task))
 
+    async def _apply_unit_strategy(self, manga_id: str) -> dict[str, Any] | None:
+        """Settle the download unit when the service implements it.
+
+        Tests substitute a recording service that only queues releases. A
+        missing method leaves that behaviour unchanged.
+        """
+
+        apply = getattr(self.service, "apply_unit_strategy", None)
+        if apply is None:
+            return None
+        return await asyncio.to_thread(apply, manga_id)
+
     async def search_wanted_series(
         self, manga_id: str, *, trigger: str = "add"
     ) -> dict[str, Any]:
@@ -603,6 +615,9 @@ class ReleaseMonitor:
 
         async with self._wanted_search_lock:
             self._last_book_hunt.pop(manga_id, None)
+            # Decide chapters vs volumes before the snapshot, so a series
+            # that volumes can finish is not hunted as chapter Wanted.
+            await self._apply_unit_strategy(manga_id)
             entries = await asyncio.to_thread(self.service.list_wanted)
             if trigger == "scheduled":
                 entries = [
@@ -715,13 +730,25 @@ class ReleaseMonitor:
                             manga_id, monitor_new=True
                         )
                         discovered += int(discovery.get("new") or 0)
+                    applied = await self._apply_unit_strategy(manga_id)
+                    if applied is not None and applied.get("action") != "stay":
+                        fresh = await asyncio.to_thread(self.service.list_wanted)
+                        entry = next(
+                            (
+                                item
+                                for item in fresh
+                                if str(item["manga"]["id"]) == manga_id
+                            ),
+                            None,
+                        )
                     queued += await self.queue_missing(manga_id)
-                    hunted = await self._hunt_missing_volumes(entry)
-                    self._last_book_hunt[manga_id] = hunted
-                    queued += len(hunted.get("grabbed") or [])
-                    recovered = await self.recover_wanted_slots(entry, hunted)
-                    queued += int(recovered.get("grabbed") or 0)
-                    searched += int(recovered.get("searched") or 0)
+                    if entry is not None:
+                        hunted = await self._hunt_missing_volumes(entry)
+                        self._last_book_hunt[manga_id] = hunted
+                        queued += len(hunted.get("grabbed") or [])
+                        recovered = await self.recover_wanted_slots(entry, hunted)
+                        queued += int(recovered.get("grabbed") or 0)
+                        searched += int(recovered.get("searched") or 0)
                     if self.translations is not None:
                         await self.translations.queue_missing(manga_id)
                 except RecoveryBlocked:
@@ -2158,6 +2185,7 @@ class ReleaseMonitor:
                 await self.service.retire_redundant_chapter_files(manga_id)
             except Exception as exc:  # noqa: BLE001 - the pass will retry
                 logger.info("Could not retire chapters after a range repair: %s", exc)
+        result["unit_strategy"] = await self._apply_unit_strategy(manga_id)
         queued = 0
         if was_initialized and result["monitor_mode_before"] in FUTURE_MONITOR_MODES:
             queued = await self.queue_missing(manga_id, result["new_chapter_ids"])

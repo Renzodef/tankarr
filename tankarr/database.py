@@ -1109,6 +1109,9 @@ class Database:
                 connection, "manga", "monitor_specials", "INTEGER NOT NULL DEFAULT 0"
             )
             self._ensure_column(connection, "manga", "series_unit_override", "TEXT")
+            # Why an automatic unit switch chose volumes. An operator choice
+            # stores {"operator": true} so a later pass does not undo it.
+            self._ensure_column(connection, "manga", "series_unit_strategy", "TEXT")
             self._ensure_column(connection, "manga", "preferred_source_key", "TEXT")
             # A part of a split chapter remembers the chapter it belongs to,
             # so the parts are replaced by the whole and retired together.
@@ -2061,6 +2064,7 @@ class Database:
             "monitor_mode",
             "monitored",
             "series_unit_override",
+            "series_unit_strategy",
             "preferred_source_key",
             "reader_mode_override",
             "reader_direction_override",
@@ -2075,6 +2079,28 @@ class Database:
             "edition_book_count",
         }
         selected = {key: value for key, value in updates.items() if key in allowed}
+        if "series_unit_strategy" in selected:
+            raw = selected["series_unit_strategy"]
+            if raw is None:
+                selected["series_unit_strategy"] = None
+            else:
+                if isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            "series_unit_strategy must be an object"
+                        ) from exc
+                elif isinstance(raw, dict):
+                    parsed = raw
+                else:
+                    raise ValueError("series_unit_strategy must be an object")
+                if not isinstance(parsed, dict):
+                    raise ValueError("series_unit_strategy must be an object")
+                encoded = json.dumps(parsed, ensure_ascii=False, sort_keys=True)
+                if len(encoded) > 4000:
+                    raise ValueError("series_unit_strategy is too long")
+                selected["series_unit_strategy"] = encoded
         if "edition_book_count" in selected:
             raw_books = selected["edition_book_count"]
             if raw_books is None or str(raw_books).strip().casefold() == "automatic":
@@ -4438,6 +4464,58 @@ class Database:
             selected["queue_status"] = str(active["job_status"]) if active else None
             preferred.append(selected)
         return preferred
+
+    def unmonitor_undownloaded_chapters(self, manga_id: str) -> int:
+        """Stop monitoring chapter releases that have no library file.
+
+        Volume releases stay monitored. Downloaded chapter files are left
+        alone, including their monitored flag.
+        """
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE chapter_release
+                SET monitored=0, updated_at=?
+                WHERE manga_id=?
+                  AND downloaded=0
+                  AND monitored=1
+                  AND COALESCE(release_unit, 'chapter') != 'volume'
+                """,
+                (utc_now(), manga_id),
+            )
+        return cursor.rowcount
+
+    def cancel_queued_chapter_jobs(self, manga_id: str) -> int:
+        """Drop queued automatic grabs of chapter releases with no file.
+
+        A manual grab is the operator's, and a job already running is left
+        to finish. Volume releases are not chapter grabs.
+        """
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT j.id
+                FROM download_job j
+                JOIN chapter_release c ON c.id = j.chapter_id
+                WHERE j.manga_id=?
+                  AND j.status='queued'
+                  AND lower(COALESCE(j.origin, '')) != 'manual'
+                  AND COALESCE(c.release_unit, 'chapter') != 'volume'
+                  AND c.downloaded=0
+                """,
+                (manga_id,),
+            ).fetchall()
+            ids = [int(row["id"]) for row in rows]
+            if not ids:
+                return 0
+            placeholders = ",".join("?" for _ in ids)
+            cursor = connection.execute(
+                f"DELETE FROM download_job WHERE id IN ({placeholders}) AND status='queued'",
+                ids,
+            )
+        return cursor.rowcount
 
     def set_chapter_monitored(self, chapter_id: str, monitored: bool) -> int:
         """Toggle monitoring for every release of one logical chapter."""
@@ -9650,6 +9728,17 @@ class Database:
         # Never publish the removed per-series translation columns.
         result.pop("translation_enabled", None)
         result.pop("translation_source_languages", None)
+        raw_strategy = result.get("series_unit_strategy")
+        if raw_strategy:
+            try:
+                parsed_strategy = json.loads(raw_strategy)
+            except (TypeError, json.JSONDecodeError):
+                parsed_strategy = None
+            result["series_unit_strategy"] = (
+                parsed_strategy if isinstance(parsed_strategy, dict) else None
+            )
+        else:
+            result["series_unit_strategy"] = None
         source_title = str(result.get("title") or "")
         metadata_title = str(result.get("metadata_title") or "").strip() or None
         title_override = str(result.get("title_override") or "").strip() or None

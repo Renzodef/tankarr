@@ -2837,6 +2837,71 @@ class TankarrService:
             if str(record.get("verdict")) == page_quality.DEGRADED
         ]
 
+    def apply_unit_strategy(self, manga_id: str) -> dict[str, Any]:
+        """Follow volumes when that is the edition the sources can finish.
+
+        Whole-book titles stored as chapters are reclassified either way.
+        The unit changes, and undownloaded chapters are unmonitored, only
+        when ``auto_unit_strategy`` is on and the evidence is strong enough.
+        Downloaded chapter files are not deleted.
+        """
+
+        from tankarr.unit_strategy import (
+            decide_unit_strategy,
+            whole_book_reclassifications,
+        )
+
+        self.assert_mutations_allowed()
+        manga = self.database.get_manga(manga_id, include_logical_counts=False)
+        metadata_row = self.database.get_series_metadata(manga_id)
+        metadata = (metadata_row or {}).get("data") or {}
+        releases = self.database.list_all_chapters(manga_id)
+        reclassified = 0
+        for release_id, volume in whole_book_reclassifications(releases):
+            if self.database.set_release_book(release_id, volume):
+                reclassified += 1
+        if reclassified:
+            logger.info(
+                "Recognised %s whole-book titles as volumes for %s",
+                reclassified,
+                manga_id,
+            )
+            releases = self.database.list_all_chapters(manga_id)
+        decision = decide_unit_strategy(
+            manga=manga,
+            metadata=metadata,
+            releases=releases,
+            translation_enabled=bool(self.settings.translation_enabled),
+            auto_unit_strategy=bool(getattr(self.settings, "auto_unit_strategy", True)),
+        )
+        unmonitored = 0
+        cancelled = 0
+        if decision.action in {"switch", "maintain"}:
+            if decision.action == "switch":
+                self.database.update_manga(
+                    manga_id,
+                    {
+                        "series_unit_override": "volumes",
+                        "series_unit_strategy": decision.record(),
+                    },
+                )
+                logger.info("Following %s as volumes: %s", manga_id, decision.reason)
+            unmonitored = self.database.unmonitor_undownloaded_chapters(manga_id)
+            cancelled = self.database.cancel_queued_chapter_jobs(manga_id)
+        return {
+            "manga_id": manga_id,
+            "action": decision.action,
+            "unit": decision.unit,
+            "reason": decision.reason,
+            "switched": decision.action == "switch",
+            "reclassified": reclassified,
+            "unmonitored_chapters": unmonitored,
+            "cancelled_jobs": cancelled,
+            "translation_used": decision.translation_used,
+            "languages": list(decision.languages),
+            "volumes": list(decision.volumes),
+        }
+
     async def create_missing_download_jobs(
         self, manga_id: str, chapter_ids: list[str] | None = None
     ) -> list[dict[str, Any]]:
@@ -2844,6 +2909,9 @@ class TankarrService:
 
         async with self._mutation_lock:
             self.assert_mutations_allowed()
+            # Settle chapters-vs-volumes before any grab, so a volume-only
+            # edition is not queued as chapter Wanted.
+            self.apply_unit_strategy(manga_id)
             self._rerank_queued_jobs_locked(manga_id)
             manga = self.database.get_manga(manga_id)
             covered = self._chapters_covered_by_books(manga)

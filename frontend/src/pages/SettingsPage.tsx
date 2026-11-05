@@ -441,6 +441,12 @@ const SECTIONS: SectionDef[] = [
           ["chapters", msg("Chapters")],
         ],
       },
+      {
+        key: "auto_unit_strategy",
+        label: msg("Follow volumes when chapters cannot finish the series"),
+        hint: msg("When mapped sources can supply every book of the edition and cannot supply every chapter, follow books. The preferred language is tried first; other languages count only while translation fallback is on. A finished series whose books are already in the library follows books too. Chapter releases with no file are left unmonitored, downloaded chapters stay, and a unit you set on the series is kept. On by default."),
+        kind: "boolean",
+      },
     ],
   },
   {

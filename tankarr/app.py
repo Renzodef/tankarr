@@ -3272,9 +3272,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             if "series_unit" in updates:
                 chosen = updates["series_unit"]
-                direct_updates["series_unit_override"] = (
-                    None if chosen == "automatic" else chosen
-                )
+                if chosen == "automatic":
+                    direct_updates["series_unit_override"] = None
+                    direct_updates["series_unit_strategy"] = None
+                else:
+                    direct_updates["series_unit_override"] = chosen
+                    direct_updates["series_unit_strategy"] = {
+                        "operator": True,
+                        "unit": chosen,
+                    }
             if "reader_mode" in updates:
                 chosen = updates["reader_mode"]
                 direct_updates["reader_mode_override"] = (
