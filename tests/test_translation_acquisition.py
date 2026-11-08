@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from tankarr.torrents import TorrentManager
-from tankarr.translation_acquisition import TranslationAcquisition, release_language
+from tankarr.translation_acquisition import (
+    TranslationAcquisition,
+    claimed_source_language,
+    release_language,
+)
 from tankarr.translation_policy import processor_languages
 from tests.test_torrents import FakeArchive, FakeQBitTorrent, release
 from tests.test_translation import output_archive
@@ -254,6 +258,85 @@ async def test_archive_unknown_language_and_wrong_number_do_not_become_native(
 )
 def test_release_language_needs_evidence_in_the_name(name, language, expected):
     assert release_language(name, language) == expected
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("Example v02 [JA]", "ja"),
+        ("Example v02 [raw]", "ja"),
+        ("Example v02 [ZH]", "zh"),
+        ("Example v02 [IT]", "it"),
+        ("Example v02 [EN]", "en"),
+        ("Example v02 第02巻", "ja"),
+        ("Example v02", None),
+        ("Leave it v02", None),
+        ("Example v02 [JA] [ZH]", None),
+    ],
+)
+def test_claimed_source_language_is_evidence_not_the_library_language(name, expected):
+    assert claimed_source_language(name) == expected
+
+
+@pytest.mark.asyncio
+async def test_indexer_fallback_keeps_real_languages_and_targets_english(
+    translation, monkeypatch
+):
+    manager, database, _service, _source = translation
+    manager.settings.search_languages = "en"
+    acquisition = setup_acquisition(manager, monkeypatch)
+    monkeypatch.setattr(
+        manager,
+        "_missing",
+        lambda _id: [
+            {"volume": "3", "chapter": None, "expected": True},
+            {"volume": "4", "chapter": None, "expected": True},
+        ],
+    )
+    acquisition.torrents.prowlarr.search.return_value = [
+        {**release(), "id": "english", "title": "Example v03 [EN]"},
+        {**release(), "id": "chinese", "title": "Example v03 [ZH]"},
+        {**release(), "id": "italian", "title": "Example v04 [IT]"},
+        {**release(), "id": "untagged", "title": "Example v04"},
+    ]
+    languages = processor_languages(database.get_manga("manga-1"), manager.settings)
+    assert "en" not in languages and "it" in languages and "zh" in languages
+    assert await acquisition.hunt("manga-1", languages) == 2
+    acquisition.torrents.prowlarr.search.assert_awaited_once()
+    assert acquisition.torrents.prowlarr.search.await_args.kwargs["language"] == "*"
+    grabbed = {
+        call.args[2]: call.kwargs["translation"]
+        for call in acquisition.torrents.grab.await_args_list
+    }
+    assert set(grabbed) == {"chinese", "italian"}
+    assert grabbed["chinese"] == {
+        "source_language": "zh",
+        "target_language": "en",
+        "slots": ["volume:3"],
+    }
+    assert grabbed["italian"] == {
+        "source_language": "it",
+        "target_language": "en",
+        "slots": ["volume:4"],
+    }
+    assert database.get_manga("manga-1")["preferred_language"] == "en"
+
+
+@pytest.mark.asyncio
+async def test_translation_off_does_not_grab_foreign_indexer_releases(
+    translation, monkeypatch
+):
+    manager, database, _service, _source = translation
+    acquisition = setup_acquisition(manager, monkeypatch)
+    manager.settings.translation_enabled = False
+    acquisition.torrents.prowlarr.search.return_value = [
+        {**release(), "id": "chinese", "title": "Example v02 [ZH]"},
+        {**release(), "id": "japanese", "title": "Example v02 [JA]"},
+    ]
+    languages = processor_languages(database.get_manga("manga-1"), manager.settings)
+    assert await acquisition.hunt("manga-1", languages) == 0
+    acquisition.torrents.prowlarr.search.assert_not_called()
+    acquisition.torrents.grab.assert_not_called()
 
 
 @pytest.mark.asyncio

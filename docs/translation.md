@@ -16,7 +16,12 @@ upgrade; existing jobs and files are preserved.
 
 Tankarr considers known sources in every language on every pass. It prefers an
 already downloaded source, then the original language, identity match,
-availability and download size. Provider discovery rotates through at most three
+availability and download size. After the series language has been searched,
+every other language of an already enabled source is searched in the same pass.
+The languages chosen under Settings → General are the library's final languages
+only: they do not filter that search, and a language that merely appears in the
+product's language list is not a second destination. When the source catalogue
+cannot be listed, provider discovery still rotates through at most three
 languages per pass; the cursor survives restarts so a language is not permanently
 excluded. A local processor only selects languages its OCR supports. External
 processors remain responsible for validating their supported language pairs.
@@ -76,10 +81,13 @@ another channel, checking that its numbering matches the managed edition. Packs
 must first be separated into their individual books. Native library imports keep
 their usual language rules.
 
-When Prowlarr is enabled, fallback also searches its configured indexers for
-explicitly numbered foreign books and packs. It requires a matching series title
-and a source-language marker, then stages only the requested missing books. OCR
-on the processor must verify the actual source and target languages before import.
+When Prowlarr is enabled, fallback searches its configured indexers once per
+title for explicitly numbered foreign books and packs. A release is eligible
+only when the name claims exactly one source language. That language is kept,
+and the book is translated into the series language. The library language
+profile does not choose which source languages qualify. A release with no
+language claim, or with two claims, is not relabelled as the series language.
+OCR on the processor must verify the actual source and target languages before import.
 Automatic staging supports image ZIP/CBZ, RAR/CBR and PDF files through the same
 bounded archive extractor used by normal imports. Differently sized editions with
 an `edition_book_count` override require explicit source assignment.

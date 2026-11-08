@@ -29,9 +29,9 @@ def fallback_languages(manga: dict, default: str = "auto") -> list[str]:
 
     Ranked by the original language, then languages the catalogue already
     lists. ``default`` is retained for callers and does not narrow the set.
-    A language list on the series record is not consulted. Discovery rotates
-    through this order in bounded batches; known candidates are considered
-    in every pass.
+    A language list on the series record is not consulted, and neither is
+    the installation's library-language profile: that profile is the final
+    language of files in the library, not a list of languages to search.
     """
     original = str(manga.get("original_language") or "").casefold()
     available = set(manga.get("available_languages") or [])
@@ -71,6 +71,34 @@ def source_mapping_language(
     if translation_enabled:
         return languages[0]
     raise ValueError("Source does not support the series language")
+
+
+def source_languages_to_search(
+    manga: dict,
+    configured: list[str],
+    *,
+    capable: list[str],
+) -> list[str]:
+    """Source languages to query once the preferred language is incomplete.
+
+    The preferred language is the library's final language, so it is not
+    searched again here. Languages the operator has not enabled on a source
+    are not guessed from the product's language list. ``capable`` drops
+    languages the configured translator cannot read.
+    """
+
+    preferred = str(manga.get("preferred_language") or "").strip().casefold()
+    capable_set = {str(code).strip().casefold() for code in capable}
+    configured_set = {
+        str(code).strip().casefold()
+        for code in configured
+        if str(code or "").strip() and str(code).strip().casefold() != preferred
+    }
+    return [
+        code
+        for code in fallback_languages(manga)
+        if code in configured_set and code in capable_set
+    ]
 
 
 def processor_languages(manga: dict, settings) -> list[str]:
