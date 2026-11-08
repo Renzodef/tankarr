@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import shutil
+import time
 import zipfile
 from contextlib import suppress
 from pathlib import Path
@@ -15,6 +16,7 @@ import httpx
 from tankarr.archive import package_cbz_validated, sha256, validate_cbz
 from tankarr.http import async_client
 from tankarr.importer import LibraryImporter
+from tankarr.languages import SUPPORTED_LANGUAGE_CODES
 from tankarr.local_translation import LocalTranslationError, translate_archive
 from tankarr.providers.base import ProviderRequestError
 from tankarr.service import local_page_content_sha256
@@ -23,6 +25,7 @@ from tankarr.translation_policy import (
     matches_slot,
     processor_languages,
     slot_key,
+    source_languages_to_search,
     source_rank,
     validate_translation_url,
 )
@@ -86,18 +89,21 @@ class TranslationManager:
         languages = processor_languages(manga, self.settings)
         if not languages or not self._missing(manga_id):
             return 0
-        # Reuse any known foreign edition immediately, regardless of today's
-        # bounded provider search batch or a legacy manual language list.
+        # Reuse any known foreign edition immediately, regardless of which
+        # source language produced it or a legacy manual language list.
         queued = await self._queue_sources(manga_id, languages, limit=10)
         known = self.store.slots(manga_id, manga["preferred_language"])
         if queued >= 10 or all(
             slot_key(item) in known for item in self._missing(manga_id)
         ):
             return queued
-        batch = self.store.discovery_batch(manga_id, languages)
-        # Discovery uses exactly the normal identity checks, without changing the
-        # preferred language or monitoring foreign releases as native downloads.
-        for language in batch:
+        # The preferred language was already searched. Every other language
+        # of an already-configured source is searched in this pass. The
+        # library language profile is not a search filter, and it is not a
+        # second target language. Discovery keeps each source's language and
+        # does not monitor those releases as native downloads.
+        search = await self._source_languages_after_preferred(manga, languages)
+        for language in search:
             if not self.enabled(self.database.get_manga(manga_id)):
                 return queued
             try:
@@ -108,10 +114,65 @@ class TranslationManager:
                 logger.warning("Translation source discovery temporarily unavailable")
         queued += await self._queue_sources(manga_id, languages, limit=10 - queued)
         if self.acquisition is not None:
-            queued += await self.acquisition.hunt(
-                manga_id, languages, search_languages=batch
-            )
+            queued += await self.acquisition.hunt(manga_id, languages)
         return queued
+
+    async def _source_languages_after_preferred(
+        self, manga: dict, capable: list[str]
+    ) -> list[str]:
+        configured = await self._configured_source_languages()
+        if configured is None:
+            # The source catalogue could not be listed. Keep walking every
+            # capable language, a few per pass, instead of stopping at the
+            # library language.
+            return self.store.discovery_batch(str(manga["id"]), capable)
+        return source_languages_to_search(manga, configured, capable=capable)
+
+    async def _configured_source_languages(self) -> list[str] | None:
+        """Languages of sources the operator has already enabled.
+
+        ``None`` means the catalogue could not be asked. An empty list means
+        it was asked and no enabled source reported a language.
+        """
+
+        cached = getattr(self, "_configured_language_cache", None)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < 600:
+            return list(cached[1])
+        providers = getattr(self.release_sources, "providers", None)
+        if not isinstance(providers, dict):
+            return None
+        catalogs = [
+            catalog
+            for provider in providers.values()
+            if callable(catalog := getattr(provider, "source_catalog", None))
+        ]
+        if not catalogs:
+            return None
+        found: list[str] = []
+        saw_catalog = False
+        for catalog in catalogs:
+            try:
+                listed = await catalog(tuple(SUPPORTED_LANGUAGE_CODES))
+            except Exception as error:  # noqa: BLE001 - one provider must not hide the others
+                logger.warning(
+                    "Configured source languages unavailable (%s)",
+                    type(error).__name__,
+                )
+                continue
+            if not isinstance(listed, list):
+                continue
+            saw_catalog = True
+            for item in listed:
+                if not isinstance(item, dict) or not item.get("enabled", True):
+                    continue
+                code = str(item.get("language") or "").strip().casefold()
+                if code and code not in found:
+                    found.append(code)
+        if not saw_catalog:
+            return None
+        self._configured_language_cache = (now, found)
+        return found
 
     async def _queue_sources(
         self, manga_id: str, languages: list[str], *, limit: int

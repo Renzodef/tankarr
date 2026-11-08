@@ -19,6 +19,106 @@ from tankarr.translation_policy import matches_slot, slot_key, source_rank
 logger = logging.getLogger(__name__)
 
 
+_BRACKETED = re.compile(r"[\[(]([^)\]]+)[\])]")
+# Short codes count only inside brackets. A bare "it" is an English word,
+# not a request to collect Italian as a library language.
+_TOKEN_LANGUAGE = {
+    "ja": "ja",
+    "jp": "ja",
+    "jpn": "ja",
+    "jap": "ja",
+    "japanese": "ja",
+    "raw": "ja",
+    "raws": "ja",
+    "zh": "zh",
+    "cn": "zh",
+    "chi": "zh",
+    "chs": "zh",
+    "zho": "zh",
+    "chinese": "zh",
+    "zh-hk": "zh-hk",
+    "cht": "zh-hk",
+    "ko": "ko",
+    "kr": "ko",
+    "kor": "ko",
+    "korean": "ko",
+    "fr": "fr",
+    "fre": "fr",
+    "fra": "fr",
+    "french": "fr",
+    "it": "it",
+    "ita": "it",
+    "italian": "it",
+    "italiano": "it",
+    "es": "es",
+    "spa": "es",
+    "spanish": "es",
+    "de": "de",
+    "ger": "de",
+    "deu": "de",
+    "german": "de",
+    "pt": "pt",
+    "por": "pt",
+    "portuguese": "pt",
+    "pt-br": "pt-br",
+    "ru": "ru",
+    "rus": "ru",
+    "russian": "ru",
+    "en": "en",
+    "eng": "en",
+    "english": "en",
+}
+_NAME_LANGUAGE = (
+    ("japanese", "ja"),
+    ("chinese", "zh"),
+    ("korean", "ko"),
+    ("french", "fr"),
+    ("italian", "it"),
+    ("italiano", "it"),
+    ("spanish", "es"),
+    ("german", "de"),
+    ("portuguese", "pt"),
+    ("russian", "ru"),
+    ("english", "en"),
+)
+_JAPANESE_VOLUME = re.compile(r"第\s*\d+(?:\s*[-~]\s*\d+)?\s*巻|全\s*\d+\s*巻")
+_CHINESE_VOLUME = re.compile(r"第\s*\d+(?:\s*[-~]\s*\d+)?\s*卷")
+
+
+def claimed_source_language(title: str) -> str | None:
+    """The one source language a release name actually claims.
+
+    A name that claims nothing, or that claims two languages, is not given
+    the series language. The caller leaves it for the preferred-language
+    search, which has its own evidence rules.
+    """
+
+    folded = str(title or "").casefold()
+    found: list[str] = []
+
+    def add(code: str | None) -> None:
+        if code and code not in found:
+            found.append(code)
+
+    for match in _BRACKETED.finditer(folded):
+        for token in re.split(r"[,;/\s]+", match.group(1)):
+            add(_TOKEN_LANGUAGE.get(token))
+    for name, code in _NAME_LANGUAGE:
+        if re.search(r"(?<![a-z])" + re.escape(name) + r"(?![a-z])", folded):
+            add(code)
+    if len(found) == 1:
+        return found[0]
+    if found:
+        return None
+    if _JAPANESE_VOLUME.search(title or ""):
+        add("ja")
+    if _CHINESE_VOLUME.search(title or ""):
+        add("zh")
+    if len(found) == 1:
+        return found[0]
+    return None
+
+
 def release_language(title: str, language: str) -> bool:
     """A search language is not evidence. Require an explicit name marker too.
 
@@ -80,8 +180,6 @@ class TranslationAcquisition:
         self,
         manga_id: str,
         languages: list[str],
-        *,
-        search_languages: list[str] | None = None,
     ) -> int:
         manga = self.database.get_manga(manga_id)
         if (
@@ -130,32 +228,32 @@ class TranslationAcquisition:
                             release
                         )
         if self.manager.settings.prowlarr_enabled:
-            for language in (
-                search_languages if search_languages is not None else languages[:3]
-            ):
-                if language not in languages:
+            # One search, not one search per library language. The language
+            # argument is not a filter: a release is eligible only when its
+            # name claims a source language translation can read. English
+            # stays on the preferred-language path and is not in ``languages``.
+            for title in titles:
+                try:
+                    releases = await self.torrents.prowlarr.search(
+                        title, language="*", limit=50
+                    )
+                except Exception as error:  # noqa: BLE001 - retain working direct-download candidates
+                    logger.warning(
+                        "Translation indexer search unavailable (%s)",
+                        type(error).__name__,
+                    )
                     continue
-                for title in titles:
-                    try:
-                        releases = await self.torrents.prowlarr.search(
-                            title, language=language, limit=50
-                        )
-                    except Exception as error:  # noqa: BLE001 - retain working direct-download candidates
-                        logger.warning(
-                            "Translation indexer search unavailable (%s)",
-                            type(error).__name__,
-                        )
-                        continue
-                    for release in releases:
-                        if release_language(
-                            release.get("title", ""), language
-                        ) and title_matches_release(title, release["title"]):
-                            candidates[
-                                (
-                                    str(release.get("provider") or "prowlarr"),
-                                    str(release["id"]),
-                                )
-                            ] = {**release, "language": language}
+                for release in releases:
+                    claimed = claimed_source_language(str(release.get("title") or ""))
+                    if claimed in languages and title_matches_release(
+                        title, release["title"]
+                    ):
+                        candidates[
+                            (
+                                str(release.get("provider") or "prowlarr"),
+                                str(release["id"]),
+                            )
+                        ] = {**release, "language": claimed}
         grabbed = 0
         for release in sorted(
             candidates.values(), key=lambda item: source_rank(item, manga)

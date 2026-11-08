@@ -20,6 +20,7 @@ from tankarr.translation import TranslationManager
 from tankarr.translation_policy import (
     fallback_languages,
     normalize_fallback_languages,
+    source_languages_to_search,
     source_mapping_language,
 )
 from tests.test_deletion import (
@@ -120,6 +121,21 @@ def test_automatic_sources_ignore_legacy_lists_and_accept_unknown_original():
     assert normalize_fallback_languages("auto") == "auto"
     with pytest.raises(ValueError):
         normalize_fallback_languages("original,xx")
+
+
+def test_configured_sources_are_searched_the_library_profile_is_not():
+    work = {"preferred_language": "en", "original_language": "ja"}
+    capable = fallback_languages(work)
+    # English is the library language. Italian existing as a product option,
+    # or as the only entry in the library profile, does not make it the target
+    # and does not hide Japanese or Chinese sources.
+    assert source_languages_to_search(
+        work, ["en", "ja", "zh", "it"], capable=capable
+    ) == ["ja", "it", "zh"]
+    assert source_languages_to_search(work, ["en"], capable=capable) == []
+    assert "en" not in source_languages_to_search(
+        work, ["EN", "JA", "zh"], capable=capable
+    )
 
 
 def test_discovery_is_bounded_fair_and_survives_restart(translation):
@@ -356,6 +372,96 @@ async def test_missing_preferred_release_queues_any_other_language(
     assert job["source"]["language"] == "zh"
     assert job["target_language"] == "en"
     manager.release_sources.discover_and_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_preferred_gap_searches_every_configured_source_language(translation):
+    manager, database, _service, _source = translation
+    manager.settings.search_languages = "en"
+    monkey_missing = [{"chapter": "2", "volume": "1", "expected": True}]
+    manager._missing = lambda _id: monkey_missing
+    provider = Mock()
+    provider.source_catalog = AsyncMock(
+        return_value=[
+            {"language": "en", "enabled": True},
+            {"language": "ja", "enabled": True},
+            {"language": "zh", "enabled": True},
+            {"language": "it", "enabled": True},
+            {"language": "ko", "enabled": False},
+        ]
+    )
+    manager.release_sources.providers = {"suwayomi": provider}
+
+    async def discover(_manga_id, *, monitor_new, language):
+        assert monitor_new is False
+        if language == "zh":
+            database.upsert_chapters(
+                "manga-1",
+                [
+                    {
+                        **chapter("foreign-zh", "2", language="zh"),
+                        "provider": "suwayomi",
+                    }
+                ],
+                monitor_new=False,
+            )
+        return {}
+
+    manager.release_sources.discover_and_refresh.side_effect = discover
+    assert await manager.queue_missing("manga-1") == 1
+    asked = provider.source_catalog.await_args.args[0]
+    assert "ja" in asked and "zh" in asked and "it" in asked
+    assert [
+        call.kwargs["language"]
+        for call in manager.release_sources.discover_and_refresh.await_args_list
+    ] == [
+        "ja",
+        "it",
+        "zh",
+    ]
+    job = manager.store.list()[0]
+    assert job["source"]["language"] == "zh"
+    assert job["target_language"] == "en"
+    assert database.get_manga("manga-1")["preferred_language"] == "en"
+    stored = database.get_chapter("foreign-zh")
+    assert stored["language"] == "zh"
+    assert not stored["downloaded"]
+
+
+@pytest.mark.asyncio
+async def test_english_sources_do_not_invent_a_foreign_catalogue_sweep(translation):
+    manager, _database, _service, _source = translation
+    manager.settings.search_languages = "en"
+    manager._missing = lambda _id: [{"chapter": "2", "volume": "1", "expected": True}]
+    provider = Mock()
+    provider.source_catalog = AsyncMock(
+        return_value=[{"language": "en", "enabled": True}]
+    )
+    manager.release_sources.providers = {"suwayomi": provider}
+    assert await manager.queue_missing("manga-1") == 0
+    manager.release_sources.discover_and_refresh.assert_not_awaited()
+    assert manager.store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_translation_off_does_not_search_other_languages(translation):
+    manager, database, _service, _source = translation
+    manager.settings.translation_enabled = False
+    manager.settings.search_languages = "en"
+    manager._missing = lambda _id: [{"chapter": "2", "volume": "1", "expected": True}]
+    provider = Mock()
+    provider.source_catalog = AsyncMock(
+        return_value=[
+            {"language": "ja", "enabled": True},
+            {"language": "zh", "enabled": True},
+        ]
+    )
+    manager.release_sources.providers = {"suwayomi": provider}
+    assert await manager.queue_missing("manga-1") == 0
+    provider.source_catalog.assert_not_awaited()
+    manager.release_sources.discover_and_refresh.assert_not_awaited()
+    assert manager.store.list() == []
+    assert database.get_manga("manga-1")["preferred_language"] == "en"
 
 
 @pytest.mark.asyncio
