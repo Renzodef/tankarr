@@ -434,7 +434,7 @@ const SECTIONS: SectionDef[] = [
       {
         key: "preferred_unit",
         label: msg("Preferred unit"),
-        hint: msg("Tankarr follows whatever the sources can deliver in full: chapters or whole books. When both can complete a finished work, this preference decides; a running work follows chapters unless only books exist."),
+        hint: msg("Breaks ties when neither unit has priority. With automatic strategy enabled, finished non-webtoon series with a confirmed volume total follow books; continuing works usually follow chapters."),
         kind: "select",
         options: [
           ["volumes", msg("Whole volumes (books)")],
@@ -443,8 +443,8 @@ const SECTIONS: SectionDef[] = [
       },
       {
         key: "auto_unit_strategy",
-        label: msg("Follow volumes when chapters cannot finish the series"),
-        hint: msg("When mapped sources can supply every book of the edition and cannot supply every chapter, follow books. The preferred language is tried first; other languages count only while translation fallback is on. A finished series whose books are already in the library follows books too. Chapter releases with no file are left unmonitored, downloaded chapters stay, and a unit you set on the series is kept. On by default."),
+        label: msg("Automatic book strategy"),
+        hint: msg("Finished non-webtoon series with a confirmed volume total follow books. Prefer whole books; otherwise acquire and assemble their exact chapters. Unknown boundaries are never guessed, and chapter jobs remain intact. Other series retain availability-based selection. Explicit series choices are kept. On by default."),
         kind: "boolean",
       },
     ],

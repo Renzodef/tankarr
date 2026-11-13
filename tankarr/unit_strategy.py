@@ -5,12 +5,12 @@ A source that publishes a tankōbon as its only entries (``Volume 3``,
 refused to let that book satisfy a chapter in Wanted, so a series whose only
 completable releases were volumes stayed on chapters forever.
 
-This module decides when the series should follow volumes instead. It does
-not treat a volume as a chapter. The caller changes the unit, stops
-monitoring chapter releases that have no file, and leaves downloaded chapter
-files where they are.
+Finished non-webtoon works with a reliable final book count follow volumes,
+even if only chapters are available. Their chapter jobs remain intact: exact
+book boundaries allow missing books to be acquired and assembled from chapters.
+An explicit series choice wins. No unit decision moves or removes library files.
 
-The decision is conservative:
+Other works retain the availability-based strategy:
 
 * an explicit chapters or volumes choice on the series is kept;
 * a webtoon stays on episodes;
@@ -34,7 +34,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from tankarr.catalogue_consensus import count_is_reliable, managed_volume_count
+from tankarr.book_policy import completed_volume_count, expected_volume_count
+from tankarr.catalogue_consensus import count_is_reliable
 from tankarr.series_form import _is_webtoon
 from tankarr.series_summary import publication_summary
 from tankarr.series_unit import is_volume_release, normalize_series_unit
@@ -135,7 +136,7 @@ def strategy_unit_reason(manga: dict[str, Any], unit: str, fallback: str) -> str
 
 @dataclass(frozen=True)
 class UnitStrategyDecision:
-    action: str  # "stay" | "switch" | "maintain"
+    action: str  # "stay" | "switch" | "maintain" | "reset"
     unit: str
     reason: str
     translation_used: bool = False
@@ -143,6 +144,7 @@ class UnitStrategyDecision:
     volumes: tuple[int, ...] = ()
     volume_expected: int | None = None
     chapter_expected: int | None = None
+    chapter_fallback: bool = False
 
     def record(self) -> dict[str, Any]:
         return {
@@ -154,6 +156,7 @@ class UnitStrategyDecision:
             "volumes": list(self.volumes),
             "volume_expected": self.volume_expected,
             "chapter_expected": self.chapter_expected,
+            "chapter_fallback": self.chapter_fallback,
         }
 
 
@@ -172,6 +175,26 @@ def decide_unit_strategy(
             "stay", unit, "the series unit was chosen for this series"
         )
     record = strategy_record(manga)
+    if auto_unit_strategy and (count := completed_volume_count(manga, metadata)):
+        # The target edition does not depend on today's source availability.
+        # Keep chapter jobs: they are the inputs for books not offered whole.
+        return UnitStrategyDecision(
+            "maintain"
+            if record.get("operator") is False
+            and normalize_series_unit(manga.get("series_unit_override")) == "volumes"
+            else "switch",
+            "volumes",
+            "finished edition with a confirmed book total; chapters fill missing books",
+            volume_expected=count,
+            chapter_expected=_expected_chapters(manga, metadata),
+            chapter_fallback=True,
+        )
+    if record.get("chapter_fallback") and record.get("operator") is False:
+        # A metadata correction (ongoing/webtoon/uncertain total), or disabling
+        # the automatic policy, must release this policy's own saved override.
+        return UnitStrategyDecision(
+            "reset", "chapters", "finished-book policy no longer applies"
+        )
     if (
         normalize_series_unit(manga.get("series_unit_override")) == "volumes"
         and record.get("operator") is False
@@ -294,20 +317,7 @@ def decide_unit_strategy(
 
 
 def _expected_volumes(manga: dict[str, Any], metadata: dict[str, Any]) -> int | None:
-    unit = str(manga.get("expected_count_unit_override") or "").casefold()
-    if unit in {"volume", "book", "issue"}:
-        count = _positive(manga.get("expected_count_override"))
-        if count:
-            return count
-    edition = _positive(manga.get("edition_book_count"))
-    if edition:
-        return edition
-    managed = managed_volume_count(metadata)
-    if managed:
-        return managed
-    if count_is_reliable(metadata, "volume"):
-        return _positive(metadata.get("volume_count"))
-    return None
+    return expected_volume_count(manga, metadata)
 
 
 def _expected_chapters(manga: dict[str, Any], metadata: dict[str, Any]) -> int | None:

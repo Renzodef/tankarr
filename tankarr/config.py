@@ -100,9 +100,9 @@ class Settings(BaseSettings):
     duplicate_cleanup_enabled: bool = True
     # Unit preference when both chapters and books can complete a series.
     preferred_unit: Literal["chapters", "volumes"] = "volumes"
-    # When volumes can finish a series and chapters cannot, follow volumes
-    # and stop monitoring chapter releases that have no file. An explicit
-    # unit on the series is left alone. Downloaded chapter files stay.
+    # Finished non-webtoons with a reliable volume count target books, with
+    # exact chapters as fallback. Other works retain availability-based choice.
+    # Explicit series units win; this flag also gates default book assembly.
     auto_unit_strategy: bool = True
     source_priority_fresh: str = ""
     source_priority_backfill: str = ""

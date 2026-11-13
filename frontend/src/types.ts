@@ -596,6 +596,7 @@ export type AuthorCredit = {
 export type Manga = MangaSummary & {
   preferred_source_key?: string | null;
   assemble_books_automatically?: boolean;
+  book_assembly_mode?: "automatic" | "on" | "off";
   created_at: string;
   monitor_mode: MonitorMode;
   series_unit_override?: SeriesUnit | null;

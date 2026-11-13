@@ -191,7 +191,15 @@ class TranslationManager:
             candidates.sort(key=lambda source: source_rank(source, manga))
             existing = self.store.slots(manga_id, manga["preferred_language"])
             queued = 0
+            targets = []
             for missing in self._missing(manga_id):
+                targets.append(missing)
+                key = slot_key(missing)
+                if key not in existing and not any(
+                    slot_key(item) == key for item in candidates
+                ):
+                    targets.extend(self._book_chapter_targets(manga, missing))
+            for missing in targets:
                 key = slot_key(missing)
                 if key in existing:
                     continue
@@ -206,6 +214,41 @@ class TranslationManager:
                 if queued >= limit:
                     break
         return queued
+
+    def _book_chapter_targets(self, manga: dict, missing: dict) -> list[dict]:
+        """Translate exact missing chapters only when no whole book is offered."""
+        from tankarr.book_policy import completed_volume_count
+        from tankarr.chapter_map import chapters_by_volume
+        from tankarr.chapter_mapping import canonical_number
+
+        manga_id = str(manga["id"])
+        metadata = (self.database.get_series_metadata(manga_id) or {}).get("data") or {}
+        if missing.get("chapter") is not None or not completed_volume_count(
+            manga, metadata
+        ):
+            return []
+        volume = canonical_number(missing.get("volume"))
+        by_volume = chapters_by_volume(self.database.chapter_map(manga_id))
+        labels = by_volume.get(volume, set())
+        if not labels or any(
+            labels & other for v, other in by_volume.items() if v != volume
+        ):
+            return []
+        blocked = self.database.blocked_releases(manga_id)
+        native = self.database.list_chapters(manga_id, manga["preferred_language"])
+        satisfied = {
+            canonical_number(release.get("chapter"))
+            for release in native
+            if release.get("downloaded")
+            or (
+                release["id"] not in blocked
+                and self.service.can_download_release(release)
+            )
+        }
+        return [
+            {"chapter": label, "volume": volume, "expected": True}
+            for label in sorted(labels - satisfied, key=lambda label: float(label))
+        ]
 
     def _missing(self, manga_id: str) -> list[dict]:
         # A native release still queued or obtainable always wins, even if the

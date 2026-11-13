@@ -1099,6 +1099,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def _unit_context(manga_id: str) -> dict[str, Any]:
         return {
+            "auto_unit_strategy": settings.auto_unit_strategy,
             "preferred": getattr(settings, "preferred_unit", "volumes"),
             "indexer_volumes": database.list_indexer_volumes(manga_id),
             "unobtainable_volumes": database.unobtainable_indexer_volumes(manga_id),
@@ -1344,6 +1345,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         metadata_data = attach_series_artwork(item, enriched)
         item["publication_signals"] = inputs["publication_signals"]
         item["_unit_context"] = {
+            "auto_unit_strategy": settings.auto_unit_strategy,
             "preferred": settings.preferred_unit,
             "indexer_volumes": inputs["indexer_volumes"],
             "unobtainable_volumes": inputs["unobtainable_volumes"],
@@ -3260,6 +3262,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "expected_count_override",
                     "edition_book_count",
                     "assemble_books_automatically",
+                    "book_assembly_mode",
                     "reader_mode_override",
                     "reader_direction_override",
                 )

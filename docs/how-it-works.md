@@ -172,27 +172,34 @@ A series page shows either a shelf of books or a list of chapters, never both:
 - a shelf that holds only books and no chapter file is shown as books even
   while the work is running, except for webtoons.
 
-For downloading, Tankarr follows what the sources can deliver in full. A
-running work follows chapters unless only books exist. When both chapters and
-books can complete a finished work, **Preferred unit** in
-**Settings → Sources → Download sources** decides; the default is
-**Whole volumes (books)**.
+For downloading, a finished non-webtoon with a reliable final book count targets
+volumes, even when sources only offer chapters. A running work usually follows
+chapters. **Preferred unit** in **Settings → Sources → Download sources** breaks
+ties for works without a stronger rule.
 
-**Follow volumes when chapters cannot finish the series**
+**Automatic book strategy**
 (`TANKARR_AUTO_UNIT_STRATEGY`, on by default) makes that choice before a grab
-is queued. It switches a series to books only when three things are true: the
-catalogue (or the edition count you set) names how many books the work has,
-mapped sources offer every one of those books, and chapter releases do not
-offer every chapter. The series language is tried first. A book in another
-language counts only while translation fallback is on, and only when the
-series language cannot finish that unit. A title that is only a volume
+is queued. Whole books take precedence over acquiring chapters to assemble them.
+If a book is unavailable, its explicitly mapped chapters remain eligible;
+once all their files are verified, Tankarr assembles the book in order and moves
+the originals to the recycle bin for the configured retention period. Without
+exact boundaries, it keeps the chapters intact. It never divides chapters by
+the volume count or turns an incomplete book into a complete one.
+
+**Edit series → Book assembly** can disable this operation, explicitly enable it,
+or restore the automatic policy. Series left unmonitored, manually frozen or
+marked up to date are not automatically converted. No media are changed by a
+database migration. Existing true assembly flags remain enabled; the former
+default false follows the new automatic policy. Explicitly disabling assembly
+stores an enduring opt-out.
+
+The preferred language is tried first. Translation remains controlled by its
+global switch; exact foreign chapters can supply a missing book when no whole
+foreign book is offered. A title that is only a volume
 (`Volume 3`, `第3卷`) is a book even when the source numbered it as a chapter.
-The switch stores its reason on the series, leaves chapter releases that have
-no file unmonitored, and cancels queued chapter grabs. Files already in the
-library stay. A unit you set on the series is not changed, and a webtoon stays
-on episodes. A finished work whose books are already on disk follows books
-even if chapter releases also exist, so Wanted stops asking for chapter files
-that were never downloaded.
+The new finished-book rule keeps chapter monitoring and jobs intact. Other
+series retain the existing availability-based strategy. A unit you set on the
+series is not changed, and a native webtoon stays on episodes.
 
 ### Which chapter is in which book
 

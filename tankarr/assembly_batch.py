@@ -1,4 +1,4 @@
-"""Reviewed series assembly and opt-in, bounded background assembly."""
+"""Reviewed series assembly and bounded automatic assembly of finished books."""
 
 from __future__ import annotations
 
@@ -13,6 +13,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 
 from tankarr.assemble import AssemblyConflict, BookAssembler
+from tankarr.book_policy import completed_volume_count
+from tankarr.series_summary import automatic_updates_paused
+from tankarr.series_unit import normalize_series_unit
 from tankarr.series_units import load_series_units
 from tankarr.service import LibraryUnavailable, RecoveryBlocked, UnsafeLibraryPath
 
@@ -101,6 +104,27 @@ class BookAssemblyBatch:
             ],
         }
 
+    def _enabled(self, manga_id: str, *, expected: bool = True) -> bool:
+        manga = self.database.get_manga(manga_id, include_logical_counts=False)
+        if (
+            automatic_updates_paused(manga)
+            or manga.get("library_status_override") == "up_to_date"
+        ):
+            return False
+        mode = manga.get("book_assembly_mode", "automatic")
+        if mode == "off":
+            return False
+        if mode == "on" or manga.get("assemble_books_automatically"):
+            return True
+        metadata = (self.database.get_series_metadata(manga_id) or {}).get("data") or {}
+        return bool(
+            self.service.settings.auto_unit_strategy
+            and expected
+            and manga.get("monitor_mode") in {"all", "existing"}
+            and normalize_series_unit(manga.get("series_unit_override")) != "chapters"
+            and completed_volume_count(manga, metadata)
+        )
+
     async def run_automatic(self, *, limit: int = 4) -> dict[str, Any]:
         result: dict[str, Any] = {"assembled": 0, "errors": []}
         if self._busy() or self.service.settings.restored_safe_mode:
@@ -110,21 +134,25 @@ class BookAssemblyBatch:
             series = [
                 str(row["id"])
                 for row in connection.execute(
-                    "SELECT id FROM manga WHERE assemble_books_automatically=1 ORDER BY id"
+                    "SELECT m.id FROM manga m WHERE book_assembly_mode <> 'off' "
+                    "AND EXISTS (SELECT 1 FROM chapter_release c WHERE c.manga_id=m.id "
+                    "AND c.downloaded=1 AND c.chapter IS NOT NULL) ORDER BY m.id"
                 )
             ]
         attempted = 0
         for manga_id in series:
+            if not self._enabled(manga_id):
+                continue
             groups = await asyncio.to_thread(load_series_units, self.database, manga_id)
             for group in groups["books"]:
-                if not group["can_assemble"]:
+                if not group["can_assemble"] or group.get("ignored"):
                     continue
                 if attempted >= limit or self._busy():
                     return result
-                if not self.database.get_manga(
-                    manga_id, include_logical_counts=False
-                ).get("assemble_books_automatically"):
-                    break
+                if not self._enabled(manga_id, expected=bool(group.get("expected"))):
+                    continue
+                if group["volume"] in self.service.whole_books_to_wait_for(manga_id):
+                    continue
                 try:
                     attempted += 1
                     preview = await asyncio.to_thread(

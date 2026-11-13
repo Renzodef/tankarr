@@ -6,6 +6,23 @@ import type { Manga } from "../types";
 import { EditModal } from "./SeriesPage";
 
 afterEach(cleanup);
+it.each(["off", "on", "automatic"] as const)("saves the explicit book assembly mode %s", async (mode) => {
+  const item = {
+    id: "books", title: "Example", authors: [], preferred_language: "en", monitor_mode: "all",
+    available_languages: ["en"], downloaded_count: 2, chapter_count: 30,
+    book_assembly_mode: mode === "automatic" ? "off" : "automatic",
+    library_count: { unit: "volume", downloaded_count: 2, total_count: 3 },
+  } as unknown as Manga;
+  const update = vi.spyOn(api, "updateManga").mockResolvedValue(item);
+  update.mockClear();
+  const saved = vi.fn().mockResolvedValue(undefined);
+  render(<AppContext.Provider value={{ health: null, notify: vi.fn(), refreshJobs: vi.fn().mockResolvedValue(undefined), refreshHealth: vi.fn().mockResolvedValue(undefined) }}><EditModal manga={item} onClose={vi.fn()} onSaved={saved} onOpenCover={vi.fn()} onOpenMetadata={vi.fn()} /></AppContext.Provider>);
+  fireEvent.change(screen.getByLabelText("Book assembly"), { target: { value: mode } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+  expect(update).toHaveBeenCalledWith("books", { book_assembly_mode: mode });
+});
+
 it("submits a main-chapter total below the count including decimals for server validation", async () => {
   const item = {
     id: "edition", title: "Example", authors: [], preferred_language: "en", monitor_mode: "all",

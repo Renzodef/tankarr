@@ -98,6 +98,18 @@ def test_api_persists_automatic_opt_in_without_starting_downloads(tmp_path):
         assert (
             client.post("/api/manga/manga-1/assemble?dry_run=true").status_code == 409
         )
+        response = client.patch(
+            "/api/manga/manga-1", json={"book_assembly_mode": "automatic"}
+        )
+        assert response.status_code == 200
+        assert response.json()["book_assembly_mode"] == "automatic"
+        assert response.json()["queued"] == 0
+        assert (
+            client.patch(
+                "/api/manga/manga-1", json={"book_assembly_mode": "invalid"}
+            ).status_code
+            == 422
+        )
         assert (
             client.post(
                 "/api/manga/manga-1/volumes/1/assemble?dry_run=true"

@@ -123,8 +123,34 @@ retaining the old book in the recycle bin.
 
 The single-book and series assembly endpoints support dry runs. The series action
 reports individual outcomes and allows a fresh preview of remaining books. The
-series flag `assemble_books_automatically` is off by default. The monitor attempts
-at most four opted-in books per cycle and defers during active imports.
+series policy `book_assembly_mode` defaults to `automatic`. With automatic unit
+strategy enabled, monitored finished works with a reliable final volume count
+target books, even when only chapters are offered. Native webtoons stay in
+chapters; Manhwa/Manhua labels alone do not identify a webtoon. Explicit series
+unit choices win. Conflicting or uncorroborated counts cannot enable this rule;
+the existing compatibility rule for metadata predating count confidence remains.
+
+Whole books from a configured download provider and books already being fetched
+take precedence. Missing books can use chapters with explicit, unambiguous
+operator/OCR boundaries. When translation is enabled, an available foreign book
+is preferred to its foreign chapters; exact chapters can otherwise be translated
+in the managed language and assembled. Display estimates and catalogue hints
+never authorize assembly. Without exact boundaries the chapters stay intact;
+knowing only the number of books is insufficient to divide them.
+
+`PATCH /api/manga/{id}` accepts `book_assembly_mode: automatic|on|off`. `off`
+prevents background assembly, while `on` explicitly opts in to the existing
+assembler. The legacy `assemble_books_automatically` boolean remains supported:
+setting it maps to `on` or `off`; sending both settings is rejected. On upgrade,
+old true values remain opted in and old default zero values follow `automatic`.
+No migration rewrites media or monitoring states. Setting the mode to `automatic`
+clears a previous explicit choice. Manually frozen/up-to-date collections and
+ignored volumes are left alone.
+
+The existing monitor attempts at most four books per cycle and defers during
+active imports or restored safe mode. No new scheduler is installed. Every
+chapter must be available and verified before publication; source archives go
+to the existing recycle bin only after the book and its provenance are committed.
 
 ## 6. Audit
 “Audit files” opens from the series actions. It lists every downloaded
