@@ -11,6 +11,7 @@ import uuid
 import zipfile
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -4803,6 +4804,7 @@ class TankarrService:
         recycle: bool = False,
         volume: str | None = None,
         expected_file_sha256: dict[str, str] | None = None,
+        assembled_bookmark_target: tuple[str, dict[str, tuple[int, int]]] | None = None,
     ) -> dict[str, Any]:
         """Retire proven duplicates while the caller holds the mutation lock.
 
@@ -4859,9 +4861,17 @@ class TankarrService:
                     raise UnsafeLibraryPath(
                         "Chapter bytes changed before retirement; source files were restored."
                     )
-            reset = self.database.reset_chapter_files(
-                manga_id, current, quarantine.operation_id
-            )
+            with (
+                self.database.write_snapshot()
+                if assembled_bookmark_target is not None
+                else nullcontext()
+            ):
+                reset = self.database.reset_chapter_files(
+                    manga_id,
+                    current,
+                    quarantine.operation_id,
+                    assembled_bookmark_target=assembled_bookmark_target,
+                )
         except Exception as exc:
             self._handle_deletion_database_exception(quarantine, exc)
             raise

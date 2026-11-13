@@ -317,6 +317,61 @@ async def test_packaged_pages_are_in_chapter_and_natural_page_order(
     )
 
 
+def test_assembly_moves_bookmark_to_matching_page(complete_book, tmp_path):
+    database, _service, assembler, paths = complete_book
+    database.save_reader_bookmark("manga-1", "chapter-55.5", page_index=1)
+    with database.read_snapshot():
+        plan = assembler._plan("manga-1", "12")
+    workspace = tmp_path / "package"
+    workspace.mkdir()
+
+    packaged = assembler._package(plan, workspace)
+    result, retirement = assembler._publish_and_retire(
+        plan, packaged, assembler._confirmation(plan)
+    )
+
+    bookmark = database.reader_bookmark("manga-1")
+    assert bookmark["chapter_id"] == result["chapter"]["id"]
+    assert bookmark["page_index"] == 3
+    with zipfile.ZipFile(result["path"]) as archive:
+        assert archive.read("000004.jpg") == b"55.5:second"
+    assert retirement["chapters_reset"] == 3
+    assert all(not path.exists() for path in paths)
+
+
+def test_failed_assembly_retirement_preserves_bookmark(
+    complete_book, tmp_path, monkeypatch
+):
+    database, _service, assembler, paths = complete_book
+    original = database.save_reader_bookmark("manga-1", "chapter-55.5", page_index=1)
+    with database.read_snapshot():
+        plan = assembler._plan("manga-1", "12")
+    workspace = tmp_path / "package"
+    workspace.mkdir()
+    packaged = assembler._package(plan, workspace)
+
+    def fail_after_bookmark_move(*_args):
+        moved = database.reader_bookmark("manga-1")
+        assert moved["chapter_id"] != original["chapter_id"]
+        raise RuntimeError("injected failure before resetting chapters")
+
+    monkeypatch.setattr(
+        database, "_forget_wanted_after_file_reset", fail_after_bookmark_move
+    )
+    with pytest.raises(
+        RuntimeError, match="injected failure before resetting chapters"
+    ):
+        assembler._publish_and_retire(plan, packaged, assembler._confirmation(plan))
+
+    assert database.reader_bookmark("manga-1") == original
+    assert all(path.is_file() for path in paths)
+    assert all(
+        database.get_chapter(f"chapter-{number}")["downloaded"]
+        for number in ("55", "55.5", "56")
+    )
+
+
+@pytest.mark.asyncio
 async def test_assembly_commits_provenance_before_recycling_sources(
     complete_book, monkeypatch
 ):

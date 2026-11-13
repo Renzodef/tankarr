@@ -659,11 +659,18 @@ class BookAssembler:
                 or _file_snapshot(Path(item["file"]["path"]), root) != item["file"]
             ):
                 raise AssemblyConflict("A chapter changed; source files were kept")
+        page_ranges = {}
+        offset = 0
+        for item in plan["selected"]:
+            pages = item["file"]["pages"]
+            page_ranges[str(item["release"]["id"])] = (offset, pages)
+            offset += pages
         retirement = self.service._delete_duplicate_chapter_files_locked(
             plan["manga"]["id"],
             only=set(plan["book"]["assembled_from"]["chapter_ids"]),
             recycle=True,
             volume=plan["volume"],
+            assembled_bookmark_target=(str(book["id"]), page_ranges),
             expected_file_sha256={
                 item["file"]["path"]: item["file"]["sha256"]
                 for item in plan["selected"]
