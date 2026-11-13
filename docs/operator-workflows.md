@@ -107,6 +107,37 @@ In Edit, **Assemble books automatically** enables the same operation for future
 covered books in that series. It is off by default. Background assembly is bounded
 to four attempts per monitor cycle and waits while imports are active.
 
+### Package a book on a worker
+
+Operators with a small library host can move the archive work to another machine:
+
+1. Request `POST /api/manga/{id}/volumes/{volume}/assemble?dry_run=true&worker_manifest=true`.
+   Save the returned `worker_manifest` and confirmation snapshot. The manifest
+   contains source release IDs, SHA-256 hashes, page/size budgets and ComicInfo,
+   but no server filesystem paths or credentials.
+2. Copy precisely those source archives to a private worker directory, using the
+   sequential filenames in the manifest. Run
+   `python tools/assemble_volume.py manifest.json sources/ assembled.cbz` there.
+   Pillow is required. The worker keeps a 25 GiB scratch reserve and neither
+   publishes books nor deletes chapters. Choose CPU/IO limits on the worker.
+3. Create an ordinary upload session at `POST /api/import/uploads`, upload the
+   result as `assembled.cbz` using `PUT /api/import/uploads/{upload_id}/files`,
+   then call the same assembly endpoint with `prepared_upload_id={upload_id}`
+   and `confirmation_snapshot={snapshot}`. Use the normal authenticated API;
+   never put API keys in command-line arguments or URLs.
+4. Tankarr copies the uploaded artifact into private staging and verifies its
+   metadata and **every ordered page against the original chapter files**. A
+   changed map, source, payload, ordering, or metadata rejects publication. The
+   library host performs sequential integrity checks, without page extraction,
+   image processing or repackaging. Publication, recorded provenance and source
+   retirement then use the normal assembly transaction and recycle bin.
+
+Remote packaging is opt-in per request and adds no daemon, queue or scheduler.
+The ordinary local assembly API and automatic-assembly setting are unchanged.
+Keep source archives and the worker result until the import receipt is verified.
+After an uncertain response, inspect the owned volume before retrying. Reusing an
+upload cannot publish a second copy of an already-owned volume.
+
 ## Portable library lists
 
 Portable list export and import are available through the API; there is no

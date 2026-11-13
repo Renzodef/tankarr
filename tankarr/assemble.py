@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import stat
 import tempfile
@@ -20,15 +21,17 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 
-from tankarr.archive import IMAGE_SUFFIXES, package_cbz_validated
+from tankarr.archive import IMAGE_SUFFIXES, MAX_COMIC_INFO_BYTES, package_cbz_validated
 from tankarr.chapter_map import canonical_label, chapters_by_volume
 from tankarr.chapter_mapping import effective_edition_book_count
+from tankarr.comicinfo import build_comic_info
 from tankarr.database import Database
 from tankarr.import_limits import ImportLimitError, ImportLimits, check_page_geometry
 from tankarr.importer import natural_key
 from tankarr.naming import final_library_path
 from tankarr.series_unit import is_volume_release
 from tankarr.service import (
+    LOCAL_CONTENT_FINGERPRINT_VERSION,
     LibraryUnavailable,
     RecoveryBlocked,
     TankarrService,
@@ -428,9 +431,141 @@ class BookAssembler:
             "confirmation_snapshot": self._confirmation(plan),
         }
 
-    def preview(self, manga_id: str, volume: str) -> dict[str, Any]:
+    def preview(
+        self, manga_id: str, volume: str, *, worker_manifest: bool = False
+    ) -> dict[str, Any]:
         with self.database.read_snapshot():
-            return self._response(self._plan(manga_id, volume))
+            plan = self._plan(manga_id, volume)
+            result = self._response(plan)
+            if worker_manifest:
+                result["worker_manifest"] = self.worker_manifest(plan)
+            return result
+
+    @staticmethod
+    def worker_manifest(plan):
+        """Portable packaging inputs; no library paths or credentials leave the host."""
+        return {
+            "version": 1,
+            "comic_info": build_comic_info(
+                plan["manga"], plan["book"], plan["book"]["pages"]
+            ).decode("utf-8"),
+            "pages": plan["book"]["pages"],
+            "expanded_bytes": sum(
+                x["file"]["expanded_bytes"] for x in plan["selected"]
+            ),
+            "sources": [
+                {
+                    "id": item["release"]["id"],
+                    "file": f"{index:06d}.cbz",
+                    **{key: item["file"][key] for key in ("sha256", "size", "pages")},
+                }
+                for index, item in enumerate(plan["selected"], start=1)
+            ],
+        }
+
+    def _accept_prepared(self, plan, upload_id: str, workspace: Path):
+        """Attest remote packaging without unpacking/repackaging on the library host.
+
+        A worker is not trusted to assert provenance. Compare every ordered page
+        with the still-owned sources, then use the normal publication/retirement
+        transaction and its fresh snapshot checks.
+        """
+        if not re.fullmatch(r"[a-f0-9]{32}", upload_id):
+            raise AssemblyConflict("Invalid assembly upload session")
+        root = self.service.settings.data_dir / "import-uploads"
+        source = root / upload_id / "assembled.cbz"
+        destination = workspace / "assembled.cbz"
+        manifest = self.worker_manifest(plan)
+        maximum = (
+            manifest["expanded_bytes"]
+            + MAX_COMIC_INFO_BYTES
+            + manifest["pages"] * 1024
+            + 1024**2
+        )
+        limits = ImportLimits.from_settings(self.service.settings)
+        archive_digest = hashlib.sha256()
+        size = 0
+        with (
+            _open_library_file(source, root) as reader,
+            destination.open("xb") as writer,
+        ):
+            limits.check(manifest["expanded_bytes"], manifest["pages"], workspace)
+            while chunk := reader.read(1024 * 1024):
+                size += len(chunk)
+                if size > maximum:
+                    raise AssemblyConflict(
+                        "Prepared book exceeds the source size budget"
+                    )
+                archive_digest.update(chunk)
+                writer.write(chunk)
+
+        expected = hashlib.sha256(LOCAL_CONTENT_FINGERPRINT_VERSION)
+        names = []
+        sizes = []
+        for item in plan["selected"]:
+            with (
+                _open_library_file(
+                    Path(item["file"]["path"]), Path(plan["root"])
+                ) as handle,
+                zipfile.ZipFile(handle) as archive,
+            ):
+                members = _image_members(archive)
+                if len({x.filename for x in members}) != len(members):
+                    raise AssemblyConflict("Duplicate source page names")
+                for member in members:
+                    index = len(names) + 1
+                    names.append(
+                        f"{index:06d}{Path(member.filename).suffix.casefold()}"
+                    )
+                    sizes.append(member.file_size)
+                    expected.update(f"{index}:{member.file_size}\0".encode())
+                    with archive.open(member) as reader:
+                        while chunk := reader.read(1024 * 1024):
+                            expected.update(chunk)
+        actual = hashlib.sha256(LOCAL_CONTENT_FINGERPRINT_VERSION)
+        with zipfile.ZipFile(destination) as archive:
+            if archive.namelist() != ["ComicInfo.xml", *names]:
+                raise AssemblyConflict(
+                    "Prepared book pages differ from the source order"
+                )
+            if any(x.compress_type != zipfile.ZIP_STORED for x in archive.infolist()):
+                raise AssemblyConflict(
+                    "Prepared books must store pages without compression"
+                )
+            info = archive.getinfo("ComicInfo.xml")
+            if info.file_size > MAX_COMIC_INFO_BYTES:
+                raise AssemblyConflict("Prepared book metadata exceeds the size limit")
+            if archive.read(info) != manifest["comic_info"].encode("utf-8"):
+                raise AssemblyConflict(
+                    "Prepared book metadata differs from the preview"
+                )
+            for index, name in enumerate(names, start=1):
+                member = archive.getinfo(name)
+                if stat.S_ISLNK(member.external_attr >> 16) or member.flag_bits & 1:
+                    raise AssemblyConflict("Unsafe prepared page")
+                # Size is also bound by the ordered payload digest; reject bombs
+                # before attempting to read any expanded page.
+                if member.file_size != sizes[index - 1]:
+                    raise AssemblyConflict("Prepared page exceeds the source budget")
+                actual.update(f"{index}:{member.file_size}\0".encode())
+                with archive.open(member) as reader:
+                    while chunk := reader.read(1024 * 1024):
+                        actual.update(chunk)
+        if len(names) != manifest["pages"] or not hmac.compare_digest(
+            expected.hexdigest(), actual.hexdigest()
+        ):
+            raise AssemblyConflict(
+                "Prepared book does not contain exactly the source pages"
+            )
+        return (
+            destination,
+            {
+                "sha256": archive_digest.hexdigest(),
+                "size": size,
+                "page_count": len(names),
+            },
+            actual.hexdigest(),
+        )
 
     def _package(self, plan: dict[str, Any], workspace: Path):
         limits = ImportLimits.from_settings(self.service.settings)
@@ -524,11 +659,18 @@ class BookAssembler:
                 or _file_snapshot(Path(item["file"]["path"]), root) != item["file"]
             ):
                 raise AssemblyConflict("A chapter changed; source files were kept")
+        page_ranges = {}
+        offset = 0
+        for item in plan["selected"]:
+            pages = item["file"]["pages"]
+            page_ranges[str(item["release"]["id"])] = (offset, pages)
+            offset += pages
         retirement = self.service._delete_duplicate_chapter_files_locked(
             plan["manga"]["id"],
             only=set(plan["book"]["assembled_from"]["chapter_ids"]),
             recycle=True,
             volume=plan["volume"],
+            assembled_bookmark_target=(str(book["id"]), page_ranges),
             expected_file_sha256={
                 item["file"]["path"]: item["file"]["sha256"]
                 for item in plan["selected"]
@@ -537,7 +679,12 @@ class BookAssembler:
         return result, retirement
 
     async def assemble(
-        self, manga_id: str, volume: str, confirmation_snapshot: str | None
+        self,
+        manga_id: str,
+        volume: str,
+        confirmation_snapshot: str | None,
+        *,
+        prepared_upload_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.service._mutation_lock:
             self.service.assert_mutations_allowed()
@@ -558,9 +705,14 @@ class BookAssembler:
             with tempfile.TemporaryDirectory(
                 dir=self.service.settings.staging_dir, prefix="assemble-"
             ) as temporary:
-                packaged = await self._finish_thread(
-                    self._package, plan, Path(temporary)
-                )
+                if prepared_upload_id is None:
+                    packaged = await self._finish_thread(
+                        self._package, plan, Path(temporary)
+                    )
+                else:
+                    packaged = await self._finish_thread(
+                        self._accept_prepared, plan, prepared_upload_id, Path(temporary)
+                    )
                 result, retirement = await self._finish_thread(
                     self._publish_and_retire, plan, packaged, confirmation_snapshot
                 )
@@ -607,14 +759,23 @@ def register_assemble_routes(
         manga_id: str,
         volume: str,
         dry_run: bool = False,
+        worker_manifest: bool = False,
+        prepared_upload_id: str | None = Query(default=None, pattern="^[a-f0-9]{32}$"),
         confirmation_snapshot: str | None = Query(
             default=None, min_length=64, max_length=64, pattern="^[0-9a-f]{64}$"
         ),
     ):
         try:
             if dry_run:
-                return await asyncio.to_thread(assembler.preview, manga_id, volume)
-            return await assembler.assemble(manga_id, volume, confirmation_snapshot)
+                return await asyncio.to_thread(
+                    assembler.preview, manga_id, volume, worker_manifest=worker_manifest
+                )
+            return await assembler.assemble(
+                manga_id,
+                volume,
+                confirmation_snapshot,
+                prepared_upload_id=prepared_upload_id,
+            )
         except KeyError as exc:
             raise HTTPException(404, "Series not found") from exc
         except AssemblyConflict as exc:
