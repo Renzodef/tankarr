@@ -111,6 +111,18 @@ from the `.env` file next to the Compose file; Tankarr never reads them.
 The same file publishes the web interface on the host port given by
 `TANKARR_PORT` (default `8787`).
 
+## Automatic chapter retirement
+
+These controls apply to the automatic rule that retires loose chapters once
+all expected books are owned. Explicit book assembly still proves every source
+page and always recycles its inputs. Both controls are environment-only;
+restart Tankarr after changing them.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TANKARR_RETIRE_REDUNDANT_CHAPTERS` | `verified` | `off` disables the automatic rule. `verified` requires a positive content match (at least 80% of pages), one uniquely numbered book, agreement with the chapter map, and coverage of at least 90% of its mapped loose chapters. Unreadable or unverified files stay. `on` explicitly selects the legacy map-only policy and is not recommended. |
+| `TANKARR_RETIRE_RECYCLE` | `true` | Keep automatically retired chapters in the recycle bin for the configured retention period. `false` permits permanent deletion; it is not recommended. |
+
 ## Server and storage
 
 | Variable | Default | Description |
