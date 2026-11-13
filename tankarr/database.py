@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS manga (
     monitored INTEGER NOT NULL DEFAULT 1,
     auto_download INTEGER NOT NULL DEFAULT 0,
     assemble_books_automatically INTEGER NOT NULL DEFAULT 0,
+    book_assembly_mode TEXT NOT NULL DEFAULT 'automatic',
     monitor_initialized INTEGER NOT NULL DEFAULT 0,
     last_checked_at TEXT,
     last_check_error TEXT,
@@ -922,7 +923,7 @@ def clean_release_title(value: object) -> str:
 
 # Increment whenever initialize adds or changes a schema migration. The marker is
 # committed only after initialization succeeds; upgrades are backed up beforehand.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class Database:
@@ -1091,6 +1092,12 @@ class Database:
                 "INTEGER NOT NULL DEFAULT 0",
             )
             self._ensure_column(connection, "chapter_release", "assembled_from", "TEXT")
+            self._ensure_column(
+                connection,
+                "manga",
+                "book_assembly_mode",
+                "TEXT NOT NULL DEFAULT 'automatic'",
+            )
             self._ensure_column(connection, "chapter_release", "verified_book", "TEXT")
             self._ensure_column(
                 connection,
@@ -2070,6 +2077,7 @@ class Database:
             "reader_direction_override",
             "auto_download",
             "assemble_books_automatically",
+            "book_assembly_mode",
             "status_override",
             "library_status_override",
             "verified_chapter_count",
@@ -2079,6 +2087,21 @@ class Database:
             "edition_book_count",
         }
         selected = {key: value for key, value in updates.items() if key in allowed}
+        if "book_assembly_mode" in selected:
+            mode = selected["book_assembly_mode"]
+            if mode not in {"automatic", "on", "off"}:
+                raise ValueError("Unsupported book assembly mode")
+            if "assemble_books_automatically" in selected:
+                raise ValueError(
+                    "Choose book_assembly_mode or assemble_books_automatically, not both"
+                )
+            selected["assemble_books_automatically"] = mode == "on"
+        elif "assemble_books_automatically" in selected:
+            # Preserve the old API's explicit opt-out, separately from the
+            # historical default zero. Automatic can be restored via the mode.
+            selected["book_assembly_mode"] = (
+                "on" if selected["assemble_books_automatically"] else "off"
+            )
         if "series_unit_strategy" in selected:
             raw = selected["series_unit_strategy"]
             if raw is None:
@@ -4229,15 +4252,28 @@ class Database:
                         )
                     )
                 )
-        # An explicit operator map permits chapter acquisition for missing
+        # An explicit map permits chapter acquisition for missing
         # books while the series remains counted and searched as volumes.
         # Run the normal chapter selector so numbering and edition gates still
-        # apply; catalogue hints alone never enable this fallback.
+        # apply; catalogue hints alone never enable this fallback. A completed
+        # edition also accepts the explicit OCR book-reading map.
+        from tankarr.book_policy import completed_volume_count
+
+        completed_books = completed_volume_count(manga, metadata)
+        fallback_sources = {"operator", "ocr"} if completed_books else {"operator"}
+        memberships: dict[str, set[str]] = defaultdict(set)
+        for entry in map_entries:
+            if (
+                entry.source in fallback_sources
+                and entry.exact
+                and len(entry.volumes) == 1
+            ):
+                for label in entry.chapters:
+                    memberships[label].add(entry.volumes[0])
         operator_volumes = {
-            label: entry.volumes[0]
-            for entry in map_entries
-            if entry.source == "operator" and entry.exact and len(entry.volumes) == 1
-            for label in entry.chapters
+            label: next(iter(volumes))
+            for label, volumes in memberships.items()
+            if len(volumes) == 1
         }
         if _unit_info["unit"] == "volumes" and operator_volumes:
             owned_books = {
@@ -4255,7 +4291,11 @@ class Database:
             chapters = [
                 *chapters,
                 *(
-                    {**release, "volume": operator_volumes[label]}
+                    {
+                        **release,
+                        "volume": operator_volumes[label],
+                        "_book_fallback_volume": operator_volumes[label],
+                    }
                     for release in fallback
                     if (label := canonical_number(release.get("chapter")))
                     in operator_volumes

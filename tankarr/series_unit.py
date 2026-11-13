@@ -7,7 +7,9 @@ either chosen by the user or resolved
 deterministically from the catalogue and from what the mapped sources
 actually offer:
 
-* only volume books available            → ``volumes``
+* finished non-webtoon with confirmed
+  final book count                       → ``volumes`` (chapters are fallback)
+* otherwise, only volume books available → ``volumes``
 * only chapters available                → ``chapters``
 * both: ended work with a known volume
   count                                  → ``volumes`` (finite, clean books)
@@ -228,9 +230,9 @@ def resolve_series_unit(
     * a user override wins;
     * a running work follows chapters unless only books exist;
     * otherwise books already on disk keep the series on books;
-    * an ended work takes the unit that can **complete** it; when both can,
-      the global preference decides; when neither can, the higher coverage
-      wins and the preference breaks ties.
+    * a finished non-webtoon with a reliable book total targets volumes;
+    * other works follow the unit that can complete them, then coverage and
+      global preference when neither unit can.
     """
 
     metadata = metadata or {}
@@ -252,6 +254,16 @@ def resolve_series_unit(
             "override": False,
         }
     context = _context(manga)
+    from tankarr.book_policy import completed_volume_count
+
+    if context.get("auto_unit_strategy", True) and completed_volume_count(
+        manga, metadata
+    ):
+        return {
+            "unit": "volumes",
+            "reason": "finished edition with a confirmed book total; chapters fill missing books",
+            "override": False,
+        }
     preferred = normalize_series_unit(context.get("preferred")) or "volumes"
     items = list(releases)
     cov = coverage

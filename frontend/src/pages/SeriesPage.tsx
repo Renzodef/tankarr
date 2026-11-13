@@ -2029,6 +2029,8 @@ export function EditModal({
   const [title, setTitle] = useState(manga.title);
   const [language, setLanguage] = useState(manga.preferred_language);
   const [mode, setMode] = useState<MonitorMode>(manga.monitor_mode);
+  const initialAssemblyMode = manga.assemble_books_automatically ? "on" : (manga.book_assembly_mode ?? "automatic");
+  const [assemblyMode, setAssemblyMode] = useState<"automatic" | "on" | "off">(initialAssemblyMode);
   const [readerMode, setReaderMode] = useState<"automatic" | "manga" | "webtoon">(
     manga.reader_mode_override ?? "automatic",
   );
@@ -2153,6 +2155,7 @@ export function EditModal({
       }
       const changes: Partial<Pick<Manga, "preferred_language" | "monitor_mode">> & {
         assemble_books_automatically?: boolean;
+        book_assembly_mode?: "automatic" | "on" | "off";
         status_override?: PublicationStatusOverride;
         library_status_override?: LibraryStatusOverride;
         expected_count_override?: number | "automatic";
@@ -2171,6 +2174,7 @@ export function EditModal({
       }
       if (language !== manga.preferred_language) changes.preferred_language = language;
       if (mode !== manga.monitor_mode) changes.monitor_mode = mode;
+      if (assemblyMode !== initialAssemblyMode) changes.book_assembly_mode = assemblyMode;
       if (readerMode !== (manga.reader_mode_override ?? "automatic")) {
         changes.reader_mode = readerMode;
       }
@@ -2284,6 +2288,13 @@ export function EditModal({
         </p>
       </div>
       <div className="form-row">
+        <label htmlFor="series-book-assembly">{t("Book assembly")}</label>
+        <select id="series-book-assembly" className="input" value={assemblyMode} disabled={saving}
+          onChange={(event) => setAssemblyMode(event.target.value as typeof assemblyMode)}>
+          <option value="automatic">{t("Automatic (finished series, confirmed volume total)")}</option>
+          <option value="on">{t("Enabled")}</option>
+          <option value="off">{t("Disabled")}</option>
+        </select>
         <p className="muted small">{t("When every chapter in an exact book map is available, create the book and move its chapter files to the recycle bin for the configured retention period. This applies to future completed books too.")}</p>
       </div>
       <div className="form-row">

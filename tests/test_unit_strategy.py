@@ -1,7 +1,7 @@
 """Automatic chapters-vs-volumes choice.
 
-A series stuck on chapter Wanted switches only when books can finish the
-edition and chapters cannot. Foreign books count when translation is on.
+Legacy availability decisions for works without a confirmed end. Finished
+editions and exact chapter fallback are covered in test_completed_books.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from tankarr.service import TankarrService
 from tankarr.unit_strategy import decide_unit_strategy, whole_book_number
 
 METADATA = {
-    "status": "ended",
+    "status": "unknown",
     "volume_count": 6,
     "chapter_count": 53,
     "count_confidence": {"volume": "agreed", "chapter": "agreed"},
@@ -51,7 +51,7 @@ def _foreign_volume(number: int) -> dict:
 
 
 def _manga(**extra) -> dict:
-    return {"preferred_language": "en", "status": "ended", **extra}
+    return {"preferred_language": "en", "status": "unknown", **extra}
 
 
 def _decide(releases, **kwargs):
@@ -164,7 +164,7 @@ def test_unknown_chapter_total_with_real_chapters_stays():
     decision = _decide(
         [_chapter(1), *_foreign_volumes()],
         metadata={
-            "status": "ended",
+            "status": "unknown",
             "volume_count": 6,
             "count_confidence": {"volume": "agreed", "chapter": "lone"},
         },
@@ -188,10 +188,12 @@ def test_books_on_disk_switch_a_finished_series():
         }
         for n in range(1, 7)
     )
-    decision = _decide(releases, translation_enabled=False)
+    decision = _decide(
+        releases, translation_enabled=False, metadata={**METADATA, "status": "ended"}
+    )
 
     assert decision.action == "switch"
-    assert "already in the library" in decision.reason
+    assert "confirmed book total" in decision.reason
 
 
 def test_running_work_with_real_chapters_is_not_flipped_for_owned_books():
@@ -257,7 +259,7 @@ def _seed(database: Database) -> None:
             "title": "Rasputin",
             "description": "",
             "authors": ["Author"],
-            "status": "ended",
+            "status": "unknown",
             "original_language": "zh",
         },
         "en",

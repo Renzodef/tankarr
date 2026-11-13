@@ -84,7 +84,11 @@ from tankarr.providers.base import (
 from tankarr.read_model_cache import cache_now, next_publication
 from tankarr.redaction import redact_secrets
 from tankarr.series_summary import publication_summary
-from tankarr.series_unit import normalize_series_unit, resolve_series_unit
+from tankarr.series_unit import (
+    is_volume_release,
+    normalize_series_unit,
+    resolve_series_unit,
+)
 from tankarr.source_circuit import source_gate_key
 from tankarr.source_ranking import (
     beyond_chapter_limit,
@@ -2876,8 +2880,15 @@ class TankarrService:
         )
         unmonitored = 0
         cancelled = 0
-        if decision.action in {"switch", "maintain"}:
-            if decision.action == "switch":
+        if decision.action == "reset":
+            self.database.update_manga(
+                manga_id, {"series_unit_override": None, "series_unit_strategy": None}
+            )
+        elif decision.action in {"switch", "maintain"}:
+            if decision.action == "switch" or (
+                decision.chapter_fallback
+                and manga.get("series_unit_strategy") != decision.record()
+            ):
                 self.database.update_manga(
                     manga_id,
                     {
@@ -2886,8 +2897,9 @@ class TankarrService:
                     },
                 )
                 logger.info("Following %s as volumes: %s", manga_id, decision.reason)
-            unmonitored = self.database.unmonitor_undownloaded_chapters(manga_id)
-            cancelled = self.database.cancel_queued_chapter_jobs(manga_id)
+            if not decision.chapter_fallback:
+                unmonitored = self.database.unmonitor_undownloaded_chapters(manga_id)
+                cancelled = self.database.cancel_queued_chapter_jobs(manga_id)
         return {
             "manga_id": manga_id,
             "action": decision.action,
@@ -2916,9 +2928,15 @@ class TankarrService:
             manga = self.database.get_manga(manga_id)
             covered = self._chapters_covered_by_books(manga)
             jobs: list[dict[str, Any]] = []
-            for chapter in self.database.preferred_download_candidates(
+            candidates = self.database.preferred_download_candidates(
                 manga_id, chapter_ids
-            ):
+            )
+            # Prefer a fetchable whole book, or wait for its existing job,
+            # before acquiring the exact chapters needed to assemble it.
+            direct_books = self.whole_books_to_wait_for(manga_id)
+            for chapter in candidates:
+                if chapter.get("_book_fallback_volume") in direct_books:
+                    continue
                 # Persisted indexer offers are visible as releases, but only
                 # registered download providers can turn one into a job.
                 # A torrent/usenet offer must go through its own acquisition
@@ -2949,6 +2967,21 @@ class TankarrService:
                         "Skipped release %s of %s: %s", chapter["id"], manga_id, exc
                     )
             return jobs
+
+    def whole_books_to_wait_for(self, manga_id: str) -> set[str]:
+        """Whole books offered by a download provider or already being fetched."""
+        volumes = {
+            str(v)
+            for v in self.database.pending_book_volumes([manga_id]).get(manga_id, set())
+        }
+        for release in self.database.preferred_missing_releases(manga_id):
+            if (
+                is_volume_release(release)
+                and not release.get("blocked")
+                and (release.get("queue_status") or self.can_download_release(release))
+            ):
+                volumes.update(self.database._volume_coverage(release.get("volume")))
+        return volumes
 
     def _chapters_covered_by_books(self, manga: dict[str, Any]) -> set[int]:
         """Integer chapters that owned books cover (map or declared edition).
@@ -3422,6 +3455,7 @@ class TankarrService:
             unobtainable_volumes = _unobtainable_volumes(attempts_by_slot)
             static_revision = (
                 str(self.settings.preferred_unit),
+                self.settings.auto_unit_strategy,
                 repr(self.database.source_ranking),
                 str(manga.get("updated_at") or ""),
                 release_count,
@@ -3482,6 +3516,7 @@ class TankarrService:
             indexed_manga = {
                 **manga,
                 "_unit_context": {
+                    "auto_unit_strategy": self.settings.auto_unit_strategy,
                     "preferred": self.settings.preferred_unit,
                     "indexer_volumes": indexer_volumes,
                     "unobtainable_volumes": unobtainable_volumes,

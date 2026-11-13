@@ -271,6 +271,7 @@ def test_complete_read_map_counts_parts_without_inventing_parent_chapters():
         {
             "status": "ended",
             "monitor_mode": "all",
+            "series_unit_override": "chapters",
             "expected_count_override": 5,
             "expected_count_unit_override": "chapter",
         },
@@ -2334,6 +2335,7 @@ def test_a_source_list_that_matches_the_count_ends_the_numbering_at_its_decimals
         "id": "s",
         "title": "SPRIGGAN",
         "status": "completed",
+        "series_unit_override": "chapters",
         "last_chapter": "62",
         "monitor_mode": "all",
         "preferred_language": "en",
@@ -2628,8 +2630,13 @@ def test_owned_afterword_does_not_cover_a_missing_opening_chapter():
     assert afterword["chapter"] == "1"
 
 
-def test_unmapped_owned_chapter_with_volume_tag_cannot_supply_a_whole_book():
-    manga = {"status": "ended", "monitor_mode": "all"}
+@pytest.mark.parametrize("choice", [None, "chapters"])
+def test_unmapped_owned_chapter_with_volume_tag_cannot_supply_a_whole_book(choice):
+    manga = {
+        "status": "ended",
+        "monitor_mode": "all",
+        "series_unit_override": choice,
+    }
     chapters = [
         {
             **release(str(number), volume="1", downloaded=number != 1),
@@ -2654,9 +2661,9 @@ def test_unmapped_owned_chapter_with_volume_tag_cannot_supply_a_whole_book():
         manga, {"chapter_count": 9, "volume_count": 1}, chapters
     )
 
-    assert index["unit"] == "chapter"
-    assert index["expected_count"] == 9
-    assert index["expected_satisfied_count"] == 8
+    assert index["unit"] == ("chapter" if choice else "volume")
+    assert index["expected_count"] == (9 if choice else 1)
+    assert index["expected_satisfied_count"] == (8 if choice else 0)
     assert index["raw_missing_count"] == 1
     assert index["owned_volume_count"] == 0
     assert extra["source_chapter"] == "1"

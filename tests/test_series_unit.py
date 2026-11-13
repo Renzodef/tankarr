@@ -105,12 +105,12 @@ def test_unit_resolution_matches_the_library_cases():
         )["unit"]
         == "chapters"
     )
-    # Ended with no book source → chapters, the user may still force volumes.
+    # Ended with a confirmed total → books, using exact chapters as fallback.
     assert (
         resolve_series_unit(
             {}, {"status": "ended", "volume_count": 5, "chapter_count": 48}, [ch("1")]
         )["unit"]
-        == "chapters"
+        == "volumes"
     )
     # A finished one-shot / short work is a book even when only episodes are offered (Grass).
     assert (
@@ -268,25 +268,31 @@ def test_numbers_only_one_source_claims_beyond_the_consensus_are_unconfirmed():
     assert dropped == 0 and len(kept) == 19
 
 
-def test_unit_follows_what_the_sources_can_complete():
+def test_finished_unit_stays_on_books_and_continuing_works_follow_availability():
     import tankarr.series_unit as su
 
     ended = {"status": "ended", "volume_count": 3, "chapter_count": 30}
     all_chapters = [ch(str(n)) for n in range(1, 31)]
     two_books = [vol("1"), vol("2")]
-    # Chapters can complete it, books cannot → chapters, even with preference volumes.
+    # The final edition remains the target even when only chapters can supply it.
     assert (
         resolve_series_unit(
             {}, {**ended, "volume_count": 34}, all_chapters + two_books
         )["unit"]
-        == "chapters"
+        == "volumes"
     )
     # Both complete → the preference decides (default volumes).
     both = all_chapters + two_books + [vol("3")]
     assert resolve_series_unit({}, ended, both)["unit"] == "volumes"
     su.unit_context = lambda mid: {"preferred": "chapters", "indexer_volumes": set()}
     try:
-        assert resolve_series_unit({"id": "x"}, ended, both)["unit"] == "chapters"
+        assert resolve_series_unit({"id": "x"}, ended, both)["unit"] == "volumes"
+        assert (
+            resolve_series_unit(
+                {"id": "x", "series_unit_override": "chapters"}, ended, both
+            )["unit"]
+            == "chapters"
+        )
         # Indexer offers count as available books: 2 mapped + volume 3 on Usenet → books complete.
         su.unit_context = lambda mid: {"preferred": "volumes", "indexer_volumes": {3}}
         assert (
@@ -297,16 +303,14 @@ def test_unit_follows_what_the_sources_can_complete():
         )
     finally:
         su.unit_context = None
-    # Books already in the library keep the series on books (hand import of
-    # two volumes) - unless the books cannot finish the ended work and the
-    # chapters can: Kana's lone Billy Bat volume must not keep the 165
-    # offered chapters out. The unit that completes the work wins.
+    # Partial book ownership does not change the target. Missing books can be
+    # supplied by their exact chapters, without relabelling the whole series.
     owned = [{**vol("1"), "downloaded": True}, {**vol("2"), "downloaded": True}]
     assert (
         resolve_series_unit({}, {**ended, "volume_count": 34}, owned + all_chapters)[
             "unit"
         ]
-        == "chapters"
+        == "volumes"
     )
     assert (
         resolve_series_unit(
@@ -526,7 +530,7 @@ def test_without_an_official_source_nothing_is_cut_off():
     assert "beyond_official_edition" not in info["dropped"]
 
 
-def test_an_offer_the_hunt_refused_does_not_keep_a_series_on_books():
+def test_refused_offer_does_not_change_a_confirmed_final_book_target():
     # Hansel & Gretel: catalogue says 1 volume / 1 chapter; the sources carry
     # 22 chapters; the indexers list a "Hansel and Gretel" torrent for v1 that
     # the hunt keeps refusing (another author's book). While that offer counts
@@ -546,7 +550,8 @@ def test_an_offer_the_hunt_refused_does_not_keep_a_series_on_books():
     manga["_unit_context"]["unobtainable_volumes"] = {1}
 
     resolved = resolve_series_unit(manga, metadata, releases)
-    assert resolved["unit"] == "chapters"
+    assert resolved["unit"] == "volumes"
+    assert not resolved["override"]
 
 
 def test_a_finished_work_does_not_count_instalments_past_its_total():
@@ -670,7 +675,7 @@ def test_books_already_on_their_way_keep_an_ended_work_on_volumes():
 
     assert resolve_series_unit(manga, metadata, releases)["unit"] == "volumes"
     manga["_unit_context"]["pending_volumes"] = set()
-    assert resolve_series_unit(manga, metadata, releases)["unit"] == "chapters"
+    assert resolve_series_unit(manga, metadata, releases)["unit"] == "volumes"
 
 
 def test_a_webtoon_is_followed_in_episodes_even_when_it_has_ended():
