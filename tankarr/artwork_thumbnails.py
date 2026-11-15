@@ -84,33 +84,41 @@ class ArtworkThumbnailCache:
         # Pillow and image codecs can retain their largest allocation in the
         # long-lived API process. A short child returns that memory to Linux
         # after each cache miss while the semaphore bounds peak memory.
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "tankarr.artwork_thumbnails",
-            str(source),
-            str(destination),
-            str(width),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            _stdout, stderr = await process.communicate()
-        except asyncio.CancelledError:
-            # Retain the render slot until the child is reaped. Otherwise a
-            # cancelled request leaves CPU work running outside the limit.
-            if process.returncode is None:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-            await process.communicate()
-            raise
-        if process.returncode != 0:
-            detail = stderr.decode("utf-8", errors="replace").strip().splitlines()
-            raise ValueError(
-                detail[-1] if detail else "Artwork thumbnail renderer failed"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # The parent owns temporary files so cancelling/killing the child cannot
+        # leave partial images behind or remove another worker's temporary file.
+        with tempfile.TemporaryDirectory(
+            prefix=".render-", dir=destination.parent
+        ) as directory:
+            output = Path(directory) / destination.name
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "tankarr.artwork_thumbnails",
+                str(source),
+                str(output),
+                str(width),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
+            try:
+                _stdout, stderr = await process.communicate()
+            except asyncio.CancelledError:
+                # Retain the render slot until the child is reaped. Otherwise a
+                # cancelled request leaves CPU work running outside the limit.
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                await process.communicate()
+                raise
+            if process.returncode != 0:
+                detail = stderr.decode("utf-8", errors="replace").strip().splitlines()
+                raise ValueError(
+                    detail[-1] if detail else "Artwork thumbnail renderer failed"
+                )
+            output.replace(destination)
 
 
 def _render_thumbnail(source: Path, destination: Path, width: int) -> None:

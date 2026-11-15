@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -10,15 +11,20 @@ async def test_cancelled_renderer_is_killed_and_reaped(monkeypatch, tmp_path):
     process = Mock()
     process.returncode = None
     process.communicate = AsyncMock(side_effect=[asyncio.CancelledError(), (b"", b"")])
-    monkeypatch.setattr(
-        asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
-    )
+
+    async def spawn(*args, **kwargs):
+        output = Path(args[4])
+        (output.parent / "partial.tmp").write_bytes(b"partial image")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     with pytest.raises(asyncio.CancelledError):
         await ArtworkThumbnailCache._render_in_child(
             tmp_path / "source", tmp_path / "target", 320
         )
     process.kill.assert_called_once()
     assert process.communicate.await_count == 2
+    assert list(tmp_path.iterdir()) == []
 
 
 async def test_duplicate_waiters_share_render_and_release_lock(monkeypatch, tmp_path):
