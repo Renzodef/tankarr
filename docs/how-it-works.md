@@ -511,11 +511,16 @@ Open a book from its row on the series page.
 The display mode is chosen in this order: the series' own setting in its Edit
 dialog, then **Default reading mode** in **Settings → Reader**, then the
 catalogue (a webtoon scrolls vertically, a manga is paged), then the page shape
-(tall strips scroll vertically). Paged books read right to left for manga and
-left to right for manhwa, manhua, comics and books, with Japanese, Korean and
-Chinese originals as a fallback rule; a series can override the direction. The
-reader's toolbar switches between paged and vertical display for the current
-session and between **Fit page** and **Fit width**.
+(tall strips scroll vertically). A series can set its own page direction.
+Automatic direction uses the catalogue's stated direction, then the type and
+original language of the work. Manga is usually right to left, while paged
+manhwa, manhua and Western comics are usually left to right. With only a known
+original language, an English or Italian comic reads left to right and a
+Japanese comic reads right to left, even when the downloaded edition is in
+another language. With no direction, recognised type or known original
+language, the reader defaults to right to left. The reader's toolbar switches
+between paged and vertical display for the current session and between
+**Fit page** and **Fit width**.
 
 Turning pages records nothing. **Save bookmark** in the reader records one
 resume point per series, the book and the page, and the series page then offers
