@@ -238,6 +238,35 @@ def resolve_series_unit(
     override = normalize_series_unit(manga.get("series_unit_override"))
     if override:
         return {"unit": override, "reason": "chosen for this series", "override": True}
+    context = _context(manga)
+    preferred = normalize_series_unit(context.get("preferred")) or "volumes"
+    publication = publication_summary(manga, metadata)
+    ended = publication["status"] == "ended"
+    volume_count = _positive_int(metadata.get("volume_count"))
+    from tankarr.catalogue_consensus import count_is_reliable, managed_volume_count
+
+    if ended and preferred == "volumes" and context.get("prefer_completed_volumes"):
+        total = _positive_int(manga.get("edition_book_count")) or managed_volume_count(
+            metadata
+        )
+        language = (
+            str(
+                metadata.get("original_language")
+                or manga.get("original_language")
+                or ""
+            )
+            .casefold()
+            .replace("_", "-")
+            .split("-", 1)[0]
+        )
+        if (total or (volume_count and count_is_reliable(metadata, "volume"))) and (
+            language == "ja" or not _is_webtoon(metadata)
+        ):
+            return {
+                "unit": "volumes",
+                "reason": "finished edition with a known book count",
+                "override": False,
+            }
     # A webtoon is read and published as episodes. Books exist for some of
     # them, late and as a courtesy, and they only say which episodes a
     # publisher chose to bind together - an arbitrary line drawn over a work
@@ -252,8 +281,6 @@ def resolve_series_unit(
             "reason": "a webtoon is followed in episodes; its books only divide them",
             "override": False,
         }
-    context = _context(manga)
-    preferred = normalize_series_unit(context.get("preferred")) or "volumes"
     items = list(releases)
     cov = coverage
     if cov is None:
@@ -265,8 +292,6 @@ def resolve_series_unit(
             context.get("unobtainable_volumes"),
             pending_volumes=context.get("pending_volumes"),
         )
-    publication = publication_summary(manga, metadata)
-    ended = publication["status"] == "ended"
     running = publication["status"] == "continuing" or publication["paused"]
     has_chapters = cov["chapters"]["available"] > 0
     has_volumes = cov["volumes"]["available"] > 0
@@ -282,20 +307,6 @@ def resolve_series_unit(
             "reason": "continuing work: chapters preferred, books can fill gaps",
             "override": False,
         }
-    volume_count = _positive_int(metadata.get("volume_count"))
-    from tankarr.catalogue_consensus import count_is_reliable, managed_volume_count
-
-    if ended and preferred == "volumes" and context.get("prefer_completed_volumes"):
-        total = _positive_int(manga.get("edition_book_count")) or managed_volume_count(
-            metadata
-        )
-        if total or (volume_count and count_is_reliable(metadata, "volume")):
-            return {
-                "unit": "volumes",
-                "reason": "finished edition with a known book count",
-                "override": False,
-            }
-
     if (
         ended
         and preferred == "volumes"

@@ -658,6 +658,22 @@ def test_a_lone_catalogue_total_does_not_hide_chapters_of_an_ended_work():
     assert "beyond_catalogue_total" not in info["dropped"]
 
 
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [("ja", "volumes"), ("ko", "chapters"), ("zh", "chapters")],
+)
+def test_collected_web_manga_with_completed_volume_policy(language, expected):
+    manga = {"_unit_context": {"prefer_completed_volumes": True}}
+    metadata = {
+        "status": "ended",
+        "content_kind": "webtoon",
+        "original_language": language,
+        "volume_count": 14,
+        "count_confidence": {"volume": "agreed"},
+    }
+    assert resolve_series_unit(manga, metadata, [])["unit"] == expected
+
+
 def test_unconfirmed_numbers_are_kept_when_the_file_is_on_disk():
     """A lone source past the consensus is dropped, unless the chapter is already ours."""
 
