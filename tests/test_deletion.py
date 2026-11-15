@@ -2429,11 +2429,10 @@ async def test_a_pack_imported_as_one_volume_does_not_make_chapters_duplicates(
 
 
 @pytest.mark.asyncio
-async def test_once_every_book_is_on_disk_the_loose_chapter_files_are_retired(
+async def test_unreadable_books_cannot_retire_loose_chapter_files(
     tmp_path: Path,
 ):
-    """Billy Bat, 2026-09-05: twenty books and 147 chapter files side by
-    side in the reader. The books are the edition; the chapters go."""
+    """Owning every numbered book is insufficient without readable evidence."""
 
     database, service, _komga = make_service(tmp_path)
     manga_data = manga()
@@ -2466,8 +2465,8 @@ async def test_once_every_book_is_on_disk_the_loose_chapter_files_are_retired(
 
     outcome = await service.retire_redundant_chapter_files("manga-1")
 
-    assert outcome["deleted"] == 4 and outcome["errors"] == []
-    assert not any(path.exists() for path in paths.values())
+    assert outcome["deleted"] == 0 and outcome["errors"] == []
+    assert all(path.exists() for path in paths.values())
     assert (library / "Example (Unknown Author)" / "Example - v001 [en].cbz").exists()
 
 

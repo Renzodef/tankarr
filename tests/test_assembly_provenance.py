@@ -120,6 +120,37 @@ def test_changed_boundaries_remove_assembly_coverage_proof():
     assert "1" in suspect_volume_reasons([release], chapter_map=changed)
 
 
+@pytest.mark.parametrize("pages", [70, 350, 700])
+@pytest.mark.parametrize("boundaries_match", [False, True])
+def test_exact_assembly_proof_precedes_edition_size_heuristics(pages, boundaries_match):
+    release = {**assembled(), "pages": pages, "downloaded": True}
+    peers = [
+        {
+            **chapter(f"book-{volume}", "", volume=str(volume)),
+            "chapter": None,
+            "release_unit": "volume",
+            "provider": "prowlarr",
+            "pages": 200,
+            "downloaded": True,
+        }
+        for volume in (2, 3, 4)
+    ]
+    chapters = ("1", "2") if boundaries_match else ("1", "2", "3")
+    mapping = [MapEntry(("1",), chapters, True, source="operator")]
+
+    suspects = suspect_volume_reasons([release, *peers], chapter_map=mapping)
+
+    assert ("1" not in suspects) is boundaries_match
+
+
+def test_exact_assembly_does_not_clear_a_conflicting_unverified_book():
+    release = {**assembled(), "pages": 200, "downloaded": True}
+    conflicting = {**release, "id": "manual-book", "provider": "manual"}
+    mapping = [MapEntry(("1",), ("1", "2"), True, source="operator")]
+
+    assert "1" in suspect_volume_reasons([release, conflicting], chapter_map=mapping)
+
+
 @pytest.mark.parametrize("last_missing", [False, True])
 def test_volume_series_groups_complete_split_chapters_before_assembly(last_missing):
     parts = [

@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     # instead of waiting for the operator to press the button. Files go
     # through the same quarantine as the manual deletion.
     duplicate_cleanup_enabled: bool = True
+    # Automatic all-books retirement must prove the chapter pages first.
+    # "on" retains the legacy map-only policy as an explicit operator choice.
+    retire_redundant_chapters: Literal["off", "verified", "on"] = "verified"
+    retire_recycle: bool = True
     # Unit preference when both chapters and books can complete a series.
     preferred_unit: Literal["chapters", "volumes"] = "volumes"
     # When volumes can finish a series and chapters cannot, follow volumes

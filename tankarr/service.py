@@ -11,6 +11,7 @@ import uuid
 import zipfile
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -4315,6 +4316,14 @@ class TankarrService:
 
         from tankarr.chapter_mapping import build_chapter_index
 
+        mode = self.settings.retire_redundant_chapters
+        if mode == "off":
+            return {
+                "manga_id": manga_id,
+                "deleted": 0,
+                "errors": [],
+                "reason": "retirement disabled",
+            }
         manga = self.database.get_manga(manga_id)
         releases = self.database.list_chapters(
             manga_id, str(manga["preferred_language"])
@@ -4366,6 +4375,10 @@ class TankarrService:
         vetoed = self.content_blocks_retirement(
             manga_id, [str(release["id"]) for release in loose]
         )
+        if mode == "verified":
+            vetoed |= self.retirement_unverified_chapters(
+                manga_id, releases, loose, index
+            )
         if vetoed:
             logger.info(
                 "Kept %d chapter files of %s: their pages are not inside any book",
@@ -4381,7 +4394,9 @@ class TankarrService:
                 "reason": "pages not inside the books",
             }
         outcome = await self.delete_chapter_files(
-            manga_id, [str(release["id"]) for release in keep]
+            manga_id,
+            [str(release["id"]) for release in keep],
+            recycle=self.settings.retire_recycle,
         )
         for error in outcome.get("errors") or []:
             logger.info(
@@ -4394,6 +4409,80 @@ class TankarrService:
                 manga.get("title"),
             )
         return {"manga_id": manga_id, **outcome, "reason": None}
+
+    def retirement_unverified_chapters(
+        self,
+        manga_id: str,
+        releases: list[dict[str, Any]],
+        loose: list[dict[str, Any]],
+        index: dict[str, Any],
+    ) -> set[str]:
+        """Read-only check of the books a retirement
+        would rely on. Only a chapter proven inside a sound book may go:
+
+        - its content verdict is ``inside`` (missing/unreadable rows veto);
+        - at least 80% of its pages matched;
+        - the book it matched is the one the map assigns, when the map has one;
+        - that book is the only downloaded book with its volume number;
+        - that book holds at least 90% of the chapters the map assigns to it;
+        - the series has no downloaded book without a volume number.
+        Nothing is written; vetoed files simply stay.
+        """
+
+        from tankarr import content_alignment as content
+
+        ids = [str(release["id"]) for release in loose]
+        books: dict[str, int] = {}
+        unnumbered = False
+        for release in releases:
+            if not release.get("downloaded"):
+                continue
+            if str(release.get("release_unit") or "chapter") != "volume":
+                continue
+            volume = canonical_number(release.get("volume")) or str(
+                release.get("volume") or ""
+            )
+            if not volume:
+                unnumbered = True
+                continue
+            books[volume] = books.get(volume, 0) + 1
+        if unnumbered:
+            return set(ids)
+        mapped: dict[str, str] = {}
+        for slot in [
+            *(index.get("slots") or []),
+            *(index.get("mapped_chapter_slots") or []),
+        ]:
+            volume = slot.get("duplicate_of_volume") or slot.get("volume")
+            if not volume:
+                continue
+            for release in slot.get("releases") or []:
+                mapped[str(release["id"])] = canonical_number(volume) or str(volume)
+        rows = self.database.content_alignment(manga_id)
+        proven: dict[str, str] = {}
+        vetoed: set[str] = set()
+        for chapter_id in ids:
+            row = rows.get(chapter_id) or {}
+            volume = canonical_number(row.get("volume")) or str(row.get("volume") or "")
+            pages = int(row.get("pages") or 0)
+            matched = int(row.get("matched_pages") or 0)
+            if (
+                row.get("verdict") != content.INSIDE
+                or not volume
+                or pages <= 0
+                or matched < 0.8 * pages
+                or (mapped.get(chapter_id) and mapped[chapter_id] != volume)
+                or books.get(volume, 0) != 1
+            ):
+                vetoed.add(chapter_id)
+            else:
+                proven[chapter_id] = volume
+        for volume in set(proven.values()):
+            assigned = [cid for cid in ids if mapped.get(cid) == volume]
+            held = [cid for cid in assigned if proven.get(cid) == volume]
+            if assigned and len(held) < 0.9 * len(assigned):
+                vetoed.update(cid for cid, vol in proven.items() if vol == volume)
+        return vetoed
 
     async def delete_chapter_files(
         self, manga_id: str, chapter_ids: list[str], *, recycle: bool = False
@@ -4715,6 +4804,7 @@ class TankarrService:
         recycle: bool = False,
         volume: str | None = None,
         expected_file_sha256: dict[str, str] | None = None,
+        assembled_bookmark_target: tuple[str, dict[str, tuple[int, int]]] | None = None,
     ) -> dict[str, Any]:
         """Retire proven duplicates while the caller holds the mutation lock.
 
@@ -4771,9 +4861,17 @@ class TankarrService:
                     raise UnsafeLibraryPath(
                         "Chapter bytes changed before retirement; source files were restored."
                     )
-            reset = self.database.reset_chapter_files(
-                manga_id, current, quarantine.operation_id
-            )
+            with (
+                self.database.write_snapshot()
+                if assembled_bookmark_target is not None
+                else nullcontext()
+            ):
+                reset = self.database.reset_chapter_files(
+                    manga_id,
+                    current,
+                    quarantine.operation_id,
+                    assembled_bookmark_target=assembled_bookmark_target,
+                )
         except Exception as exc:
             self._handle_deletion_database_exception(quarantine, exc)
             raise
