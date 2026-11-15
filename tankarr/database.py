@@ -6641,6 +6641,8 @@ class Database:
         manga_id: str,
         chapter_ids: list[str],
         deletion_operation_id: str | None = None,
+        *,
+        assembled_bookmark_target: tuple[str, dict[str, tuple[int, int]]] | None = None,
     ) -> dict[str, int]:
         """Reset downloaded state, history and import content ledger for a set of releases."""
 
@@ -6661,6 +6663,19 @@ class Database:
             missing = [value for value in ids if value not in found]
             if missing:
                 raise KeyError((manga_id, missing[0]))
+            if assembled_bookmark_target is not None:
+                target_id, page_ranges = assembled_bookmark_target
+                bookmark = self.reader_bookmark(manga_id)
+                if bookmark and bookmark["chapter_id"] in found:
+                    offset, pages = page_ranges[bookmark["chapter_id"]]
+                    page = bookmark["page_index"]
+                    if not 0 <= page < pages:
+                        raise ValueError(
+                            "The bookmarked page is outside the source chapter"
+                        )
+                    self.save_reader_bookmark(
+                        manga_id, target_id, page_index=offset + page
+                    )
             self._raise_for_active_jobs(
                 connection, f"job.chapter_id IN ({placeholders})", tuple(ids)
             )
