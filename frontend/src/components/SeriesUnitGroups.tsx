@@ -83,18 +83,14 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
     || book.files.some((file) => file.id === bookmark.chapter_id)
     || book.chapters.some((chapter) => chapter.releases.some((release) => release.id === bookmark.chapter_id))
   );
-  const knownRange = !inferred && book.chapter_range;
-  const range = knownRange ? t("ch. {first}–{last}", { first: knownRange.first, last: knownRange.last }) : t("chapters not mapped");
-  const text = book.plan_text
-    ?? (plan === "book" ? (book.pages ? tn(book.pages, "{count} page", "{count} pages") : t("On disk"))
+  const bookDetails = book.pages ? tn(book.pages, "{count} page", "{count} pages") : t("On disk");
+  const description = book.owned
+    ? bookDetails
+    : book.plan_text
+      ?? (plan === "book" ? bookDetails
       : plan === "assemble" ? t("All chapters on disk")
         : plan === "partial" ? t("{downloaded} of {total} chapters", { downloaded: book.downloaded_chapter_count, total: book.chapter_count })
           : t("Search the book, then chapters"));
-  const boundarySource = book.map_sources?.includes("content") ? t("pages matched to the book") : book.map_sources?.includes("source_tags") ? t("from the source's volume tags") : book.estimated ? null : book.map_sources?.includes("ocr") ? t("read from book") : book.map_sources?.includes("operator") ? t("saved boundaries") : t("catalogue boundaries");
-  const description = book.owned
-    ? `${knownRange ? `${range} · ` : ""}${text}`
-    : `${range} · ${text}`;
-  const detail = book.owned && knownRange ? [range, boundarySource, text].filter(Boolean).join(" · ") : description;
   const primary = plan === "missing" || plan === "partial"
       ? <button type="button" className="btn btn-small" disabled={actions.busy} aria-label={t("Automatically search book {volume}", { volume: book.volume })} onClick={() => actions.onAutomaticSearchBook(book)}>{t("Search")}</button>
       : null;
@@ -109,7 +105,7 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
         {containsBookmark ? <a className="bookmark-location" href={bookmark.url} target="_blank" rel="noreferrer">
           <Icon name="bookmark" size={14} /> {t("{label} · page {page} · Continue", { label: bookmark.label, page: bookmark.page_index + 1 })}
         </a> : null}
-        <span className="book-row-text muted small" title={detail}>
+        <span className="book-row-text muted small" title={description}>
           {description}
         </span>
       </div>
