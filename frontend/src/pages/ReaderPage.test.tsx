@@ -51,37 +51,36 @@ it("preloads nearby pages after the visible page loads", async () => {
   ]);
 });
 
-it("warms the whole webtoon after a visible page loads, one page at a time", async () => {
+it("warms only four distant pages of a long webtoon, streaming one at a time", async () => {
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
-  const requested: Array<{ url: string; priority: RequestPriority | undefined }> = [];
+  const requested: string[] = [];
   let finishFirstPage: () => void = () => {};
   const firstPage = new Promise<void>((resolve) => { finishFirstPage = resolve; });
-  vi.stubGlobal("fetch", vi.fn(async (url: string, options?: RequestInit) => {
-    requested.push({ url, priority: options?.priority });
-    return { ok: true, arrayBuffer: async () => {
-      if (url.endsWith("/0")) await firstPage;
-      return new ArrayBuffer(1);
-    } };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    requested.push(url);
+    return new Response(new ReadableStream({ async start(controller) {
+      controller.enqueue(new Uint8Array([1]));
+      if (url.endsWith("/3")) await firstPage;
+      controller.close();
+    } }));
   }));
   vi.spyOn(api, "readerBook").mockResolvedValue({
     release_id: "book-1", manga_id: "series-1", series_title: "Example", book_title: "Chapter 1",
     display_mode: "webtoon", display_mode_source: "automatic", reading_direction: "ltr",
-    page_count: 3, page_index: 0, bookmarked: false, bookmark_page_index: null,
+    page_count: 200, page_index: 0, bookmarked: false, bookmark_page_index: null,
     previous_release_id: null, next_release_id: null,
   });
 
   render(<ReaderPage id="book-1" initialPage={null} />);
-  const first = await screen.findByAltText("Page 1 of 3");
+  const first = await screen.findByAltText("Page 1 of 200");
   expect(requested).toEqual([]);
   fireEvent.load(first);
   await waitFor(() => expect(requested).toHaveLength(1), { timeout: 3000 });
-  expect(requested).toHaveLength(1);
   finishFirstPage();
-  await waitFor(() => expect(requested).toHaveLength(3));
-  expect(requested).toEqual([0, 1, 2].map((index) => ({
-    url: `/api/reader/books/book-1/pages/${index}`, priority: "low",
-  })));
-  expect(screen.queryByRole("button", { name: /preload/i })).toBeNull();
+  await waitFor(() => expect(requested).toHaveLength(4));
+  expect(requested).toEqual([3, 4, 5, 6].map(index => `/api/reader/books/book-1/pages/${index}`));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(requested).toHaveLength(4);
 });
 
 it("reprioritizes background warming when the page changes and stops on close", async () => {
@@ -93,21 +92,48 @@ it("reprioritizes background warming when the page changes and stops on close", 
   vi.spyOn(api, "readerBook").mockResolvedValue({
     release_id: "book-1", manga_id: "series-1", series_title: "Example", book_title: "Volume 1",
     display_mode: "manga", display_mode_source: "automatic", reading_direction: "rtl",
-    page_count: 3, page_index: 0, bookmarked: false, bookmark_page_index: null,
+    page_count: 10, page_index: 0, bookmarked: false, bookmark_page_index: null,
     previous_release_id: null, next_release_id: null,
   });
 
   const view = render(<ReaderPage id="book-1" initialPage={null} />);
-  const first = await screen.findByAltText("Page 1 of 3");
+  const first = await screen.findByAltText("Page 1 of 10");
   fireEvent.load(first);
   await waitFor(() => expect(signals).toHaveLength(1), { timeout: 3000 });
   expect(signals[0].aborted).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));
   expect(signals[0].aborted).toBe(true);
-  fireEvent.load(await screen.findByAltText("Page 2 of 3"));
+  fireEvent.load(await screen.findByAltText("Page 2 of 10"));
   await waitFor(() => expect(signals).toHaveLength(2), { timeout: 3000 });
   view.unmount();
   expect(signals[1].aborted).toBe(true);
+});
+
+it("does not wrap prefetch to the start or fetch distant pages in data-saving mode", async () => {
+  const fetchMock = vi.fn();
+  const imageMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("Image", class { set src(value: string) { imageMock(value); } });
+  vi.spyOn(api, "readerBook").mockResolvedValue({
+    release_id: "book-1", manga_id: "series-1", series_title: "Example", book_title: "Volume 1",
+    display_mode: "manga", display_mode_source: "automatic", reading_direction: "ltr",
+    page_count: 200, page_index: 199, bookmarked: false, bookmark_page_index: null,
+    previous_release_id: null, next_release_id: null,
+  });
+  const view = render(<ReaderPage id="book-1" initialPage={null} />);
+  fireEvent.load(await screen.findByAltText("Page 200 of 200"));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
+  expect(fetchMock).not.toHaveBeenCalled();
+  view.unmount(); imageMock.mockClear();
+
+  Object.defineProperty(navigator, "connection", { configurable: true, value: { saveData: true } });
+  try {
+    render(<ReaderPage id="book-1" initialPage={0} />);
+    fireEvent.load(await screen.findByAltText("Page 1 of 200"));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(imageMock).not.toHaveBeenCalled();
+  } finally { Reflect.deleteProperty(navigator, "connection"); }
 });
 
 it("stores reading state only when the bookmark button is clicked", async () => {
