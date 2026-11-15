@@ -23,6 +23,7 @@ class ArtworkThumbnailCache:
         self._render_slots = asyncio.Semaphore(max(1, render_concurrency))
         self._locks_guard = asyncio.Lock()
         self._locks: dict[Path, asyncio.Lock] = {}
+        self._users: dict[Path, int] = {}
 
     async def get(
         self, source: Path, artwork_sha256: str | None, width: int
@@ -40,22 +41,30 @@ class ArtworkThumbnailCache:
 
         async with self._locks_guard:
             lock = self._locks.setdefault(destination, asyncio.Lock())
-        async with lock:
-            if not self._usable(destination):
-                async with self._render_slots:
-                    render_source = source
-                    for larger_width in sorted(
-                        candidate
-                        for candidate in SUPPORTED_ARTWORK_THUMBNAIL_WIDTHS
-                        if candidate > width
-                    ):
-                        larger = self.root / (
-                            f"{digest}-w{larger_width}-v{ARTWORK_THUMBNAIL_VERSION}.webp"
-                        )
-                        if self._usable(larger):
-                            render_source = larger
-                            break
-                    await self._render_in_child(render_source, destination, width)
+            self._users[destination] = self._users.get(destination, 0) + 1
+        try:
+            async with lock:
+                if not self._usable(destination):
+                    async with self._render_slots:
+                        render_source = source
+                        for larger_width in sorted(
+                            candidate
+                            for candidate in SUPPORTED_ARTWORK_THUMBNAIL_WIDTHS
+                            if candidate > width
+                        ):
+                            larger = self.root / (
+                                f"{digest}-w{larger_width}-v{ARTWORK_THUMBNAIL_VERSION}.webp"
+                            )
+                            if self._usable(larger):
+                                render_source = larger
+                                break
+                        await self._render_in_child(render_source, destination, width)
+        finally:
+            async with self._locks_guard:
+                self._users[destination] -= 1
+                if not self._users[destination]:
+                    del self._users[destination]
+                    del self._locks[destination]
         return destination, digest
 
     @staticmethod
@@ -75,22 +84,41 @@ class ArtworkThumbnailCache:
         # Pillow and image codecs can retain their largest allocation in the
         # long-lived API process. A short child returns that memory to Linux
         # after each cache miss while the semaphore bounds peak memory.
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "tankarr.artwork_thumbnails",
-            str(source),
-            str(destination),
-            str(width),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            detail = stderr.decode("utf-8", errors="replace").strip().splitlines()
-            raise ValueError(
-                detail[-1] if detail else "Artwork thumbnail renderer failed"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # The parent owns temporary files so cancelling/killing the child cannot
+        # leave partial images behind or remove another worker's temporary file.
+        with tempfile.TemporaryDirectory(
+            prefix=".render-", dir=destination.parent
+        ) as directory:
+            output = Path(directory) / destination.name
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "tankarr.artwork_thumbnails",
+                str(source),
+                str(output),
+                str(width),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
+            try:
+                _stdout, stderr = await process.communicate()
+            except asyncio.CancelledError:
+                # Retain the render slot until the child is reaped. Otherwise a
+                # cancelled request leaves CPU work running outside the limit.
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                await process.communicate()
+                raise
+            if process.returncode != 0:
+                detail = stderr.decode("utf-8", errors="replace").strip().splitlines()
+                raise ValueError(
+                    detail[-1] if detail else "Artwork thumbnail renderer failed"
+                )
+            output.replace(destination)
 
 
 def _render_thumbnail(source: Path, destination: Path, width: int) -> None:

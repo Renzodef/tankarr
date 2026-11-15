@@ -2985,14 +2985,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/metadata/artwork/{manga_id}/series", include_in_schema=False)
     async def series_metadata_artwork(
         manga_id: str,
+        request: Request,
         v: str | None = Query(default=None, max_length=128),
     ):
         try:
             path, media_type, digest = metadata.artwork_response(manga_id)
+            headers = artwork_cache_headers(v, digest)
+            if (
+                headers.get("ETag")
+                and request.headers.get("if-none-match") == headers["ETag"]
+            ):
+                return Response(status_code=304, headers=headers)
             return FileResponse(
                 path,
                 media_type=media_type,
-                headers=artwork_cache_headers(v, digest),
+                headers=headers,
             )
         except (KeyError, FileNotFoundError) as exc:
             raise HTTPException(status_code=404, detail="Artwork not found") from exc
@@ -3003,11 +3010,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         *,
         volume: str | None,
         requested_version: str | None,
-    ) -> FileResponse:
+        request: Request,
+    ) -> Response:
         if width not in SUPPORTED_ARTWORK_THUMBNAIL_WIDTHS:
             raise HTTPException(status_code=404, detail="Thumbnail size not found")
         try:
             source, _media_type, digest = metadata.artwork_response(manga_id, volume)
+            digest = normalized_artwork_sha256(digest)
+            if digest:
+                headers = artwork_cache_headers(requested_version, digest)
+                headers["ETag"] = (
+                    f'"sha256-{digest}-thumb-w{width}-v{ARTWORK_THUMBNAIL_VERSION}"'
+                )
+                if request.headers.get("if-none-match") == headers["ETag"]:
+                    return Response(status_code=304, headers=headers)
             path, digest = await artwork_thumbnails.get(source, digest, width)
         except (KeyError, FileNotFoundError) as exc:
             raise HTTPException(status_code=404, detail="Artwork not found") from exc
@@ -3017,6 +3033,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         headers["ETag"] = (
             f'"sha256-{digest}-thumb-w{width}-v{ARTWORK_THUMBNAIL_VERSION}"'
         )
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
         return FileResponse(path, media_type="image/webp", headers=headers)
 
     @app.get(
@@ -3026,10 +3044,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def series_metadata_artwork_thumbnail(
         manga_id: str,
         width: int,
+        request: Request,
         v: str | None = Query(default=None, max_length=128),
     ):
         return await metadata_artwork_thumbnail(
-            manga_id, width, volume=None, requested_version=v
+            manga_id, width, volume=None, requested_version=v, request=request
         )
 
     @app.get(
@@ -3039,14 +3058,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def volume_metadata_artwork(
         manga_id: str,
         volume: str,
+        request: Request,
         v: str | None = Query(default=None, max_length=128),
     ):
         try:
             path, media_type, digest = metadata.artwork_response(manga_id, volume)
+            headers = artwork_cache_headers(v, digest)
+            if (
+                headers.get("ETag")
+                and request.headers.get("if-none-match") == headers["ETag"]
+            ):
+                return Response(status_code=304, headers=headers)
             return FileResponse(
                 path,
                 media_type=media_type,
-                headers=artwork_cache_headers(v, digest),
+                headers=headers,
             )
         except (KeyError, FileNotFoundError) as exc:
             raise HTTPException(status_code=404, detail="Artwork not found") from exc
@@ -3059,10 +3085,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         manga_id: str,
         volume: str,
         width: int,
+        request: Request,
         v: str | None = Query(default=None, max_length=128),
     ):
         return await metadata_artwork_thumbnail(
-            manga_id, width, volume=volume, requested_version=v
+            manga_id, width, volume=volume, requested_version=v, request=request
         )
 
     @app.get(
