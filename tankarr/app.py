@@ -1100,6 +1100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _unit_context(manga_id: str) -> dict[str, Any]:
         return {
             "preferred": getattr(settings, "preferred_unit", "volumes"),
+            "prefer_completed_volumes": settings.prefer_completed_volumes,
             "indexer_volumes": database.list_indexer_volumes(manga_id),
             "unobtainable_volumes": database.unobtainable_indexer_volumes(manga_id),
             "pending_volumes": database.pending_book_volumes([manga_id]).get(
@@ -1345,6 +1346,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         item["publication_signals"] = inputs["publication_signals"]
         item["_unit_context"] = {
             "preferred": settings.preferred_unit,
+            "prefer_completed_volumes": settings.prefer_completed_volumes,
             "indexer_volumes": inputs["indexer_volumes"],
             "unobtainable_volumes": inputs["unobtainable_volumes"],
             "pending_volumes": inputs.get("pending_volumes", set()),

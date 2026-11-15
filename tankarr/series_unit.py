@@ -227,6 +227,7 @@ def resolve_series_unit(
 
     * a user override wins;
     * a running work follows chapters unless only books exist;
+    * an optional policy prefers books for a finished edition with a known total;
     * otherwise books already on disk keep the series on books;
     * an ended work takes the unit that can **complete** it; when both can,
       the global preference decides; when neither can, the higher coverage
@@ -282,7 +283,18 @@ def resolve_series_unit(
             "override": False,
         }
     volume_count = _positive_int(metadata.get("volume_count"))
-    from tankarr.catalogue_consensus import count_is_reliable
+    from tankarr.catalogue_consensus import count_is_reliable, managed_volume_count
+
+    if ended and preferred == "volumes" and context.get("prefer_completed_volumes"):
+        total = _positive_int(manga.get("edition_book_count")) or managed_volume_count(
+            metadata
+        )
+        if total or (volume_count and count_is_reliable(metadata, "volume")):
+            return {
+                "unit": "volumes",
+                "reason": "finished edition with a known book count",
+                "override": False,
+            }
 
     if (
         ended

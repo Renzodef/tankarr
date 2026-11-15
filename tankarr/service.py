@@ -3483,6 +3483,7 @@ class TankarrService:
                 **manga,
                 "_unit_context": {
                     "preferred": self.settings.preferred_unit,
+                    "prefer_completed_volumes": self.settings.prefer_completed_volumes,
                     "indexer_volumes": indexer_volumes,
                     "unobtainable_volumes": unobtainable_volumes,
                     "pending_volumes": pending_volumes,

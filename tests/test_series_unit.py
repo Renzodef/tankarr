@@ -602,6 +602,48 @@ def test_the_managed_edition_sets_the_books_a_series_expects():
     assert coverage["volumes"]["available"] == 2
 
 
+@pytest.mark.parametrize("volume_count", [1, 12])
+def test_completed_volume_policy_accepts_complete_chapters_and_known_edition(
+    volume_count,
+):
+    manga = {
+        "status_override": "ended",
+        "_unit_context": {"prefer_completed_volumes": True},
+    }
+    metadata = {
+        "status": "ongoing",
+        "volume_count": volume_count,
+        "chapter_count": 24,
+        "count_confidence": {"volume": "agreed"},
+    }
+    chapters = [{**ch(str(n)), "downloaded": True} for n in range(1, 25)]
+    assert resolve_series_unit(manga, metadata, chapters)["unit"] == "volumes"
+    assert (
+        resolve_series_unit(
+            {**manga, "series_unit_override": "chapters"}, metadata, chapters
+        )["unit"]
+        == "chapters"
+    )
+    assert (
+        resolve_series_unit(manga, {**metadata, "content_kind": "webtoon"}, chapters)[
+            "unit"
+        ]
+        == "chapters"
+    )
+    assert (
+        resolve_series_unit(
+            manga, {**metadata, "count_confidence": {"volume": "lone"}}, chapters
+        )["unit"]
+        == "chapters"
+    )
+    assert (
+        resolve_series_unit(
+            {**manga, "status_override": "continuing"}, metadata, chapters
+        )["unit"]
+        == "chapters"
+    )
+
+
 def test_a_lone_catalogue_total_does_not_hide_chapters_of_an_ended_work():
     releases = [ch(str(n), provider="mirror") for n in range(1, 23)]
     metadata = {
