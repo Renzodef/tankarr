@@ -6218,7 +6218,7 @@ class Database:
         return [self._decode_chapter(row) for row in rows]
 
     def list_tracked_library_paths(self) -> list[str]:
-        """Every library file a downloaded release claims, in one query.
+        """Every library file a release claims, in one query.
 
         The orphan scan used to decode every release of every series to read
         this one column: thirty thousand rows and three hundred connections
@@ -6228,7 +6228,7 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT DISTINCT library_path FROM chapter_release "
-                "WHERE downloaded=1 AND library_path IS NOT NULL AND library_path<>''"
+                "WHERE library_path IS NOT NULL AND library_path<>''"
             ).fetchall()
         return [str(row[0]) for row in rows]
 
@@ -6507,6 +6507,48 @@ class Database:
             connection.execute(
                 "DELETE FROM deletion_operation WHERE id=?", (operation_id,)
             )
+
+    def commit_untracked_file_retirement(
+        self, operation_id: str | None, expected_claims: set[str]
+    ) -> None:
+        with self.write_snapshot():
+            if set(self.list_tracked_library_paths()) != expected_claims:
+                raise ValueError("Library file ownership changed during cleanup")
+            with self.connect() as connection:
+                self._commit_deletion_operation(connection, operation_id)
+
+    def delete_unused_local_series(self, cutoff: str, limit: int) -> int:
+        """Identify and remove unused placeholders in a single SQLite statement."""
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                DELETE FROM manga WHERE id IN (
+                    SELECT m.id FROM manga m
+                    WHERE m.provider='local' AND m.monitored=0 AND m.auto_download=0
+                    AND m.monitor_mode='none' AND m.assemble_books_automatically=0
+                    AND julianday(m.updated_at) <= julianday(?)
+                    AND coalesce(m.source_id, '')='' AND coalesce(m.source_url, '')=''
+                    AND coalesce(m.cover_url, '')=''
+                    AND m.external_correlations_json='[]'
+                    AND m.manual_metadata_json IS NULL
+                    AND NOT EXISTS (SELECT 1 FROM chapter_release WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM download_job WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM torrent_download WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM translation_job WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM translation_discovery WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM manga_release_source WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM reader_bookmark WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM metadata_manual_correlation WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM metadata_provider_correlation WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM metadata_source_record WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM series_metadata WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM series_chapter_map WHERE manga_id=m.id)
+                    AND NOT EXISTS (SELECT 1 FROM wanted_search_state WHERE manga_id=m.id)
+                    ORDER BY m.updated_at, m.id LIMIT ?
+                )
+                """,
+                (cutoff, limit),
+            ).rowcount
 
     @staticmethod
     def _deletion_operation_from_row(row: sqlite3.Row) -> dict[str, Any]:

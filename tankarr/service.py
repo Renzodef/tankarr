@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import uuid
 import zipfile
 from collections import defaultdict
@@ -5473,15 +5474,21 @@ class TankarrService:
                     raise ValueError(
                         "Select a visible folder directly under the library"
                     )
-            removed, skipped = [], []
-            for name in selected:
-                try:
-                    (root / name).rmdir()
-                except OSError:
-                    skipped.append(name)
-                else:
-                    removed.append(name)
-            return {"removed": removed, "skipped": skipped}
+            return self._remove_empty_library_folders(root, selected)
+
+    @staticmethod
+    def _remove_empty_library_folders(
+        root: Path, selected: list[str]
+    ) -> dict[str, Any]:
+        removed, skipped = [], []
+        for name in selected:
+            try:
+                (root / name).rmdir()
+            except OSError:
+                skipped.append(name)
+            else:
+                removed.append(name)
+        return {"removed": removed, "skipped": skipped}
 
     def library_orphans(self, *, folder_limit: int = 100) -> dict[str, Any]:
         """Library files no Tankarr release claims, grouped by folder.
@@ -5499,25 +5506,14 @@ class TankarrService:
         except LibraryUnavailable as exc:
             self._orphan_summary = None
             return {"available": False, "reason": str(exc), "count": 0, "folders": []}
-        tracked: set[Path] = set()
-        for recorded in self.database.list_tracked_library_paths():
-            try:
-                tracked.add(self._recorded_library_path(recorded, root))
-            except (UnsafeLibraryPath, ValueError):
-                continue
         by_folder: dict[str, dict[str, Any]] = {}
         total = 0
         total_bytes = 0
-        for path in root.rglob("*.cbz"):
-            if any(part.startswith(".") for part in path.relative_to(root).parts):
-                continue  # quarantine and hidden staging directories
-            if path in tracked or not path.is_file():
-                continue
+        for path, identity in self._untracked_cbz_files(
+            root, set(self.database.list_tracked_library_paths())
+        ).items():
             folder = path.parent.relative_to(root).as_posix() or "."
-            try:
-                size = path.stat().st_size
-            except OSError:
-                size = 0
+            size = identity[2]
             entry = by_folder.setdefault(
                 folder, {"folder": folder, "files": 0, "bytes": 0, "sample": []}
             )
@@ -5542,51 +5538,145 @@ class TankarrService:
         )
         return report
 
+    @staticmethod
+    def _archive_identity(path: Path) -> tuple[int, int, int, int] | None:
+        try:
+            info = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+    def _untracked_cbz_files(
+        self, root: Path, claims: set[str]
+    ) -> dict[Path, tuple[int, int, int, int]]:
+        tracked: set[Path] = set()
+        for recorded in claims:
+            try:
+                tracked.add(self._recorded_library_path(recorded, root))
+            except (UnsafeLibraryPath, ValueError):
+                continue
+        files = {}
+        for parent, folders, names in os.walk(root):
+            folders[:] = [name for name in folders if not name.startswith(".")]
+            for name in names:
+                if name.startswith(".") or Path(name).suffix.casefold() != ".cbz":
+                    continue
+                path = Path(parent) / name
+                if path in tracked:
+                    continue
+                identity = self._archive_identity(path)
+                if identity is not None:
+                    files[path] = identity
+        return files
+
+    def _remove_untracked_cbz_files(
+        self,
+        targets: dict[Path, tuple[int, int, int, int]],
+        claims: set[str],
+        *,
+        disposition: str,
+    ) -> dict[str, Any]:
+        current = {
+            path: identity
+            for path, identity in targets.items()
+            if self._archive_identity(path) == identity
+        }
+        quarantine = self._stage_library_files(list(current), disposition=disposition)
+        try:
+            if any(
+                self._archive_identity(staged) != current[original]
+                for original, staged in quarantine.moved
+            ):
+                raise ValueError("An untracked archive changed during cleanup")
+            self.database.commit_untracked_file_retirement(
+                quarantine.operation_id, claims
+            )
+        except Exception as exc:
+            self._handle_deletion_database_exception(quarantine, exc)
+            raise
+        result = self._commit_file_quarantine(quarantine)
+        self.invalidate_orphan_summary()
+        return {**result, "moved": [original for original, _ in quarantine.moved]}
+
     async def delete_library_orphans(
         self, folders: list[str] | None = None
     ) -> dict[str, Any]:
-        """Remove untracked library files, by folder, and re-align the reader."""
-
+        """Remove only untracked files from the selected folders."""
         async with self._mutation_lock:
             self.assert_mutations_allowed()
             root = self._library_root()
-            report = self.library_orphans(folder_limit=10_000)
-            wanted = {str(item) for item in folders} if folders else None
-            targets: list[Path] = []
-            for entry in report["folders"]:
-                if wanted is not None and entry["folder"] not in wanted:
-                    continue
-                base = root if entry["folder"] == "." else root / entry["folder"]
-                targets.extend(sorted(base.glob("*.cbz")))
-            # Re-check: only files still untracked at this instant are removed.
-            fresh = {
-                path
-                for entry in self.library_orphans(folder_limit=10_000)["folders"]
-                for path in (
-                    root if entry["folder"] == "." else root / entry["folder"]
-                ).glob("*.cbz")
+            claims = set(self.database.list_tracked_library_paths())
+            targets = {
+                path: identity
+                for path, identity in self._untracked_cbz_files(root, claims).items()
+                if not folders or path.parent.relative_to(root).as_posix() in folders
             }
-            targets = [path for path in targets if path in fresh]
             if not targets:
                 return {"deleted": 0, "folders": [], "bytes": 0, "errors": []}
-            quarantine = self._stage_library_files(targets)
-            result = self._commit_file_quarantine(quarantine)
-            removed_folders = sorted(
-                {path.parent.relative_to(root).as_posix() or "." for path in targets}
+            result = self._remove_untracked_cbz_files(
+                targets, claims, disposition="delete"
             )
-            self._remove_empty_directories({path.parent for path in targets}, root)
-            self._orphan_summary = None
+            parents = {path.parent for path in result["moved"]}
+            self._remove_empty_directories(parents, root)
             scan = await self._request_komga_reconciliation(
                 not result["cleanup_errors"]
                 and not result["quarantine_files_remaining"]
             )
             return {
-                "deleted": len(targets),
-                "folders": removed_folders,
-                "bytes": sum(entry["bytes"] for entry in report["folders"]),
+                "deleted": result["files_deleted"],
+                "folders": sorted(
+                    parent.relative_to(root).as_posix() for parent in parents
+                ),
+                "bytes": sum(targets[path][2] for path in result["moved"]),
                 "errors": result["cleanup_errors"],
                 "reader_scan": scan,
             }
+
+    async def automatic_library_cleanup(self, now: datetime) -> dict[str, int]:
+        async with self._mutation_lock:
+            self.assert_mutations_allowed()
+            counts = await asyncio.to_thread(
+                self._automatic_library_cleanup_locked, now
+            )
+            if counts["archives_recycled"]:
+                await self._request_komga_reconciliation(True)
+            return counts
+
+    def _automatic_library_cleanup_locked(self, now: datetime) -> dict[str, int]:
+        root = self._library_root()
+        claims = set(self.database.list_tracked_library_paths())
+        records_key = "library_cleanup_archive_observations"
+        previous = json.loads(self.database.get_setting(records_key) or "{}")
+        observations = {}
+        targets = {}
+        cutoff = now - timedelta(days=7)
+        for path, identity in self._untracked_cbz_files(root, claims).items():
+            relative = path.relative_to(root).as_posix()
+            first_seen, recorded = previous.get(relative, (now.timestamp(), None))
+            if recorded != list(identity) or first_seen > now.timestamp():
+                first_seen = now.timestamp()
+            observations[relative] = [first_seen, list(identity)]
+            if first_seen <= cutoff.timestamp() and len(targets) < 100:
+                targets[path] = identity
+        result = self._remove_untracked_cbz_files(targets, claims, disposition="retain")
+        if result["cleanup_errors"]:
+            raise RuntimeError("Unable to finish recycling untracked archives")
+        for path in result["moved"]:
+            observations.pop(path.relative_to(root).as_posix(), None)
+        self.database.save_setting(records_key, json.dumps(observations))
+        folders = self._remove_empty_library_folders(
+            root, self.library_folder_cleanup()["empty_folders"]
+        )
+        return {
+            "archives_recycled": len(result["moved"]),
+            "archives_observed": len(observations),
+            "folders_removed": len(folders["removed"]),
+            "series_removed": self.database.delete_unused_local_series(
+                cutoff.isoformat(), 100
+            ),
+        }
 
     def _tracked_library_relative_paths(self) -> tuple[str, ...]:
         root = self._library_root()

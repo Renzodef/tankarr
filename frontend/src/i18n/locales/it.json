@@ -911,6 +911,9 @@
   "Recovery in progress": "Recupero in corso",
   "Recovery status unavailable": "Stato di recupero non disponibile",
   "Recovery status unavailable: {error}": "Stato di recupero non disponibile: {error}",
+  "Last run removed {folders} empty folders and {series} unused series, moved {archives} archives to the recycle bin and left {observed} under observation.": "L’ultima esecuzione ha rimosso {folders} cartelle vuote e {series} schede inutilizzate, ha spostato {archives} archivi nel cestino e ne ha lasciati {observed} sotto osservazione.",
+  "Automatic library cleanup": "Pulizia automatica della libreria",
+  "During nightly maintenance, remove empty folders and unused series. Untracked CBZs enter the recycle bin after seven days of observation.": "Durante la manutenzione notturna, rimuove le cartelle vuote e le schede inutilizzate. I CBZ non associati passano nel cestino dopo sette giorni di osservazione.",
   "Recycle bin retention (days)": "Conservazione nel cestino (giorni)",
   "Refresh": "Aggiorna",
   "Refresh All": "Aggiorna tutto",
@@ -1623,9 +1626,9 @@
     "one": "{count} file spostato nel cestino.",
     "other": "{count} file spostati nel cestino."
   },
-  "{count} files on disk that no series in Tankarr claims. The reader still serves them, so Tankarr and the reader disagree until they are removed. They are usually left by a series deleted without its files. Nothing is deleted automatically.": {
-    "one": "{count} file su disco che nessuna serie in Tankarr rivendica. Il lettore lo serve ancora, quindi Tankarr e il lettore sono in disaccordo finché non viene rimosso. Di solito lo lascia una serie eliminata senza i suoi file. Nulla viene eliminato automaticamente.",
-    "other": "{count} file su disco che nessuna serie in Tankarr rivendica. Il lettore li serve ancora, quindi Tankarr e il lettore sono in disaccordo finché non vengono rimossi. Di solito li lascia una serie eliminata senza i suoi file. Nulla viene eliminato automaticamente."
+  "{count} files on disk that no series in Tankarr claims. The reader still serves them, so Tankarr and the reader disagree until they are removed. They are usually left by a series deleted without its files.": {
+    "one": "{count} file su disco che nessuna serie in Tankarr rivendica. Il lettore lo serve ancora, quindi Tankarr e il lettore sono in disaccordo finché non viene rimosso. Di solito lo lascia una serie eliminata senza i suoi file.",
+    "other": "{count} file su disco che nessuna serie in Tankarr rivendica. Il lettore li serve ancora, quindi Tankarr e il lettore sono in disaccordo finché non vengono rimossi. Di solito li lascia una serie eliminata senza i suoi file."
   },
   "{count} files removed": {
     "one": "{count} file rimosso",

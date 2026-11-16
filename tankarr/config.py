@@ -224,6 +224,7 @@ class Settings(BaseSettings):
     import_disk_reserve_bytes: int = Field(default=512 * 1024**2, ge=0, le=1024**4)
     backup_directory: Path | None = None
     backup_retention_count: int = Field(default=7, ge=1, le=365)
+    automatic_library_cleanup_enabled: bool = False
     recycle_bin_retention_days: int = Field(default=7, ge=1, le=365)
     setup_completed_at: str | None = None
     # Restored control-plane data must be inspected before any background I/O.

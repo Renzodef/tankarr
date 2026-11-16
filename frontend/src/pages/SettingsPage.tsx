@@ -273,6 +273,7 @@ const SECTIONS: SectionDef[] = [
     group: "data",
     fields: [
       { key: "backup_retention_count", label: msg("Backups to keep"), kind: "number", hint: msg("Number of automatic recovery bundles to retain (default 7).") },
+      { key: "automatic_library_cleanup_enabled", label: msg("Automatic library cleanup"), kind: "boolean", hint: msg("During nightly maintenance, remove empty folders and unused series. Untracked CBZs enter the recycle bin after seven days of observation.") },
       { key: "recycle_bin_retention_days", label: msg("Recycle bin retention (days)"), kind: "number", hint: msg("Retired files are retained for this many days before nightly cleanup (default 7).") },
     ],
   },

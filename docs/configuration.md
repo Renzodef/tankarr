@@ -334,6 +334,7 @@ removes recycle bin entries older than the retention period.
 | --- | --- | --- |
 | `TANKARR_BACKUP_DIRECTORY` | *unset* | Folder for the nightly backups (`tankarr-*.zip`, with the database, the settings and the secrets). Unset: `backups` inside the data directory. Use a folder on another disk so that a backup survives the loss of the data disk, and keep it private. Restart required. |
 | `TANKARR_BACKUP_RETENTION_COUNT` | `7` | Number of automatic backups to keep: 1 to 365. Older ones are removed. Settings → Data. |
+| `TANKARR_AUTOMATIC_LIBRARY_CLEANUP_ENABLED` | `false` | Settings → Data. After a successful nightly backup, remove empty top-level folders and unlinked, unmonitored local series with no files, jobs or reading activity that have been unchanged for at least seven days. Untracked CBZs must be observed unchanged for at least seven days before entering the recycle bin. Non-empty folders containing other files stay available for manual review. |
 | `TANKARR_RECYCLE_BIN_RETENTION_DAYS` | `7` | Days a deleted or replaced file stays in the recycle bin before nightly maintenance removes it for good: 1 to 365. Library files wait in hidden `.tankarr-delete-*` folders inside the library. Settings → Data. |
 
 ## Authentication

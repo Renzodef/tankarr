@@ -83,6 +83,7 @@ EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "translation_ai_api_key": SettingSpec("optional_str", secret=True, max_length=500),
     "setup_completed_at": SettingSpec("optional_str", max_length=40),
     "backup_retention_count": SettingSpec("int", minimum=1, maximum=365),
+    "automatic_library_cleanup_enabled": SettingSpec("bool"),
     "recycle_bin_retention_days": SettingSpec("int", minimum=1, maximum=365),
     "auth_method": SettingSpec("str", min_length=5, max_length=8),
     "auth_required_for_local": SettingSpec("bool"),

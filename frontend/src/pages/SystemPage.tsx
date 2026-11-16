@@ -219,11 +219,24 @@ export default function SystemPage() {
           <a href="#/setup" className="btn">{t("Re-run setup checks")}</a>
         </section>
         <LibraryFolderCleanup />
+        {maintenance?.cleanup ? (
+          <section className="panel">
+            <h2>{t("Automatic library cleanup")}</h2>
+            <p className="muted small">
+              {t("Last run removed {folders} empty folders and {series} unused series, moved {archives} archives to the recycle bin and left {observed} under observation.", {
+                folders: maintenance.cleanup.folders_removed,
+                series: maintenance.cleanup.series_removed,
+                archives: maintenance.cleanup.archives_recycled,
+                observed: maintenance.cleanup.archives_observed,
+              })}
+            </p>
+          </section>
+        ) : null}
         {orphans && orphans.count > 0 ? (
           <section className="panel">
             <h2>{t("Untracked library files")}</h2>
             <p className="muted small">
-              {tn(orphans.count, "{count} file on disk that no series in Tankarr claims. The reader still serves it, so Tankarr and the reader disagree until it is removed. It is usually left by a series deleted without its files. Nothing is deleted automatically.", "{count} files on disk that no series in Tankarr claims. The reader still serves them, so Tankarr and the reader disagree until they are removed. They are usually left by a series deleted without its files. Nothing is deleted automatically.")}
+              {tn(orphans.count, "{count} file on disk that no series in Tankarr claims. The reader still serves it, so Tankarr and the reader disagree until it is removed. It is usually left by a series deleted without its files.", "{count} files on disk that no series in Tankarr claims. The reader still serves them, so Tankarr and the reader disagree until they are removed. They are usually left by a series deleted without its files.")}
             </p>
             <ul className="alert-list">
               {orphans.folders.map((folder) => (
