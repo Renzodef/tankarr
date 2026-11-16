@@ -149,6 +149,8 @@ def _page_geometry(source: Any) -> tuple[int, int] | None:
 DARK_PAGE_LUMINANCE = 40  # a black card: piracy notice, studio splash, "end" slate
 DARK_PAGE_SPREAD = 30  # ...and nearly uniform: a dark drawing has contrast
 DARK_PAGE_RATIO = 0.15  # more than this share of black cards is not a chapter
+DARK_CARD_TONE_WINDOW = 17  # tolerate compression noise around a uniform background
+DARK_CARD_UNIFORM_SHARE = 0.90
 
 
 def _page_darkness(payload: bytes) -> tuple[float, float] | None:
@@ -181,6 +183,37 @@ def _page_darkness(payload: bytes) -> tuple[float, float] | None:
             return stats.mean[0], stats.stddev[0]
     except (UnidentifiedImageError, OSError, ValueError):
         return mean, spread
+
+
+def _is_black_card(payload: bytes) -> bool:
+    """Distinguish a nearly uniform slate from dark art with black gutters.
+
+    Low mean and standard deviation alone also describe night scenes. A
+    slate must additionally put almost all its pixels in one narrow tonal
+    band. Sparse text and compression noise still fit that band; shaded
+    panels occupying a meaningful part of the page do not. Measure source
+    pixels so thumbnail averaging cannot erase small panels.
+    """
+    darkness = _page_darkness(payload)
+    if (
+        darkness is None
+        or darkness[0] >= DARK_PAGE_LUMINANCE
+        or darkness[1] >= DARK_PAGE_SPREAD
+    ):
+        return False
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            histogram = image.convert("L").histogram()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+    total = sum(histogram)
+    if not total:
+        return False
+    uniform = max(
+        sum(histogram[start : start + DARK_CARD_TONE_WINDOW])
+        for start in range(257 - DARK_CARD_TONE_WINDOW)
+    )
+    return uniform / total >= DARK_CARD_UNIFORM_SHARE
 
 
 def _summarize(geometries: Sequence[tuple[int, int]]) -> dict[str, Any]:
@@ -354,12 +387,7 @@ def measure_pages(paths: Iterable[Path]) -> dict[str, Any]:
         geometry = _page_geometry(BytesIO(payload))
         if geometry is not None:
             geometries.append(geometry)
-            darkness = _page_darkness(payload)
-            if (
-                darkness is not None
-                and darkness[0] < DARK_PAGE_LUMINANCE
-                and darkness[1] < DARK_PAGE_SPREAD
-            ):
+            if _is_black_card(payload):
                 dark_pages += 1
     return {**_summarize(geometries), "pages": total, "dark_pages": dark_pages}
 

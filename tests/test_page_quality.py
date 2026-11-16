@@ -410,6 +410,47 @@ def test_sparse_text_still_counts_as_a_black_card(tmp_path: Path):
     assert assess(measured, None, compare_length=False)["verdict"] == DEGRADED
 
 
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_dark_shaded_panels_with_black_gutters_are_not_cards(
+    tmp_path: Path, image_format: str
+):
+    from PIL import ImageDraw
+
+    from tankarr.page_quality import _page_darkness
+
+    paths = write_pages(tmp_path / "episode", [(800, 1150)] * 10)
+    image = Image.new("RGB", (800, 1150), "black")
+    drawing = ImageDraw.Draw(image)
+    # Small night-scene panels with visible shading; their dark gutters
+    # dominate the global statistics and used to cause a false refusal.
+    for y in range(200):
+        tone = 20 + y // 5
+        drawing.line((100, 100 + y, 699, 100 + y), fill=(tone, tone, tone))
+    for index in (0, 9):
+        image.save(paths[index], format=image_format)
+    mean, spread = _page_darkness(paths[0].read_bytes())
+    assert mean < 40 and spread < 30
+    measured = measure_pages(paths)
+    assert measured["dark_pages"] == 0
+    assert assess(measured, None, compare_length=False)["verdict"] == OK
+
+
+@pytest.mark.parametrize("background", [0, 12, 28])
+def test_compressed_uniform_dark_cards_with_text_still_refused(
+    tmp_path: Path, background: int
+):
+    from PIL import ImageDraw
+
+    paths = write_pages(tmp_path / "episode", [(800, 1150)] * 10)
+    image = Image.new("RGB", (800, 1150), (background,) * 3)
+    ImageDraw.Draw(image).text((100, 500), "Studio splash", fill="white")
+    for index in (0, 9):
+        image.save(paths[index], format="JPEG", quality=50)
+    measured = measure_pages(paths)
+    assert measured["dark_pages"] == 2
+    assert assess(measured, None, compare_length=False)["verdict"] == DEGRADED
+
+
 def test_strip_slices_in_a_paged_series_are_another_edition():
     from tankarr.page_quality import DEGRADED, OK, assess, baseline_from
 
