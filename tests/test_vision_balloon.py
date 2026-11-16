@@ -334,7 +334,11 @@ def test_loose_caption_guidance_does_not_choose_adjacent_artwork_color():
 
 
 @pytest.mark.asyncio
-async def test_sky_ring_around_balloon_does_not_replace_its_ink_color():
+async def test_sky_ring_around_balloon_does_not_replace_its_ink_color(monkeypatch):
+    # This assertion measures the reconstructed background. Different system
+    # fonts can place an antialiased glyph over the sampled pixel on macOS.
+    # Lettering itself is covered separately; isolate the palette regression.
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", lambda *args, **kwargs: None)
     source = np.full((700, 500, 3), [140, 160, 170], dtype=np.uint8)
     ring_bounds, ring, _ = oval(x=55, y=40, width=190, height=310)
     x, y, right, bottom = ring_bounds
