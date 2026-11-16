@@ -109,8 +109,10 @@ async def analyze_page(ctx, vision, source_language):
             "is [x1,y1,x2,y2] on a 0..1000 scale. Omit all text and prose."
         )
         for instruction, geometry_only in (
-            (prompt + " Return compact JSON and at most 40 objects.", False),
+            # MIT already provides OCR. Ask for compact geometry first so CPU
+            # vision workers do not transcribe the whole page a second time.
             (geometry_prompt, True),
+            (prompt + " Return compact JSON and at most 40 objects.", False),
         ):
             options = {"response_format": GEOMETRY_FORMAT} if geometry_only else {}
             response = await client.post(
@@ -133,7 +135,7 @@ async def analyze_page(ctx, vision, source_language):
                 },
             )
             if geometry_only and response.status_code in {400, 422}:
-                break
+                continue
             response.raise_for_status()
             try:
                 choice = response.json()["choices"][0]
