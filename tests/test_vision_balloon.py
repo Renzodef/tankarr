@@ -260,6 +260,26 @@ def test_em_dash_is_a_safe_line_break_in_narrow_balloon():
     )
 
 
+@pytest.mark.parametrize("ending", ["!!", "?!", "...", ".”"])
+def test_punctuated_long_word_fits_narrow_caption_without_losing_ink(ending):
+    from PIL import Image
+
+    mask = np.zeros((140, 88), np.uint8)
+    cv2.ellipse(mask, (44, 70), (39, 65), 0, 0, 360, 1, -1)
+    text = "As brain matter splattered everywhere" + ending
+    fitted = vision.fit_mask(text, mask)
+    assert fitted is not None
+    font, rows = fitted
+    assert "".join(row[2] for row in rows).replace("-", "").replace(
+        " ", ""
+    ) == text.replace(" ", "")
+    canvas = Image.new("L", (88, 140))
+    draw = ImageDraw.Draw(canvas)
+    for cx, top, line in rows:
+        draw.text((cx, top), line, anchor="mt", font=font, fill=255)
+    assert not np.any(np.asarray(canvas)[mask == 0])
+
+
 def test_bright_vertical_caption_preserves_art_and_uses_bounded_lettering():
     import asyncio
 
