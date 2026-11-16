@@ -358,7 +358,23 @@ def merge_balloon_fragments(shapes, boxes, regions=()):
 
     merged = []
     for box_index, group in groups.items():
-        dominant = max(group, key=lambda shape: int(shape[1].sum()))
+        text_rects = [
+            tuple(map(int, region.xyxy))
+            for region in regions
+            if intersection(region.xyxy, boxes[box_index])
+            >= 0.7 * intersection(region.xyxy, region.xyxy)
+        ]
+        anchored = [
+            shape
+            for shape in group
+            if any(
+                intersection(shape[0], rect) >= 0.7 * intersection(rect, rect)
+                for rect in text_rects
+            )
+        ]
+        # A loose vision box can include a larger patch of adjacent artwork.
+        # Choose its ink color from candidates that actually contain the text.
+        dominant = max(anchored or group, key=lambda shape: int(shape[1].sum()))
         group = [
             shape
             for shape in group
@@ -398,12 +414,6 @@ def merge_balloon_fragments(shapes, boxes, regions=()):
             continue
         # A complete tighter contour avoids color bleed into neighbouring art.
         # Fragmented contours cannot win merely by having a smaller area.
-        text_rects = [
-            tuple(map(int, region.xyxy))
-            for region in regions
-            if intersection(region.xyxy, boxes[box_index])
-            >= 0.7 * intersection(region.xyxy, region.xyxy)
-        ]
         complete = []
         for shape in group:
             (sx, sy, sr, sb), candidate, _ = shape
@@ -505,7 +515,9 @@ async def render_guided(fallback, config, ctx):
             cv2.drawContours(mask, [contour - [x, y]], -1, 1, cv2.FILLED)
             clip = source[y : y + h, x : x + w]
             samples = clip[(mask != 0) & pixels[y : y + h, x : x + w]]
-            if len(samples) < 100:
+            # RETR_EXTERNAL fills holes in a color contour. A thin ring of
+            # sky around a balloon must not become its replacement background.
+            if len(samples) < max(100, mask.sum() * 0.35):
                 continue
             median = np.median(samples, axis=0)
             # Compressed narrow labels can vary more than flat speech balloons.
