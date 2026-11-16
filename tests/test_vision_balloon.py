@@ -106,10 +106,19 @@ async def test_render_groups_all_columns_and_keeps_unassigned_regions(
         text_regions=regions,
         vision_boxes={bounds: ""},
     )
+    # Simulate native removal spilling from the balloon into adjacent artwork.
+    ctx.img_inpainted[20:40, 260:275] = 255
+    # Native caption removal must still reach the fallback renderer.
+    ctx.img_inpainted[160:170, 285:295] = 255
+    original_inpainted = ctx.img_inpainted
     fallback_regions = []
 
     async def fallback(_config, current):
         fallback_regions.extend(current.text_regions)
+        assert np.array_equal(
+            current.img_inpainted[20:40, 260:275], source[20:40, 260:275]
+        )
+        assert np.all(current.img_inpainted[160:170, 285:295] == 255)
         return source.copy()
 
     printed = []
@@ -123,6 +132,7 @@ async def test_render_groups_all_columns_and_keeps_unassigned_regions(
     result = await vision.render_guided(fallback, None, ctx)
     assert fallback_regions == [outside]
     assert ctx.text_regions is regions or ctx.text_regions == regions
+    assert ctx.img_inpainted is original_inpainted
     assert "First paragraph must not disappear." in " ".join(printed)
     assert "Second paragraph stays in the same balloon." in " ".join(printed)
     assert not np.any(np.all(result == [250, 230, 30], axis=2))

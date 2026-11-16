@@ -185,7 +185,12 @@ def fit_mask(text, mask):
         try:
             font = ImageFont.truetype("DejaVuSans.ttf", size)
         except OSError:
-            font = ImageFont.load_default(size=size)
+            try:
+                # MIT ships this font, including punctuation missing from
+                # Pillow's small fallback font on some worker installations.
+                font = ImageFont.truetype("fonts/Arial-Unicode-Regular.ttf", size)
+            except OSError:
+                font = ImageFont.load_default(size=size)
         step = size + 3
         for row_count in range(1, height // step + 1):
             top = (height - row_count * step) // 2
@@ -495,7 +500,19 @@ async def render_guided(fallback, config, ctx):
         assigned.update(map(id, group))
 
     ctx.text_regions = [region for region in regions if id(region) not in assigned]
+    inpainted = ctx.img_inpainted
     try:
+        if placements:
+            # MIT's text-removal mask may extend beyond a balloon into artwork.
+            # Guided balloons are erased by their own contour below. Keep the
+            # native inpainting only around regions still rendered by MIT.
+            clean = source.copy()
+            for region in ctx.text_regions:
+                x1, y1, x2, y2 = map(int, region.xyxy)
+                x1, y1 = max(0, x1 - 16), max(0, y1 - 16)
+                x2, y2 = min(width, x2 + 16), min(height, y2 + 16)
+                clean[y1:y2, x1:x2] = inpainted[y1:y2, x1:x2]
+            ctx.img_inpainted = clean
         base = (
             await fallback(config, ctx)
             if ctx.text_regions
@@ -503,6 +520,7 @@ async def render_guided(fallback, config, ctx):
         )
     finally:
         ctx.text_regions = regions
+        ctx.img_inpainted = inpainted
     for x, y, right, bottom, erase, color, *_ in placements:
         base[y:bottom, x:right][erase != 0] = color
     canvas = Image.fromarray(base)
