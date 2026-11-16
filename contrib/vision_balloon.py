@@ -195,6 +195,28 @@ def fit(text, width, height):
     return None
 
 
+def dark_palette_masks(source, dark):
+    """Separate flat ink colors when their hue band also contains artwork."""
+    import cv2
+    import numpy as np
+
+    samples = source[dark].astype(np.int32) // 16
+    packed = samples @ np.array([256, 16, 1])
+    counts = np.bincount(packed, minlength=4096)
+    best = np.argsort(counts)[-4:]
+    for index in best:
+        if counts[index] < source.shape[0] * source.shape[1] * 0.002:
+            continue
+        red, green, blue = int(index // 256), int(index // 16 % 16), int(index % 16)
+        color = np.array([red, green, blue]) * 16 + 8
+        close_color = cv2.inRange(
+            source, np.maximum(color - 16, 0), np.minimum(color + 16, 255)
+        )
+        yield cv2.morphologyEx(
+            close_color, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8)
+        ).astype(bool)
+
+
 async def render_guided(fallback, config, ctx):
     import cv2
     import numpy as np
@@ -217,6 +239,7 @@ async def render_guided(fallback, config, ctx):
         & (value >= 149),
         (saturation <= 24) & (value >= 180),
     ]
+    masks.extend(dark_palette_masks(source, dark))
     shapes = []
     for pixels in masks:
         opened = cv2.morphologyEx(
@@ -230,9 +253,6 @@ async def render_guided(fallback, config, ctx):
                 min(w, h) < 35
                 or not 0.49 <= area / (w * h) <= 0.95
                 or not 0.001 <= area / (width * height) <= 0.12
-                or min(x, y) <= 0
-                or x + w >= width
-                or y + h >= height
             ):
                 continue
             bounds = (x, y, x + w, y + h)
@@ -257,11 +277,11 @@ async def render_guided(fallback, config, ctx):
         rect = tuple(map(float, region.xyxy))
         area = intersection(rect, rect)
         scores = [
-            (intersection(rect, bounds) / area, index)
+            (intersection(rect, bounds) / area, -intersection(bounds, bounds), index)
             for index, (bounds, _, _) in enumerate(shapes)
             if area > 0
         ]
-        score, index = max(scores, default=(0, -1))
+        score, _, index = max(scores, default=(0, 0, -1))
         if score >= 0.7:
             groups[index].append(region)
 

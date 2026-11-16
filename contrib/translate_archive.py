@@ -2442,7 +2442,11 @@ def checkpoint_identity(request, config):
         "config": config,
     }
     if vision := request.get("vision"):
-        value["vision"] = {key: vision[key] for key in ("base_url", "model")}
+        value["vision"] = {
+            "base_url": vision["base_url"],
+            "model": vision["model"],
+            "rendering_version": 2,
+        }
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
