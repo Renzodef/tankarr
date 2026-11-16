@@ -153,10 +153,20 @@ def slot_key(release: dict) -> str:
 
 
 def eligible_source(source: dict, languages: list[str]) -> bool:
+    # A whole book can have a verified volume number without having a chapter
+    # number to reconcile. Only accept an unmapped row with explicit book identity.
+    whole_book = (
+        source.get("release_unit") == "volume"
+        and source.get("numbering_status") == "unmapped"
+        and source.get("numbering_method") == "source_identity"
+        and source.get("source_chapter") is None
+        and source.get("chapter") is None
+        and canonical_number(source.get("volume")) is not None
+    )
     return bool(
         source.get("language") in languages
         and source.get("provider") not in {"expected", "translated", "assembled"}
-        and source.get("numbering_status", "mapped") == "mapped"
+        and (source.get("numbering_status", "mapped") == "mapped" or whole_book)
         and not source.get("blocked")
         and (
             canonical_number(source.get("chapter")) is not None

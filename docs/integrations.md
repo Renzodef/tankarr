@@ -137,7 +137,7 @@ the managed server restarts, and until a repository is configured the panel
 has nothing to offer and **System** shows an alert. The panel lists that
 repository's extensions, plus any extension already installed. After
 **Install Suwayomi**, and again during the daily maintenance, Tankarr installs
-every extension of the repository for your **Search languages** (Settings →
+every extension of the repository for your **Library languages** (Settings →
 General), except:
 
 - extensions labelled NSFW;

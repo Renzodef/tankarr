@@ -179,6 +179,50 @@ async def test_known_unlisted_source_is_queued_without_network_search(
 
 
 @pytest.mark.asyncio
+async def test_foreign_volume_without_chapter_number_can_be_queued(translation):
+    manager, database, service, _source = translation
+    work = await service.add_manual_series(
+        {
+            "title": "Collected Work",
+            "original_language": "zh",
+            "expected_book_count": 2,
+            "status": "ended",
+        },
+        "en",
+        "all",
+    )
+    source = {
+        **chapter("foreign-volume", None, language="zh"),
+        "provider": "suwayomi",
+        "volume": "1",
+        "release_unit": "volume",
+        "numbering_status": "unmapped",
+        "numbering_method": "source_identity",
+    }
+    database.upsert_chapters(
+        work["id"],
+        [
+            source,
+            {
+                **source,
+                "id": "unmapped-chapter",
+                "volume": "2",
+                "release_unit": "chapter",
+            },
+        ],
+        monitor_new=False,
+    )
+    assert database.get_chapter("foreign-volume")["numbering_status"] == "unmapped"
+    assert "zh" not in manager.settings.search_language_set
+    assert await manager.queue_missing(work["id"]) == 1
+    job = manager.store.list(work["id"])[0]
+    assert job["slot_key"] == "volume:1"
+    assert job["source"]["id"] == "foreign-volume"
+    assert job["source"]["language"] == "zh"
+    assert job["target_language"] == "en"
+
+
+@pytest.mark.asyncio
 async def test_discovery_only_searches_three_languages_per_pass(
     translation, monkeypatch
 ):

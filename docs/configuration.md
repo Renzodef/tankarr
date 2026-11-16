@@ -146,7 +146,7 @@ Languages are written as codes. Supported codes: `ar`, `bg`, `bn`, `ca`, `cs`,
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TANKARR_SEARCH_LANGUAGES` | `en` | The translation languages you want, comma-separated, for example `en,it`. Searches and new series must use one of them. In managed mode, Suwayomi extensions are installed for these languages unless `TANKARR_SUWAYOMI_SOURCE_IDS` lists sources. Settings → General. |
+| `TANKARR_SEARCH_LANGUAGES` | `en` | The reading languages available when adding a series, comma-separated, for example `en,it`. Catalogue searches and translation source languages are independent of this list. In managed mode, Suwayomi extensions are installed for these languages unless `TANKARR_SUWAYOMI_SOURCE_IDS` lists sources. Settings → General. |
 | `TANKARR_DEFAULT_LANGUAGE` | `en` | Language preselected for searches and new series. It must be one of the search languages, otherwise Tankarr does not start. Settings → General. |
 
 ## Monitoring and Wanted

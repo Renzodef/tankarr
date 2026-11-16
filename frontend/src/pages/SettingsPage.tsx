@@ -323,8 +323,8 @@ const SECTIONS: SectionDef[] = [
     fields: [
       {
         key: "search_languages",
-        label: msg("Search languages"),
-        hint: msg("Choose which translation languages appear when adding a series. English is enabled by default."),
+        label: msg("Library languages"),
+        hint: msg("Choose the reading languages offered when adding a series. Translation can use other source languages."),
         kind: "languages",
       },
       { key: "default_language", label: msg("Default language"), kind: "language" },

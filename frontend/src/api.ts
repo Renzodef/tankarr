@@ -320,10 +320,8 @@ export const api = {
   logout: () =>
     request<{ authenticated: false }>("/api/auth/logout", { method: "POST" }),
   health: () => request<Health>("/api/system/health"),
-  search: (query: string, language: string, provider: string) =>
-    request<SearchResponse>(
-      `/api/search?q=${encodeURIComponent(query)}&language=${encodeURIComponent(language)}&provider=${encodeURIComponent(provider)}`,
-    ),
+  search: (query: string) =>
+    request<SearchResponse>(`/api/search?q=${encodeURIComponent(query)}`),
   library: loadLibrary,
   manga: (id: string, fresh = false, signal?: AbortSignal) => {
     const path = `/api/manga/${encodeURIComponent(id)}?compact=true`;

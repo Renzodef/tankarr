@@ -119,12 +119,13 @@ verified. Ordinary monitoring skips content already owned or queued.
 ## Language per release and the OCR language audit
 
 A series is followed in one language, chosen when you add it from your
-**Search languages** (Settings → General). Tankarr records the language on each
+**Library languages** (Settings → General). Tankarr records the language on each
 release, so different series can follow different languages. How the language
 is established depends on the channel:
 
 - **Suwayomi sources** declare their language structurally. Tankarr searches
-  only the sources in the series' language, and no further check is needed.
+  the series' language first. With translation enabled, it can also search
+  configured sources in other languages.
 - **Library Import** uses the language you choose at import time.
 - **Indexer and archive.org releases** are only a claim: a release name or an
   indexer category says nothing reliable about the pages. These channels are

@@ -35,7 +35,7 @@ apply immediately, without a restart.
 In **Settings → General** set:
 
 - **Default language**: the language you read in, used for new series.
-- **Search languages**: the languages Tankarr is allowed to search, in order.
+- **Library languages**: the reading languages available when adding a series.
 
 A series is followed in one language. Tankarr treats the language as a
 property of each release, so a Japanese manga can be downloaded in English
