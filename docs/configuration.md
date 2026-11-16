@@ -508,6 +508,11 @@ language. Enable it once here for all monitored series; see
 | `TANKARR_TRANSLATION_PROCESSOR_URL` | *unset* | Address of an external translation processor for OCR and lettering. When set, it replaces the local processing on the Tankarr host. Settings → Translation (advanced). |
 | `TANKARR_TRANSLATION_PROCESSOR_TOKEN` | *unset* | Bearer token Tankarr sends to the external processor, if the processor requires one. It is not the AI provider key. Secret; stored in the secrets file. Settings → Translation (advanced). |
 
+The optional MIT vision helper allows up to ten minutes of network read inactivity
+for a full-page vision request, accommodating CPU inference. Connecting to the
+vision provider still times out after ten seconds. Job cancellation stops the
+worker process even while a vision request is pending.
+
 ## Advanced
 
 Internal settings and service addresses that rarely need changing.
