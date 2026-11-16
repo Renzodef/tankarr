@@ -1,6 +1,4 @@
-# Only pyproject.toml, README.md, docker-entrypoint.sh, tankarr/ and frontend/
-# are copied into the image; keep everything else, and anything secret, out of
-# the build context.
+# Keep secrets and paths the build does not consume out of its context.
 .git
 .github
 .githooks
@@ -17,7 +15,10 @@ data
 docs
 site
 tests
-contrib
+contrib/*
+!contrib/mit_worker.py
+!contrib/translate_archive.py
+!contrib/vision_balloon.py
 AGENTS*.md
 CLAUDE*.md
 HANDOFF-*.md
