@@ -99,7 +99,10 @@ async def analyze_page(ctx, vision, source_language):
         else {}
     )
     boxes = None
-    async with httpx.AsyncClient(timeout=90, follow_redirects=False) as client:
+    # CPU vision workers can spend several minutes encoding a full page before
+    # producing tokens. Keep connection failures quick while allowing inference.
+    timeout = httpx.Timeout(600, connect=10)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         geometry_prompt = (
             'Return a compact JSON object with key "boxes" and a list of up to 28 '
             "speech balloon or caption boxes, found in reading order. Each box "

@@ -45,12 +45,18 @@ async def test_vision_retries_with_constrained_geometry(monkeypatch):
             else '{"boxes": [[10, 20, 400, 600]]}'
         )
         assert request.headers["Authorization"] == "Bearer fixture-vision"
+        assert request.extensions["timeout"]["read"] == 600
+        assert request.extensions["timeout"]["connect"] == 10
         return httpx.Response(
             200, json={"choices": [{"message": {"content": content}}]}
         )
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(answer))
-    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_: client)
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(answer), **kwargs),
+    )
     await module.analyze_page(
         ctx,
         {
