@@ -213,12 +213,16 @@ def fit_mask(text, mask):
                         # Only split a long word after all ordinary layouts
                         # have been tried. This keeps narrow balloons inside
                         # their contours without dropping dialogue.
-                        if not line and size == 11 and pending[0].isalpha():
-                            word = pending[0]
+                        punctuated = re.fullmatch(
+                            r"([^\w\s]*)([^\W\d_]+)([^\w\s]*)", pending[0]
+                        )
+                        if not line and size == 11 and punctuated:
+                            prefix, word, suffix = punctuated.groups()
                             for cut in range(len(word) - 3, 2, -1):
-                                if font.getlength(word[:cut] + "-") <= available:
-                                    line = word[:cut] + "-"
-                                    pending[0] = word[cut:]
+                                fragment = prefix + word[:cut] + "-"
+                                if font.getlength(fragment) <= available:
+                                    line = fragment
+                                    pending[0] = word[cut:] + suffix
                                     break
                         break
                     line = candidate
