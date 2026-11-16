@@ -210,3 +210,26 @@ def test_tight_complete_contour_wins_over_colour_bleed():
     )
     assert result[0][0] == bounds
     assert result[0][1][100, 10] == 0
+
+
+def test_long_word_in_narrow_balloon_can_wrap_without_losing_letters():
+    mask = np.ones((240, 75), np.uint8)
+    text = "You fundamentally cannot overcome that evil power within you!"
+    fitted = vision.fit_mask(text, mask)
+    assert fitted is not None
+    _font, rows = fitted
+    assert "".join(row[2] for row in rows).replace("-", "").replace(
+        " ", ""
+    ) == text.replace(" ", "")
+
+
+def test_em_dash_is_a_safe_line_break_in_narrow_balloon():
+    fitted = vision.fit_mask(
+        "Do not deceive yourself—he really is already dead.",
+        np.ones((160, 85), np.uint8),
+    )
+    assert fitted is not None
+    assert (
+        "".join(row[2] for row in fitted[1]).replace(" ", "")
+        == "Donotdeceiveyourself—hereallyisalreadydead."
+    )

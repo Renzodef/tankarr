@@ -178,7 +178,7 @@ def fit_mask(text, mask):
     from PIL import ImageFont
 
     height, width = mask.shape
-    words = text.split()
+    words = re.sub(r"([—–])(?=\S)", r"\1 ", text).split()
     if not words:
         return None
     for size in range(min(32, height), 10, -1):
@@ -208,6 +208,16 @@ def fit_mask(text, mask):
                 while pending:
                     candidate = (line + " " + pending[0]).strip()
                     if font.getlength(candidate) > available:
+                        # Only split a long word after all ordinary layouts
+                        # have been tried. This keeps narrow balloons inside
+                        # their contours without dropping dialogue.
+                        if not line and size == 11 and pending[0].isalpha():
+                            word = pending[0]
+                            for cut in range(len(word) - 3, 2, -1):
+                                if font.getlength(word[:cut] + "-") <= available:
+                                    line = word[:cut] + "-"
+                                    pending[0] = word[cut:]
+                                    break
                         break
                     line = candidate
                     pending.pop(0)
