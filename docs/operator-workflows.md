@@ -118,8 +118,12 @@ Operators with a small library host can move the archive work to another machine
 2. Copy precisely those source archives to a private worker directory, using the
    sequential filenames in the manifest. Run
    `python tools/assemble_volume.py manifest.json sources/ assembled.cbz` there.
-   Pillow is required. The worker keeps a 25 GiB scratch reserve and neither
-   publishes books nor deletes chapters. Choose CPU/IO limits on the worker.
+   Pillow is required. The worker neither publishes books nor deletes chapters.
+   It defaults to the server's import policy: 20,000 pages, 16 GiB expanded data
+   and a 512 MiB scratch reserve. Set `--reserve-gib`, `--max-pages` and
+   `--max-expanded-gib` explicitly when your policy differs. A reserve of zero
+   is permitted; page and expanded-size ceilings cannot exceed the server's
+   supported maxima of 100,000 pages and 1 TiB. Choose CPU/IO limits on the worker.
 3. Create an ordinary upload session at `POST /api/import/uploads`, upload the
    result as `assembled.cbz` using `PUT /api/import/uploads/{upload_id}/files`,
    then call the same assembly endpoint with `prepared_upload_id={upload_id}`
@@ -137,6 +141,31 @@ The ordinary local assembly API and automatic-assembly setting are unchanged.
 Keep source archives and the worker result until the import receipt is verified.
 After an uncertain response, inspect the owned volume before retrying. Reusing an
 upload cannot publish a second copy of an already-owned volume.
+
+Workers can be discovered by capability instead of machine name. Run
+`python tools/assemble_volume.py --capabilities --scratch-dir /path/to/scratch`
+to obtain JSON with the supported manifest versions, Python/Pillow versions,
+available CPU count, free scratch bytes, policy and supported features. This
+probe does not create directories, download data or start packaging. Supply the
+same policy flags to the probe and the job when overriding defaults.
+
+After copying the sources, run
+`python tools/assemble_volume.py manifest.json sources/ assembled.cbz --preflight`
+to verify source hashes, archive metadata, policy and available scratch without
+creating output. Scratch must accommodate the output plus the largest individual
+page (for seeking image codecs) and the selected reserve. The packaging command
+repeats these checks; a successful preflight does not reserve disk space or lock
+the sources.
+
+The worker decompresses each source page once. Ordinary image headers use a
+bounded 1 MiB rewind buffer; codecs needing more seeking spill one page to a
+temporary file. Pillow's own codec allocations are unchanged. The worker still
+checks source SHA-256 before and after packaging, image geometry and output CRC.
+It publishes the result without overwriting an existing file and synchronizes
+both the file and its directory before returning its JSON receipt. If publication
+returns an error after creating the output, keep it for reconciliation; do not
+overwrite it blindly. Parallelize independent books only within measured CPU,
+disk and network capacity; Tankarr serializes final library mutations.
 
 ## Portable library lists
 
