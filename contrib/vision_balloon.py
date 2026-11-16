@@ -519,10 +519,11 @@ async def render_guided(fallback, config, ctx):
             # Guided balloons are erased by their own contour below. Keep the
             # native inpainting only around regions still rendered by MIT.
             clean = source.copy()
-            for region in ctx.text_regions:
+            for region in regions:
                 x1, y1, x2, y2 = map(int, region.xyxy)
-                x1, y1 = max(0, x1 - 16), max(0, y1 - 16)
-                x2, y2 = min(width, x2 + 16), min(height, y2 + 16)
+                padding = 0 if id(region) in assigned else 16
+                x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
+                x2, y2 = min(width, x2 + padding), min(height, y2 + padding)
                 clean[y1:y2, x1:x2] = inpainted[y1:y2, x1:x2]
             ctx.img_inpainted = clean
         base = (
