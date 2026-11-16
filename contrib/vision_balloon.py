@@ -428,7 +428,9 @@ async def render_guided(fallback, config, ctx):
 
     source = np.asarray(ctx.img_rgb)
     height, width = source.shape[:2]
-    boxes = supported_balloon_boxes(ctx.vision_boxes, ctx.text_regions, width, height)
+    boxes = supported_balloon_boxes(
+        getattr(ctx, "vision_boxes", {}), ctx.text_regions, width, height
+    )
     hue, saturation, value = cv2.split(cv2.cvtColor(source, cv2.COLOR_RGB2HSV))
     # Distinct flat color populations keep page margins and illustrations
     # from bleeding into a balloon candidate.

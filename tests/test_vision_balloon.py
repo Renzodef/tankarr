@@ -74,8 +74,9 @@ def test_intact_outline_wins_over_a_duplicate_with_artwork_extension():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("background", [[40, 48, 110], [220, 0, 30], [190, 170, 220]])
+@pytest.mark.parametrize("empty_guidance", [False, True])
 async def test_render_groups_all_columns_and_keeps_unassigned_regions(
-    monkeypatch, background
+    monkeypatch, background, empty_guidance
 ):
     source = np.full((900, 700, 3), 160, np.uint8)
     bounds, mask, color = oval(x=30, width=220, height=350)
@@ -104,7 +105,7 @@ async def test_render_groups_all_columns_and_keeps_unassigned_regions(
         img_rgb=source.copy(),
         img_inpainted=source.copy(),
         text_regions=regions,
-        vision_boxes={bounds: ""},
+        vision_boxes={} if empty_guidance else {bounds: ""},
     )
     # Simulate native removal spilling from the balloon into adjacent artwork.
     ctx.img_inpainted[20:40, 260:275] = 255
