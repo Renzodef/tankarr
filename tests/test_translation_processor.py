@@ -4854,3 +4854,67 @@ async def test_unconfirmed_latin_text_in_a_book_in_another_script_stops_the_page
         await runner.translate(source, output, request, checkpoints=checkpoints)
     assert not list(checkpoints.glob("00001-*.zip"))
     assert not output.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("certain", [True, False])
+@pytest.mark.parametrize("reading", ["Q.R.S.", "Q.R.T."])
+async def test_printed_work_initials_require_agreeing_ocr_and_certain_name_verdict(
+    monkeypatch, certain, reading
+):
+    runner = load("translate_archive")
+    text = "Q.R.S."
+    calls = []
+
+    async def reread(_image, _lines, _device="cpu"):
+        return reading
+
+    def provider(request):
+        body = json.loads(request.content)
+        assert "publication logo" in body["messages"][0]["content"]
+        assert json.loads(body["messages"][1]["content"])["visual_observations"] == [
+            "Isolated stylized initials above a subtitle, outside narrative panels."
+        ]
+        calls.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "function": "name_label",
+                                    "certain": certain,
+                                    "text": text,
+                                }
+                            )
+                        },
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(runner, "independent_latin_reading", reread)
+    monkeypatch.setattr(runner, "PROVIDER_TRANSPORT", httpx.MockTransport(provider))
+    result = await runner.verify_original_names(
+        {
+            "source_language": "ja",
+            "ai": {
+                "base_url": "https://api.example.test",
+                "model": "fixture",
+                "api_key": "fixture-token",
+            },
+        },
+        [text],
+        lines=[SimpleNamespace(text=text)],
+        image=Image.new("RGB", (8, 8)),
+        page_context=[text, "出版作品", "QUANTUM RIVER STORIES"],
+        visual_observations=[
+            "Isolated stylized initials above a subtitle, outside narrative panels."
+        ],
+    )
+    assert bool(result) == (certain and reading == text)
+    if reading != text:
+        assert not calls
