@@ -513,6 +513,10 @@ for a full-page vision request, accommodating CPU inference. Connecting to the
 vision provider still times out after ten seconds. Job cancellation stops the
 worker process even while a vision request is pending.
 
+Hook jobs that report a busy or unavailable worker yield priority to other jobs
+for up to one minute. Tankarr still runs at most two hooks concurrently and keeps
+retrying when no alternative work is available; a retry uses the same job attempt.
+
 ## Advanced
 
 Internal settings and service addresses that rarely need changing.

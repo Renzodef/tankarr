@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -24,6 +25,7 @@ from tankarr.translation_policy import (
     source_languages_to_search,
     source_mapping_language,
 )
+from tankarr.translation_worker import WorkerUnavailable
 from tests.test_deletion import (
     RecordingKomga,
     chapter,
@@ -933,3 +935,63 @@ async def test_stale_translation_cannot_publish_after_waiting_for_mutation_lock(
         await task
     assert manager.store.get(old["id"]) == current
     assert not any(row["downloaded"] for row in database.list_all_chapters("manga-1"))
+
+
+@pytest.mark.asyncio
+async def test_unavailable_hook_jobs_do_not_starve_other_workers(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    jobs = [
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+        for n in range(1, 5)
+    ]
+    blocked = {job["id"] for job in jobs[:2]}
+    calls = []
+    now = [100.0]
+    monkeypatch.setattr(
+        "tankarr.translation.time", SimpleNamespace(monotonic=lambda: now[0])
+    )
+    active = 0
+    peak = 0
+
+    async def process(job):
+        nonlocal active, peak
+        calls.append(job["id"])
+        if job["id"] in blocked:
+            raise WorkerUnavailable("Worker is busy")
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+
+    monkeypatch.setattr(manager, "process", process)
+    await manager.tick()
+    assert set(calls) == blocked
+    calls.clear()
+    await manager.tick()
+    assert set(calls) == {job["id"] for job in jobs[2:]}
+    assert peak == 2
+    assert all(manager.store.get(job["id"])["status"] == "queued" for job in jobs)
+    now[0] += 61
+    calls.clear()
+    await manager.tick()
+    assert set(calls) == blocked
+
+
+@pytest.mark.asyncio
+async def test_unavailable_hook_retries_when_there_is_no_alternative(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    job = manager.store.create("manga-1", source, "en")
+    process = AsyncMock(side_effect=WorkerUnavailable("Worker is offline"))
+    monkeypatch.setattr(manager, "process", process)
+    await manager.tick()
+    await manager.tick()
+    assert process.await_count == 2
+    assert manager.store.get(job["id"])["status"] == "queued"
