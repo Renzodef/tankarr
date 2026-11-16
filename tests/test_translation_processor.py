@@ -30,6 +30,41 @@ def load(name):
     return module
 
 
+@pytest.mark.asyncio
+async def test_vision_retries_with_constrained_geometry(monkeypatch):
+    module = load("vision_balloon")
+    ctx = SimpleNamespace(img_rgb=object(), text_regions=[])
+    monkeypatch.setattr(Image, "fromarray", lambda _: Image.new("RGB", (200, 400)))
+    requests = []
+
+    def answer(request):
+        requests.append(json.loads(request.content))
+        content = (
+            '[{"bbox_2d": [10, 20, 40, 60], "text":'
+            if len(requests) == 1
+            else '{"boxes": [[10, 20, 400, 600]]}'
+        )
+        assert request.headers["Authorization"] == "Bearer fixture-vision"
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": content}}]}
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(answer))
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_: client)
+    await module.analyze_page(
+        ctx,
+        {
+            "base_url": "https://vision.example.test/v1",
+            "model": "vision",
+            "api_key": "fixture-vision",
+        },
+        "zh",
+    )
+    assert ctx.vision_boxes == {(2.0, 8.0, 80.0, 240.0): ""}
+    assert all(request["model"] == "vision" for request in requests)
+    assert requests[1]["response_format"]["type"] == "json_schema"
+
+
 def test_latin_source_language_sample_ignores_retained_japanese_headings():
     module = load("translate_archive")
     dialogue = ["POR FAVOR PERDOE O AMIGO E VOLTE PARA CASA. " * 12]

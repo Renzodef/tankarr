@@ -11,6 +11,30 @@ from difflib import SequenceMatcher
 
 import httpx
 
+GEOMETRY_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "balloon_geometry",
+        "schema": {
+            "type": "object",
+            "required": ["boxes"],
+            "additionalProperties": False,
+            "properties": {
+                "boxes": {
+                    "type": "array",
+                    "maxItems": 28,
+                    "items": {
+                        "type": "array",
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "items": {"type": "integer", "minimum": 0, "maximum": 1000},
+                    },
+                }
+            },
+        },
+    },
+}
+
 
 def intersection(a, b):
     return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(
@@ -18,11 +42,14 @@ def intersection(a, b):
     )
 
 
-def parse_boxes(content, width, height):
+def parse_boxes(content, width, height, *, geometry_only=False):
     match = re.search(r"\[[\s\S]*\]", content)
     if match is None:
         raise ValueError("Vision provider did not return a box list")
     entries = json.loads(match.group())
+    if geometry_only and isinstance(entries, list):
+        entries = [{"bbox_2d": entry} for entry in entries]
+
     if not isinstance(entries, list) or len(entries) > 72:
         raise ValueError("Vision provider returned an invalid box list")
     boxes = {}
@@ -71,13 +98,18 @@ async def analyze_page(ctx, vision, source_language):
         if vision.get("api_key")
         else {}
     )
+    boxes = None
     async with httpx.AsyncClient(timeout=90, follow_redirects=False) as client:
-        for instruction in (
-            prompt + " Return compact JSON and at most 40 objects.",
-            "Return a compact JSON array of up to 30 speech balloons or captions, "
-            "each as an object with only bbox_2d (an [x1,y1,x2,y2] box on a "
-            "0..1000 scale). Use no prose and do not transcribe the text.",
+        geometry_prompt = (
+            'Return a compact JSON object with key "boxes" and a list of up to 28 '
+            "speech balloon or caption boxes, found in reading order. Each box "
+            "is [x1,y1,x2,y2] on a 0..1000 scale. Omit all text and prose."
+        )
+        for instruction, geometry_only in (
+            (prompt + " Return compact JSON and at most 40 objects.", False),
+            (geometry_prompt, True),
         ):
+            options = {"response_format": GEOMETRY_FORMAT} if geometry_only else {}
             response = await client.post(
                 vision["base_url"].rstrip("/") + "/chat/completions",
                 headers=headers,
@@ -93,20 +125,26 @@ async def analyze_page(ctx, vision, source_language):
                         }
                     ],
                     "temperature": 0,
-                    "max_tokens": 2400,
+                    "max_tokens": 2400 if not geometry_only else 1200,
+                    **options,
                 },
             )
+            if geometry_only and response.status_code in {400, 422}:
+                break
             response.raise_for_status()
             try:
                 choice = response.json()["choices"][0]
-                ctx.vision_boxes = parse_boxes(
-                    choice["message"]["content"], *original.size
+                boxes = parse_boxes(
+                    choice["message"]["content"],
+                    *original.size,
+                    geometry_only=geometry_only,
                 )
             except (IndexError, KeyError, TypeError, ValueError):
                 continue
             break
-        else:
-            raise ValueError("Vision provider returned no usable balloon geometry")
+    if boxes is None:
+        raise ValueError("Vision provider returned no usable balloon geometry")
+    ctx.vision_boxes = boxes
     used = set()
     for region in ctx.text_regions:
         rect = tuple(map(float, region.xyxy))
