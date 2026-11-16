@@ -420,9 +420,7 @@ def test_status_does_not_scan_series_rows_or_wait_for_chapter_totals(
             {**chapter(), "id": "chapter-2", "chapter": "2"},
         ],
     )
-    database.mark_chapter_downloaded(
-        "performance-chapter", tmp_path / "chapter.cbz"
-    )
+    database.mark_chapter_downloaded("performance-chapter", tmp_path / "chapter.cbz")
     rows = database.list_manga(with_logical_counts=False)
     totals = database.chapter_totals()
     assert totals == {
