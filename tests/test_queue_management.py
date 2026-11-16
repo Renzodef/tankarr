@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1072,6 +1073,81 @@ async def test_deleting_orphans_keeps_tracked_files_and_rescans_the_reader(
     assert keep.exists()  # a folder not named is left alone
     assert tracked.exists()
     assert service.library_orphans()["count"] == 1
+    mixed_orphan = _write_library_file(root, "Example (Author)/extra.cbz")
+    result = await service.delete_library_orphans(["Example (Author)"])
+    assert result["deleted"] == 1
+    assert tracked.exists()
+    assert not mixed_orphan.exists()
+
+
+async def test_automatic_library_cleanup_waits_for_stable_untracked_archives(tmp_path):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    seed_manga(database)
+    service = build_service(tmp_path, database)
+    service.settings.ensure_directories()
+    root = service.settings.library_dir
+    for base in (root, service.settings.data_dir):
+        (base / ".tankarr-library-id").write_text("0" * 32, encoding="utf-8")
+    old = datetime(2026, 1, 1, tzinfo=UTC)
+    night = old + timedelta(days=10, hours=3)
+    for series in ("empty", "linked", "recent"):
+        database.upsert_manga(
+            {"id": series, "title": series, "provider": "local"}, "en", "none"
+        )
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE manga SET updated_at=? WHERE id IN ('empty','linked')",
+            (old.isoformat(),),
+        )
+        connection.execute(
+            "UPDATE manga SET source_url='https://example.test' WHERE id='linked'"
+        )
+        connection.execute(
+            "UPDATE manga SET monitored=0, auto_download=0 WHERE provider='local'"
+        )
+    empty = root / "empty-folder"
+    empty.mkdir()
+    orphan = _write_library_file(root, "leftover/first.cbz")
+    relinked = _write_library_file(root, "leftover/second.cbz")
+    changed = _write_library_file(root, "leftover/third.cbz")
+    sidecar = root / "metadata-only" / "cover.jpg"
+    sidecar.parent.mkdir()
+    sidecar.write_bytes(b"cover")
+    link = root / "leftover" / "linked.cbz"
+    link.symlink_to(changed)
+
+    first = await service.automatic_library_cleanup(night)
+    assert first == {
+        "archives_recycled": 0,
+        "archives_observed": 3,
+        "folders_removed": 1,
+        "series_removed": 1,
+    }
+    assert not empty.exists()
+    with pytest.raises(KeyError):
+        database.get_manga("empty")
+    assert database.get_manga("linked")
+    assert database.get_manga("recent")
+
+    database.mark_chapter_downloaded("chapter-1", str(relinked))
+    changed.write_bytes(b"new archive")
+    restarted = build_service(tmp_path, database)
+    second = await restarted.automatic_library_cleanup(night + timedelta(days=7))
+    assert second == {
+        "archives_recycled": 1,
+        "archives_observed": 1,
+        "folders_removed": 0,
+        "series_removed": 0,
+    }
+    assert not orphan.exists()
+    assert (
+        relinked.exists()
+        and changed.exists()
+        and sidecar.exists()
+        and link.is_symlink()
+    )
+    assert len(list(root.glob(".tankarr-delete-*/000000.quarantined"))) == 1
 
 
 def test_a_map_canonical_decimal_chapter_is_a_download_candidate(tmp_path: Path):

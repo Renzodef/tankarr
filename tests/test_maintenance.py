@@ -405,3 +405,22 @@ async def test_nightly_repair_moves_real_file_and_updates_database_automatically
     assert database.get_chapter("chapter-1")["library_path"] == str(canonical)
     assert worker.status()["jobs"]["repair"]["status"] == "ok"
     assert worker.status()["repair"]["total_actions"] == 0
+
+
+async def test_library_cleanup_requires_opt_in_and_a_successful_backup(context):
+    settings, _database, service, backups = context
+    service.automatic_library_cleanup = AsyncMock(return_value={"archives_recycled": 0})
+    worker = MaintenanceWorker(*context)
+    await worker.run_once(NIGHT)
+    service.automatic_library_cleanup.assert_not_awaited()
+    settings.automatic_library_cleanup_enabled = True
+    backups.create.side_effect = RuntimeError("backup failed")
+    next_night = NIGHT + timedelta(days=1)
+    await worker.run_once(next_night)
+    assert worker.status()["jobs"]["cleanup"]["status"] == "skipped"
+    service.automatic_library_cleanup.assert_not_awaited()
+    backups.create.side_effect = None
+    await worker.run_once(next_night + timedelta(hours=1))
+    service.automatic_library_cleanup.assert_awaited_once()
+    assert worker.status()["cleanup"] == {"archives_recycled": 0}
+    assert worker.status()["jobs"]["cleanup"]["status"] == "ok"

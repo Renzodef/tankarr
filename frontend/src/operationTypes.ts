@@ -55,6 +55,12 @@ export type MaintenanceStatus = {
     retry_after: string | null;
     error: string | null;
   }>;
+  cleanup?: {
+    archives_recycled: number;
+    archives_observed: number;
+    folders_removed: number;
+    series_removed: number;
+  } | null;
   repair: {
     revision: string | null;
     generated_at: string | null;

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 STATE_SETTING = "automatic_maintenance_state"
 MAX_ACTIONS = 100
 MAX_WARNINGS = 20
-JOB_NAMES = ("backup", "recycle", "repair")
+JOB_NAMES = ("backup", "recycle", "repair", "cleanup")
 
 
 def guided_repair_report(result: dict[str, Any]) -> dict[str, Any]:
@@ -92,6 +92,7 @@ class MaintenanceWorker:
                 for name in JOB_NAMES
             },
             "repair": empty_repair(),
+            "cleanup": None,
             "repair_automatic": True,
             "repair_pending": False,
         }
@@ -111,6 +112,8 @@ class MaintenanceWorker:
                 repair = saved.get("repair")
                 if isinstance(repair, dict):
                     self._state["repair"].update(repair)
+                if isinstance(saved.get("cleanup"), dict):
+                    self._state["cleanup"] = saved["cleanup"]
                 self._state["repair_pending"] = bool(saved.get("repair_pending"))
                 if not saved.get("repair_automatic") and (
                     self._state["repair"]["total_actions"]
@@ -132,6 +135,9 @@ class MaintenanceWorker:
     def status(self) -> dict[str, Any]:
         result = copy.deepcopy(self._state)
         result["repair"].pop("snapshot", None)
+        if not self.settings.automatic_library_cleanup_enabled:
+            result["jobs"].pop("cleanup")
+            result["cleanup"] = None
         if self._lock.locked() or self.settings.restored_safe_mode:
             result["repair"]["can_apply"] = False
         return result
@@ -193,10 +199,22 @@ class MaintenanceWorker:
             for name in JOB_NAMES:
                 if not nightly and name != "repair":
                     continue
+                if (
+                    name == "cleanup"
+                    and not self.settings.automatic_library_cleanup_enabled
+                ):
+                    continue
                 job = self._state["jobs"][name]
                 if not force and not self._due(job, now):
                     continue
                 blocked = await asyncio.to_thread(self._blocked)
+                if name == "cleanup":
+                    backup = self._state["jobs"]["backup"]["last_success_at"]
+                    if (
+                        not backup
+                        or datetime.fromisoformat(backup).date() != now.date()
+                    ):
+                        blocked = blocked or "Waiting for today's application backup"
                 job["last_attempt_at"] = now.isoformat()
                 job["retry_after"] = (now + timedelta(hours=1)).isoformat()
                 if blocked:
@@ -227,9 +245,13 @@ class MaintenanceWorker:
                             raise RuntimeError(
                                 "Some expired download payloads could not be removed"
                             )
-                    else:
+                    elif name == "repair":
                         await self._repair_automatically(now)
                         self._state["repair_pending"] = False
+                    else:
+                        counts = await self.service.automatic_library_cleanup(now)
+                        self._state["cleanup"] = counts
+                        logger.info("Automatic library cleanup completed: %s", counts)
                     job.update(
                         status="ok", last_success_at=now.isoformat(), retry_after=None
                     )
