@@ -3218,6 +3218,19 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
         partial.unlink(missing_ok=True)
 
 
+def write_failure_receipt(output, code, retryable):
+    """Persist only a fixed failure category, never provider bodies or source text."""
+    path = output.with_suffix(".failure.json")
+    temporary = path.with_suffix(".part")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump({"code": code, "retryable": retryable}, stream)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
@@ -3226,6 +3239,7 @@ def main():
     parser.add_argument("--checkpoint-directory", type=Path)
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
+    args.output.with_suffix(".failure.json").unlink(missing_ok=True)
     request = json.loads(sys.stdin.buffer.read(64 * 1024))
     config = json.loads(args.config.read_text()) if args.config else None
     try:
@@ -3240,13 +3254,26 @@ def main():
             )
         )
     except ProviderUnavailable as error:
+        write_failure_receipt(args.output, "provider_unavailable", True)
         print(f"Provider unavailable: {error}", file=sys.stderr)
         raise SystemExit(75) from None
     except TranslationFailed as error:
+        write_failure_receipt(
+            args.output,
+            "page_review_required"
+            if isinstance(error, SuspectPage)
+            else "translation_failed",
+            not isinstance(error, SuspectPage),
+        )
         print(f"Translation failed: {error}", file=sys.stderr)
         raise SystemExit(75) from None
     except Exception as error:  # noqa: BLE001 - do not print SDK bodies or credentials
         temporary = transient_error(error)
+        write_failure_receipt(
+            args.output,
+            "provider_interrupted" if temporary else "validation_failed",
+            temporary,
+        )
         print(
             "Temporary provider interruption"
             if temporary

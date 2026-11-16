@@ -246,6 +246,17 @@ the runner's `--checkpoint-directory` argument and copy the immutable, hash-name
 checkpoint files to durable storage before cleaning up a remote workspace.
 Retain that directory alongside the processor state if restart recovery is needed.
 
+On failure, the runner saves `result.failure.json` next to its output. It contains
+only a fixed `code` and a boolean `retryable`: `page_review_required`,
+`provider_unavailable`, `translation_failed`, `provider_interrupted`, or
+`validation_failed`. The reference processor includes these validated fields as
+`failure` in a failed job's status response. Provider bodies, exception text,
+source dialogue, URLs and credentials are never copied into this receipt.
+`page_review_required` needs correction before retry; provider availability may
+also require operator action. The flag is diagnostic and does not schedule retries.
+A new execution clears any previous receipt; older workers may return only the
+failed status, without a category.
+
 Enter the AI provider's API base URL, model identifier and key in Tankarr. The
 reference worker accepts providers implementing the compatible chat API. Provider
 keys are masked in Settings and use the existing private secrets store, not the
