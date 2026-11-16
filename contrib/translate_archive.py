@@ -1875,6 +1875,10 @@ class SuspectPage(TranslationFailed):
     """The provider answered, but what the OCR read of the page is not enough to call it empty: another OCR may read it."""
 
 
+class SuspectGeometry(SuspectPage):
+    """The page needs new balloon geometry; retrying its OCR cannot supply it."""
+
+
 ASKED = re.compile(r"(?m)^<\|(\d+)\|>")
 ANSWERED = re.compile(r"<\|(\d+)\|>")
 # What one region became, best first: a translation beats an unchanged answer beats a blank one beats no answer at all.
@@ -2650,11 +2654,18 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
         async def _run_text_translation(self, config, ctx):
             if request.get("vision") and ctx.text_regions:
                 if __package__:
-                    from .vision_balloon import analyze_page
+                    from .vision_balloon import InvalidBalloonGeometry, analyze_page
                 else:
-                    from vision_balloon import analyze_page
+                    from vision_balloon import InvalidBalloonGeometry, analyze_page
 
-                await analyze_page(ctx, request["vision"], request["source_language"])
+                try:
+                    await analyze_page(
+                        ctx, request["vision"], request["source_language"]
+                    )
+                except InvalidBalloonGeometry:
+                    raise SuspectGeometry(
+                        "Vision provider returned no usable balloon geometry"
+                    ) from None
             return await super()._run_text_translation(config, ctx)
 
         async def _run_text_rendering(self, config, ctx):
@@ -2709,7 +2720,11 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
 
             async def read_page(index, image):
                 trace.page()
-                ctx = await translator.translate(image.convert("RGB"), parsed)
+                try:
+                    ctx = await translator.translate(image.convert("RGB"), parsed)
+                except SuspectGeometry as refused:
+                    record_rejection(checkpoints, index, str(refused), 0, 0, [])
+                    raise SuspectGeometry(f"Page {index}: {refused}") from None
                 rendered = getattr(ctx, "result", None)
                 if rendered is None or rendered.size != image.size:
                     raise ValueError("Engine did not return a complete page")
@@ -3086,6 +3101,8 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
             async def read_with_fallback(index, image):
                 try:
                     return await read_page(index, image)
+                except SuspectGeometry:
+                    raise
                 except SuspectPage:
                     if FALLBACK_OCR is None:
                         raise
