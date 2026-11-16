@@ -516,7 +516,11 @@ worker process even while a vision request is pending.
 For flat-color balloons, vision guidance groups compatible background fragments
 before placing the translated text. This keeps multiple OCR columns in the same
 balloon and handles vivid and pastel fills. Complete oval outlines take priority
-over fragments that extend into nearby artwork. Other regions retain the MIT
+over fragments that extend into nearby artwork. Panel-sized vision boxes are
+checked against OCR geometry, and omitted text receives separate guidance. Lines
+wrap inside the detected contour, including narrow and irregular balloons. The
+tighter complete contour is preferred when a wider color mask reaches artwork.
+Other regions retain the MIT
 renderer; output should still be checked on representative pages of each style.
 
 ## Advanced

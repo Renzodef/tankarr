@@ -134,3 +134,69 @@ async def test_render_groups_all_columns_and_keeps_unassigned_regions(
 
 def test_empty_candidates_have_no_guided_layout():
     assert vision.merge_balloon_fragments([], [(0, 0, 10, 10)]) == []
+
+
+def test_panel_geometry_is_replaced_by_separate_ocr_guidance():
+    regions = [
+        SimpleNamespace(xyxy=[30, 30, 60, 160]),
+        SimpleNamespace(xyxy=[200, 50, 240, 180]),
+    ]
+    boxes = vision.supported_balloon_boxes([(0, 0, 700, 800)], regions, 700, 800)
+    assert len(boxes) == 2
+    assert vision.intersection(boxes[0], boxes[1]) == 0
+    for region, box in zip(regions, boxes):
+        assert vision.intersection(region.xyxy, box) == vision.intersection(
+            region.xyxy, region.xyxy
+        )
+
+
+def test_irregular_balloon_letters_stay_inside_mask():
+    from PIL import Image
+
+    mask = np.zeros((260, 180), dtype=np.uint8)
+    cv2.fillPoly(
+        mask,
+        [np.array([[5, 5], [160, 25], [140, 100], [175, 230], [10, 250], [40, 150]])],
+        1,
+    )
+    text = "A longer dialogue must remain entirely inside this irregular speech balloon without losing words."
+    fitted = vision.fit_mask(text, mask)
+    assert fitted is not None
+    font, rows = fitted
+    assert " ".join(row[2] for row in rows) == text
+    canvas = Image.new("L", (180, 260))
+    draw = ImageDraw.Draw(canvas)
+    for cx, top, line in rows:
+        draw.text((cx, top), line, anchor="mt", font=font, fill=255)
+    pixels = np.asarray(canvas)
+    assert not np.any(pixels[mask == 0])
+
+
+def test_irregular_outline_does_not_fill_its_artwork_notch():
+    mask = np.ones((200, 150), dtype=np.uint8)
+    mask[60:140, :45] = 0
+    bounds = (10, 20, 160, 220)
+    result = vision.merge_balloon_fragments([(bounds, mask, BLUE)], [bounds])
+    assert result[0][1][100, 20] == 0
+
+
+def test_unfittable_word_keeps_native_rendering_available():
+    assert (
+        vision.fit_mask("Unbreakablewordthatcannotfit", np.ones((30, 30), np.uint8))
+        is None
+    )
+
+
+def test_tight_complete_contour_wins_over_colour_bleed():
+    bounds = (10, 10, 160, 210)
+    mask = np.ones((200, 150), dtype=np.uint8)
+    mask[60:140, :30] = 0
+    wider = np.ones((220, 180), dtype=np.uint8)
+    regions = [SimpleNamespace(xyxy=[60, 40, 120, 170])]
+    result = vision.merge_balloon_fragments(
+        [(bounds, mask, BLUE), ((0, 0, 180, 220), wider, BLUE)],
+        [(20, 20, 150, 200)],
+        regions,
+    )
+    assert result[0][0] == bounds
+    assert result[0][1][100, 10] == 0
