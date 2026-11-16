@@ -2445,7 +2445,7 @@ def checkpoint_identity(request, config):
         value["vision"] = {
             "base_url": vision["base_url"],
             "model": vision["model"],
-            "rendering_version": 2,
+            "rendering_version": 3,
         }
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
@@ -2649,7 +2649,7 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
             return await super()._run_text_translation(config, ctx)
 
         async def _run_text_rendering(self, config, ctx):
-            if request.get("vision") and getattr(ctx, "vision_boxes", None):
+            if request.get("vision") and ctx.text_regions:
                 if __package__:
                     from .vision_balloon import render_guided
                 else:

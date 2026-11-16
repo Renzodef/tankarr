@@ -172,29 +172,60 @@ async def analyze_page(ctx, vision, source_language):
             used.add(box)
 
 
-def fit(text, width, height):
+def fit_mask(text, mask):
+    """Wrap each line against the safe interior of an irregular balloon."""
+    import numpy as np
     from PIL import ImageFont
 
+    height, width = mask.shape
+    words = re.sub(r"([—–])(?=\S)", r"\1 ", text).split()
+    if not words:
+        return None
     for size in range(min(32, height), 10, -1):
         try:
             font = ImageFont.truetype("DejaVuSans.ttf", size)
         except OSError:
-            font = ImageFont.load_default(size=size)
-        lines = []
-        line = ""
-        for word in text.split():
-            extended = f"{line} {word}".strip()
-            if line and font.getlength(extended) > width:
-                lines.append(line)
-                line = word
-            else:
-                line = extended
-        if line:
-            lines.append(line)
-        if len(lines) * (size + 2) <= height and all(
-            font.getlength(line) <= width for line in lines
-        ):
-            return font, lines, size + 2
+            try:
+                # MIT ships this font, including punctuation missing from
+                # Pillow's small fallback font on some worker installations.
+                font = ImageFont.truetype("fonts/Arial-Unicode-Regular.ttf", size)
+            except OSError:
+                font = ImageFont.load_default(size=size)
+        step = size + 3
+        for row_count in range(1, height // step + 1):
+            top = (height - row_count * step) // 2
+            rows, pending = [], list(words)
+            for row in range(row_count):
+                y = top + row * step
+                safe = np.all(mask[y : y + size + 2] != 0, axis=0)
+                edges = np.diff(np.r_[False, safe, False].astype(int))
+                starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+                if not len(starts):
+                    break
+                left, right = max(zip(starts, ends), key=lambda pair: pair[1] - pair[0])
+                available = right - left - 6
+                line = ""
+                while pending:
+                    candidate = (line + " " + pending[0]).strip()
+                    if font.getlength(candidate) > available:
+                        # Only split a long word after all ordinary layouts
+                        # have been tried. This keeps narrow balloons inside
+                        # their contours without dropping dialogue.
+                        if not line and size == 11 and pending[0].isalpha():
+                            word = pending[0]
+                            for cut in range(len(word) - 3, 2, -1):
+                                if font.getlength(word[:cut] + "-") <= available:
+                                    line = word[:cut] + "-"
+                                    pending[0] = word[cut:]
+                                    break
+                        break
+                    line = candidate
+                    pending.pop(0)
+                if not line:
+                    break
+                rows.append(((left + right) / 2, y, line))
+                if not pending:
+                    return font, rows
     return None
 
 
@@ -220,6 +251,186 @@ def dark_palette_masks(source, dark):
         ).astype(bool)
 
 
+def ellipse_fit_score(mask):
+    import cv2
+    import numpy as np
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return 0.0
+    contour = max(contours, key=cv2.contourArea)
+    if len(contour) < 5:
+        return 0.0
+    fitted = np.zeros_like(mask)
+    cv2.ellipse(fitted, cv2.fitEllipse(contour), 1, -1)
+    union = np.count_nonzero((fitted != 0) | (mask != 0))
+    return np.count_nonzero((fitted != 0) & (mask != 0)) / union if union else 0.0
+
+
+def vision_palette_masks(source, boxes):
+    """Include vivid and pastel balloon colors that fixed HSV bands miss."""
+    import cv2
+    import numpy as np
+
+    height, width = source.shape[:2]
+    colors = set()
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box)
+        clip = source[max(0, y1) : min(height, y2), max(0, x1) : min(width, x2)]
+        if clip.size == 0:
+            continue
+        samples = clip.reshape(-1, 3).astype(np.int32) // 16
+        counts = np.bincount(samples @ np.array([256, 16, 1]), minlength=4096)
+        for index in np.argsort(counts)[-2:]:
+            if counts[index] < len(samples) * 0.1 or int(index) in colors:
+                continue
+            colors.add(int(index))
+            color = np.array([index // 256, index // 16 % 16, index % 16]) * 16 + 8
+            for tolerance in (16, 32):
+                pixels = cv2.inRange(
+                    source,
+                    np.maximum(color - tolerance, 0),
+                    np.minimum(color + tolerance, 255),
+                )
+                yield cv2.morphologyEx(
+                    pixels, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8)
+                ).astype(bool)
+
+
+def supported_balloon_boxes(boxes, regions, width, height):
+    """Reject panel-sized guidance and recover boxes around omitted OCR text."""
+    rects = [tuple(map(float, region.xyxy)) for region in regions]
+    supported = []
+    for box in boxes:
+        covered = [
+            rect
+            for rect in rects
+            if intersection(rect, rect) > 0
+            and intersection(rect, box) / intersection(rect, rect) >= 0.5
+        ]
+        text_area = sum(intersection(rect, box) for rect in covered)
+        if text_area and intersection(box, box) <= 6 * text_area:
+            supported.append(box)
+    for rect in rects:
+        area = intersection(rect, rect)
+        if not area or any(intersection(rect, box) / area >= 0.7 for box in supported):
+            continue
+        x1, y1, x2, y2 = rect
+        dx, dy = max(16, (x2 - x1) * 0.2), max(16, (y2 - y1) * 0.12)
+        supported.append(
+            (
+                max(0, x1 - dx),
+                max(0, y1 - dy),
+                min(width, x2 + dx),
+                min(height, y2 + dy),
+            )
+        )
+    return supported
+
+
+def merge_balloon_fragments(shapes, boxes, regions=()):
+    """Combine compatible color fragments belonging to one vision balloon."""
+    import cv2
+    import numpy as np
+
+    groups = defaultdict(list)
+    for bounds, mask, color in shapes:
+        # Printed columns can leave a deep opening in an otherwise oval
+        # background. Recover only near-elliptical hulls; jagged dialogue
+        # balloons must retain their intentional concavities.
+        points = cv2.findNonZero(mask)
+        if points is not None and ellipse_fit_score(mask) < 0.97:
+            hull = np.zeros_like(mask)
+            cv2.fillConvexPoly(hull, cv2.convexHull(points), 1)
+            if mask.sum() >= 0.8 * hull.sum() and ellipse_fit_score(hull) >= 0.97:
+                mask = hull
+        shape = (bounds, mask, color)
+        bounds = shape[0]
+        ranked = []
+        for index, box in enumerate(boxes):
+            overlap = intersection(bounds, box)
+            union = intersection(bounds, bounds) + intersection(box, box) - overlap
+            if union > 0:
+                ranked.append((overlap / union, index))
+        score, index = max(ranked, default=(0, -1))
+        if score >= 0.06:
+            groups[index].append(shape)
+
+    merged = []
+    for box_index, group in groups.items():
+        dominant = max(group, key=lambda shape: int(shape[1].sum()))
+        group = [
+            shape
+            for shape in group
+            if np.max(np.abs(shape[2].astype(float) - dominant[2])) <= 32
+        ]
+        # Prefer a complete outline when one color mask already recovered it.
+        # Otherwise a duplicate with a small extension into the artwork would
+        # enlarge an otherwise accurate oval when taking the union.
+        intact = [
+            (ellipse_fit_score(shape[1]), index)
+            for index, shape in enumerate(group)
+            if shape[1].sum() >= dominant[1].sum() * 0.7
+        ]
+        score, index = max(intact, default=(0, -1))
+        if score >= 0.985:
+            merged.append(group[index])
+            continue
+        # A complete tighter contour avoids color bleed into neighbouring art.
+        # Fragmented contours cannot win merely by having a smaller area.
+        text_rects = [
+            tuple(map(int, region.xyxy))
+            for region in regions
+            if intersection(region.xyxy, boxes[box_index])
+            >= 0.7 * intersection(region.xyxy, region.xyxy)
+        ]
+        complete = []
+        for shape in group:
+            (sx, sy, sr, sb), candidate, _ = shape
+            if not text_rects or candidate.sum() < dominant[1].sum() * 0.65:
+                continue
+            coverage = []
+            for rx1, ry1, rx2, ry2 in text_rects:
+                tx1, ty1, tx2, ty2 = (
+                    max(sx, rx1),
+                    max(sy, ry1),
+                    min(sr, rx2),
+                    min(sb, ry2),
+                )
+                area = (rx2 - rx1) * (ry2 - ry1)
+                coverage.append(
+                    float(candidate[ty1 - sy : ty2 - sy, tx1 - sx : tx2 - sx].sum())
+                    / area
+                    if area > 0 and tx2 > tx1 and ty2 > ty1
+                    else 0
+                )
+            if min(coverage) >= 0.85:
+                complete.append(shape)
+        if complete:
+            merged.append(min(complete, key=lambda shape: int(shape[1].sum())))
+            continue
+        x = min(shape[0][0] for shape in group)
+        y = min(shape[0][1] for shape in group)
+        right = max(shape[0][2] for shape in group)
+        bottom = max(shape[0][3] for shape in group)
+        mask = np.zeros((bottom - y, right - x), dtype=np.uint8)
+        for (sx, sy, sr, sb), fragment, _ in group:
+            mask[sy - y : sb - y, sx - x : sr - x] |= fragment
+        points = cv2.findNonZero(mask)
+        if points is None:
+            continue
+        # Printed letters can split the flat background. Preserve irregular
+        # outlines when closing gaps already reconnects the components.
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+        outlines, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(outlines) == 1:
+            cv2.drawContours(mask, outlines, -1, 1, cv2.FILLED)
+        else:
+            cv2.fillConvexPoly(mask, cv2.convexHull(points), 1)
+        merged.append(((x, y, right, bottom), mask, dominant[2]))
+    return merged
+
+
 async def render_guided(fallback, config, ctx):
     import cv2
     import numpy as np
@@ -227,6 +438,9 @@ async def render_guided(fallback, config, ctx):
 
     source = np.asarray(ctx.img_rgb)
     height, width = source.shape[:2]
+    boxes = supported_balloon_boxes(
+        getattr(ctx, "vision_boxes", {}), ctx.text_regions, width, height
+    )
     hue, saturation, value = cv2.split(cv2.cvtColor(source, cv2.COLOR_RGB2HSV))
     # Distinct flat color populations keep page margins and illustrations
     # from bleeding into a balloon candidate.
@@ -243,6 +457,7 @@ async def render_guided(fallback, config, ctx):
         (saturation <= 24) & (value >= 180),
     ]
     masks.extend(dark_palette_masks(source, dark))
+    masks.extend(vision_palette_masks(source, boxes))
     shapes = []
     for pixels in masks:
         opened = cv2.morphologyEx(
@@ -254,14 +469,12 @@ async def render_guided(fallback, config, ctx):
             area = cv2.contourArea(contour)
             if (
                 min(w, h) < 35
-                or not 0.49 <= area / (w * h) <= 0.95
+                or not 0.30 <= area / (w * h) <= 0.95
                 or not 0.001 <= area / (width * height) <= 0.12
             ):
                 continue
             bounds = (x, y, x + w, y + h)
-            if not any(
-                intersection(bounds, box) / (w * h) >= 0.28 for box in ctx.vision_boxes
-            ):
+            if not any(intersection(bounds, box) / (w * h) >= 0.28 for box in boxes):
                 continue
             mask = np.zeros((h, w), dtype=np.uint8)
             cv2.drawContours(mask, [contour - [x, y]], -1, 1, cv2.FILLED)
@@ -274,13 +487,14 @@ async def render_guided(fallback, config, ctx):
                 continue
             shapes.append((bounds, mask, median.astype(np.uint8)))
 
+    shapes = merge_balloon_fragments(shapes, boxes, ctx.text_regions)
     groups = defaultdict(list)
     regions = list(ctx.text_regions)
     for region in regions:
         rect = tuple(map(float, region.xyxy))
         area = intersection(rect, rect)
         scores = [
-            (intersection(rect, bounds) / area, -intersection(bounds, bounds), index)
+            (intersection(rect, bounds) / area, intersection(bounds, bounds), index)
             for index, (bounds, _, _) in enumerate(shapes)
             if area > 0
         ]
@@ -300,25 +514,30 @@ async def render_guided(fallback, config, ctx):
             continue
         w, h = right - x, bottom - y
         interior = cv2.erode(mask, np.ones((9, 9), np.uint8))
-        options = []
-        for ratio in (0.55, 0.66, 0.77):
-            iw, ih = int(w * ratio), int(h * ratio)
-            left, top = (w - iw) // 2, (h - ih) // 2
-            if not np.all(interior[top : top + ih, left : left + iw]):
-                continue
-            if layout := fit(text, iw - 3, ih - 3):
-                options.append((layout[2], left, top, iw, ih, layout))
-        if not options:
+        layout = fit_mask(text, interior)
+        if layout is None:
             continue
-        _, left, top, iw, ih, layout = max(options, key=lambda option: option[0])
-        erase = cv2.erode(mask, np.ones((5, 5), np.uint8))
-        placements.append(
-            (x, y, right, bottom, erase, color, left, top, iw, ih, layout)
-        )
+        erase = cv2.erode(mask, np.ones((3, 3), np.uint8))
+        placements.append((x, y, right, bottom, erase, color, layout))
         assigned.update(map(id, group))
 
     ctx.text_regions = [region for region in regions if id(region) not in assigned]
+    inpainted = ctx.img_inpainted
     try:
+        if placements:
+            # MIT's text-removal mask may extend beyond a balloon into artwork.
+            # Guided balloons are erased by their own contour below. Keep the
+            # native inpainting only around regions still rendered by MIT.
+            clean = source.copy()
+            for region in regions:
+                if id(region) in assigned:
+                    continue
+                x1, y1, x2, y2 = map(int, region.xyxy)
+                padding = 16
+                x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
+                x2, y2 = min(width, x2 + padding), min(height, y2 + padding)
+                clean[y1:y2, x1:x2] = inpainted[y1:y2, x1:x2]
+            ctx.img_inpainted = clean
         base = (
             await fallback(config, ctx)
             if ctx.text_regions
@@ -326,16 +545,13 @@ async def render_guided(fallback, config, ctx):
         )
     finally:
         ctx.text_regions = regions
+        ctx.img_inpainted = inpainted
     for x, y, right, bottom, erase, color, *_ in placements:
         base[y:bottom, x:right][erase != 0] = color
     canvas = Image.fromarray(base)
     draw = ImageDraw.Draw(canvas)
-    for x, y, _, _, _, color, left, top, iw, ih, (font, lines, step) in placements:
+    for x, y, _, _, _, color, (font, rows) in placements:
         fill = "#fff8e8" if sum(map(int, color)) < 320 else "#151515"
-        top += max(0, (ih - step * len(lines)) // 2)
-        for line in lines:
-            draw.text(
-                (x + left + iw / 2, y + top), line, anchor="mt", font=font, fill=fill
-            )
-            top += step
+        for cx, top, line in rows:
+            draw.text((x + cx, y + top), line, anchor="mt", font=font, fill=fill)
     return np.asarray(canvas).copy()
