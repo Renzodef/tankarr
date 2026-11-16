@@ -488,6 +488,7 @@ language. Enable it once here for all monitored series; see
 | --- | --- | --- |
 | `TANKARR_TRANSLATION_ENABLED` | `false` | Allow translation fallback globally for every monitored series with missing books or chapters, including newly added series. There is no per-series switch. While it is on, a release in the series language is still preferred; if none is usable, a source in any other language may be mapped and translated into the series language. While it is off, sources that do not offer the series language are refused. It only runs when the AI provider URL, model and API key are set. Settings → Translation. |
 | `TANKARR_TRANSLATION_BACKEND` | `auto` | Select `auto` for basic local OCR or the configured HTTP processor, `mit` for the bundled MIT worker, or `hook` for an executable. Settings → Translation. |
+| `TANKARR_TRANSLATION_HOOK_CONCURRENCY` | `2` | Maximum concurrent hook attempts (1–16). Set to the capacity of external workers. Hooks must enforce their own worker limits; this setting does not increase local MIT or HTTP processor concurrency. Settings → Translation. |
 | `TANKARR_TRANSLATION_HOOK` | *unset* | Executable filename for hook mode. Settings → Translation. |
 | `TANKARR_TRANSLATION_HOOK_DIRECTORY` | *unset* | Administrator-controlled directory containing hook executables. Compose uses `/hooks` by default. Restart required. |
 | `TANKARR_TRANSLATION_MIT_WORKER` | bundled worker | Absolute path to the MIT worker when installed separately from the Tankarr checkout or image. Restart required. |
@@ -522,6 +523,11 @@ wrap inside the detected contour, including narrow and irregular balloons. The
 tighter complete contour is preferred when a wider color mask reaches artwork.
 Other regions retain the MIT
 renderer; output should still be checked on representative pages of each style.
+
+Hook jobs that report a busy or unavailable worker yield priority to other jobs
+for up to one minute. Concurrent hooks are bounded by
+`TANKARR_TRANSLATION_HOOK_CONCURRENCY` (default two). Tankarr keeps retrying when
+no alternative work is available; a retry uses the same job attempt.
 
 ## Advanced
 

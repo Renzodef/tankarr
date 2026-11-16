@@ -51,6 +51,7 @@ class TranslationManager:
         self.importer = LibraryImporter(settings, database, service)
         self.task = None
         self.acquisition = None
+        self._hook_retry_after: dict[tuple[str, int], float] = {}
         self.lock = asyncio.Lock()
 
     def directory(self, job: dict) -> Path:
@@ -264,9 +265,8 @@ class TranslationManager:
         async with self.lock:
             self.service.assert_mutations_allowed()
             active = self.store.list(active=True)
-            # Two outstanding processor jobs allow small installations to use
-            # two workers. Downloads and archive work on the Tankarr host stay
-            # serial.
+            # Hook capacity is operator-controlled; native processing retains
+            # its existing limit. Hooks enforce per-worker resource limits.
             active.sort(
                 key=lambda job: (
                     2
@@ -276,8 +276,26 @@ class TranslationManager:
                 )
             )
             if self.settings.translation_backend == "hook":
+                now = time.monotonic()
+                active_attempts = {(job["id"], job["attempts"]) for job in active}
+                self._hook_retry_after = {
+                    key: deadline
+                    for key, deadline in self._hook_retry_after.items()
+                    if key in active_attempts and deadline > now
+                }
+                # A busy or offline worker must not keep the same jobs at
+                # the head of every pass. Retry them after other eligible work;
+                # when there is no other work, keep the normal retry cadence.
+                active.sort(
+                    key=lambda job: (
+                        (job["id"], job["attempts"]) in self._hook_retry_after
+                    )
+                )
                 await asyncio.gather(
-                    *(self._process_attempt(job) for job in active[:2])
+                    *(
+                        self._process_attempt(job)
+                        for job in active[: self.settings.translation_hook_concurrency]
+                    )
                 )
             else:
                 for job in active[:2]:
@@ -295,6 +313,10 @@ class TranslationManager:
         try:
             await self.process(job)
         except WorkerUnavailable as exc:
+            if self.settings.translation_backend == "hook":
+                self._hook_retry_after[(job["id"], job["attempts"])] = (
+                    time.monotonic() + 60
+                )
             self._update_attempt(job, message=str(exc))
         except LocalTranslationError as exc:
             self._update_attempt(job, status="failed", message=str(exc))

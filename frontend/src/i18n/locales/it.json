@@ -1837,5 +1837,7 @@
   "OCR and balloon lettering model": "Modello per OCR e lettering nei balloon",
   "Choose a multimodal model for balloon detection, OCR assistance and lettering guidance. This provider can receive page images.": "Scegli un modello multimodale per rilevare i balloon e assistere OCR e lettering. Il provider può ricevere le immagini delle tavole.",
   "Vision API key": "Chiave API del modello visivo",
-  "Enter a credential if required by your vision provider.": "Inserisci una credenziale se il provider del modello visivo la richiede."
+  "Enter a credential if required by your vision provider.": "Inserisci una credenziale se il provider del modello visivo la richiede.",
+  "Concurrent translation hooks": "Hook di traduzione simultanei",
+  "Maximum concurrent hook attempts (1–16). Match the capacity of your external workers. Each hook must enforce its worker limits.": "Numero massimo di hook simultanei (1–16). Impostalo in base alla capacità dei worker esterni. Ogni hook deve rispettare i limiti del proprio worker."
 }

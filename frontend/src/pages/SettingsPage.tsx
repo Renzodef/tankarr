@@ -256,6 +256,7 @@ const SECTIONS: SectionDef[] = [
         options: [["auto", msg("Automatic")], ["mit", msg("Manga Image Translator (MIT)")], ["hook", msg("Script hook")]],
         hint: msg("Automatic uses the external processor if configured, or basic local OCR. MIT initializes its environment on the first job. A script hook delegates each job to an administrator-installed executable."),
       },
+      { key: "translation_hook_concurrency", label: msg("Concurrent translation hooks"), kind: "number", visibleWhen: { key: "translation_backend", equals: "hook" }, hint: msg("Maximum concurrent hook attempts (1–16). Match the capacity of your external workers. Each hook must enforce its worker limits.") },
       { key: "translation_hook", label: msg("Translation hook filename"), kind: "text", visibleWhen: { key: "translation_backend", equals: "hook" }, hint: msg("Filename of an executable in the administrator-configured hooks directory.") },
       { key: "translation_ai_url", label: msg("Translation API base URL"), kind: "url", hint: msg("A provider with an OpenAI-compatible chat API, including its API path when required.") },
       { key: "translation_ai_model", label: msg("Dialogue translation model"), kind: "text", hint: msg("Model identifier supplied by your AI provider.") },

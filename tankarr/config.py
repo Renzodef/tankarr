@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     search_languages: str = "en"
     translation_enabled: bool = False
     translation_backend: Literal["auto", "mit", "hook"] = "auto"
+    translation_hook_concurrency: int = Field(default=2, ge=1, le=16)
     translation_hook: str | None = None
     translation_hook_directory: Path | None = None
     translation_mit_worker: Path = (
