@@ -100,6 +100,7 @@ from tankarr.models import (
     ChapterSearchRequest,
     DismissAlertRequest,
     DownloadRequest,
+    EmptyLibraryFolderDeleteRequest,
     ImportRequest,
     LibraryOrphanDeleteRequest,
     LoginRequest,
@@ -1934,8 +1935,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"{language} is disabled. Enable it under Settings > "
-                    "General > Search languages."
+                    f"Choose {language} under Settings > General > "
+                    "Library languages before using it as a reading language."
                 ),
             )
         return language
@@ -2490,12 +2491,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return record
 
     @app.get("/api/search")
-    async def search(
-        q: str = Query(min_length=2, max_length=2_000),
-        language: str | None = Query(default=None, min_length=2, max_length=16),
-        provider_name: str = Query(default="all", alias="provider", max_length=32),
-    ):
-        language = enabled_search_language(language)
+    async def search(q: str = Query(min_length=2, max_length=2_000)):
         parsed_query = urlsplit(q.strip())
         query_mode = (
             "url"
@@ -5737,6 +5733,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await monitor.run_cycle()
         except RecoveryBlocked as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/library/folders/cleanup")
+    async def preview_library_folder_cleanup():
+        try:
+            return await asyncio.to_thread(service.library_folder_cleanup)
+        except (LibraryUnavailable, OSError) as exc:
+            raise HTTPException(status_code=503, detail="Library unavailable") from exc
+
+    @app.post("/api/library/folders/cleanup")
+    async def delete_empty_library_folders(request: EmptyLibraryFolderDeleteRequest):
+        try:
+            return await service.delete_empty_library_folders(request.folders)
+        except (LibraryUnavailable, RecoveryBlocked) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/library/orphans")
     async def list_library_orphans():

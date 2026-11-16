@@ -15,6 +15,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from itertools import chain
 from pathlib import Path
 from threading import Lock
 from time import monotonic
@@ -5500,6 +5501,66 @@ class TankarrService:
 
     def invalidate_orphan_summary(self) -> None:
         self._orphan_summary = None
+
+    def library_folder_cleanup(self) -> dict[str, Any]:
+        """Preview top-level folders without inspecting or opening their books."""
+        root = self._library_root()
+        empty: list[str] = []
+        review: list[str] = []
+        archives = {".cbz", ".cbr", ".cb7", ".zip", ".rar", ".7z", ".pdf", ".epub"}
+        with os.scandir(root) as folders:
+            for folder in folders:
+                if folder.name.startswith(".") or not folder.is_dir(
+                    follow_symlinks=False
+                ):
+                    continue
+                try:
+                    with os.scandir(folder) as items:
+                        first = next(items, None)
+                        if first is None:
+                            empty.append(folder.name)
+                        elif not any(
+                            Path(item.name).suffix.casefold() in archives
+                            and item.is_file(follow_symlinks=False)
+                            for item in chain((first,), items)
+                        ):
+                            review.append(folder.name)
+                except OSError:
+                    review.append(folder.name)
+        return {
+            "empty_count": len(empty),
+            "empty_folders": sorted(empty)[:100],
+            "review_count": len(review),
+            "review_folders": sorted(review)[:100],
+        }
+
+    async def delete_empty_library_folders(self, folders: list[str]) -> dict[str, Any]:
+        """Remove only named empty folders. rmdir is the final emptiness check."""
+        async with self._mutation_lock:
+            self.assert_mutations_allowed()
+            root = self._library_root()
+            selected = list(dict.fromkeys(folders))
+            for name in selected:
+                if (
+                    not name
+                    or name.startswith(".")
+                    or "/" in name
+                    or chr(92) in name
+                    or chr(0) in name
+                    or Path(name).name != name
+                ):
+                    raise ValueError(
+                        "Select a visible folder directly under the library"
+                    )
+            removed, skipped = [], []
+            for name in selected:
+                try:
+                    (root / name).rmdir()
+                except OSError:
+                    skipped.append(name)
+                else:
+                    removed.append(name)
+            return {"removed": removed, "skipped": skipped}
 
     def library_orphans(self, *, folder_limit: int = 100) -> dict[str, Any]:
         """Library files no Tankarr release claims, grouped by folder.

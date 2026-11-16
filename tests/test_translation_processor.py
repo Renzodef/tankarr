@@ -30,6 +30,78 @@ def load(name):
     return module
 
 
+@pytest.mark.asyncio
+async def test_vision_falls_back_when_constrained_geometry_is_invalid(monkeypatch):
+    module = load("vision_balloon")
+    ctx = SimpleNamespace(img_rgb=object(), text_regions=[])
+    monkeypatch.setattr(Image, "fromarray", lambda _: Image.new("RGB", (200, 400)))
+    requests = []
+
+    def answer(request):
+        requests.append(json.loads(request.content))
+        content = (
+            '[{"bbox_2d": [10, 20, 40, 60], "text":'
+            if len(requests) == 1
+            else '[{"bbox_2d": [10, 20, 400, 600], "text": ""}]'
+        )
+        assert request.headers["Authorization"] == "Bearer fixture-vision"
+        assert request.extensions["timeout"]["read"] == 600
+        assert request.extensions["timeout"]["connect"] == 10
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": content}}]}
+        )
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(answer), **kwargs),
+    )
+    await module.analyze_page(
+        ctx,
+        {
+            "base_url": "https://vision.example.test/v1",
+            "model": "vision",
+            "api_key": "fixture-vision",
+        },
+        "zh",
+    )
+    assert ctx.vision_boxes == {(2.0, 8.0, 80.0, 240.0): ""}
+    assert all(request["model"] == "vision" for request in requests)
+    assert requests[0]["response_format"]["type"] == "json_schema"
+    assert "response_format" not in requests[1]
+
+
+@pytest.mark.asyncio
+async def test_valid_geometry_does_not_request_a_second_page_transcription(monkeypatch):
+    module = load("vision_balloon")
+    ctx = SimpleNamespace(img_rgb=object(), text_regions=[])
+    monkeypatch.setattr(Image, "fromarray", lambda _: Image.new("RGB", (200, 400)))
+    calls = []
+
+    def answer(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"boxes": [[10, 20, 400, 600]]}'}}]
+            },
+        )
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(answer), **kwargs),
+    )
+    await module.analyze_page(
+        ctx, {"base_url": "https://vision.example.test/v1", "model": "vision"}, "zh"
+    )
+    assert len(calls) == 1
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert ctx.vision_boxes == {(2.0, 8.0, 80.0, 240.0): ""}
+
+
 def test_latin_source_language_sample_ignores_retained_japanese_headings():
     module = load("translate_archive")
     dialogue = ["POR FAVOR PERDOE O AMIGO E VOLTE PARA CASA. " * 12]

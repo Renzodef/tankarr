@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -23,6 +25,7 @@ from tankarr.translation_policy import (
     source_languages_to_search,
     source_mapping_language,
 )
+from tankarr.translation_worker import WorkerUnavailable
 from tests.test_deletion import (
     RecordingKomga,
     chapter,
@@ -176,6 +179,50 @@ async def test_known_unlisted_source_is_queued_without_network_search(
 
 
 @pytest.mark.asyncio
+async def test_foreign_volume_without_chapter_number_can_be_queued(translation):
+    manager, database, service, _source = translation
+    work = await service.add_manual_series(
+        {
+            "title": "Collected Work",
+            "original_language": "zh",
+            "expected_book_count": 2,
+            "status": "ended",
+        },
+        "en",
+        "all",
+    )
+    source = {
+        **chapter("foreign-volume", None, language="zh"),
+        "provider": "suwayomi",
+        "volume": "1",
+        "release_unit": "volume",
+        "numbering_status": "unmapped",
+        "numbering_method": "source_identity",
+    }
+    database.upsert_chapters(
+        work["id"],
+        [
+            source,
+            {
+                **source,
+                "id": "unmapped-chapter",
+                "volume": "2",
+                "release_unit": "chapter",
+            },
+        ],
+        monitor_new=False,
+    )
+    assert database.get_chapter("foreign-volume")["numbering_status"] == "unmapped"
+    assert "zh" not in manager.settings.search_language_set
+    assert await manager.queue_missing(work["id"]) == 1
+    job = manager.store.list(work["id"])[0]
+    assert job["slot_key"] == "volume:1"
+    assert job["source"]["id"] == "foreign-volume"
+    assert job["source"]["language"] == "zh"
+    assert job["target_language"] == "en"
+
+
+@pytest.mark.asyncio
 async def test_discovery_only_searches_three_languages_per_pass(
     translation, monkeypatch
 ):
@@ -211,11 +258,17 @@ def test_translation_settings_defaults_secrets_and_validation(tmp_path):
         {
             "translation_ai_api_key": "hidden-provider-key",
             "translation_processor_token": "hidden-processor-token",
+            "translation_vision_url": "https://vision.example.test/v1",
+            "translation_vision_model": "test-vision",
+            "translation_vision_api_key": "hidden-vision-key",
         },
     )
     assert "hidden-provider-key" not in json.dumps(database.get_setting_overrides())
     assert "hidden-provider-key" not in json.dumps(settings_view(settings, database))
     assert "hidden-processor-token" not in repr(settings)
+    assert "hidden-vision-key" not in repr(settings)
+    assert "hidden-vision-key" not in json.dumps(settings_view(settings, database))
+    assert "hidden-vision-key" not in json.dumps(database.get_setting_overrides())
     update_settings(settings, database, {"translation_ai_api_key": SECRET_PLACEHOLDER})
     assert settings.translation_ai_api_key == "hidden-provider-key"
     with pytest.raises(ValueError):
@@ -558,6 +611,47 @@ async def test_native_first_and_foreign_queue_idempotence(translation, monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_vision", ["vision-model", "wrong-model"])
+async def test_hook_delegates_and_validates_selected_models(
+    translation, tmp_path, receipt_vision
+):
+    manager, database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    manager.settings.translation_hook = "dispatch"
+    manager.settings.translation_hook_directory = tmp_path
+    manager.settings.translation_vision_url = "http://vision.local/v1"
+    manager.settings.translation_vision_model = "vision-model"
+    manager.settings.translation_vision_api_key = "vision-test-secret"
+    job = stage(manager, source, tmp_path)
+    output = output_archive(manager, job, tmp_path, vision_model=receipt_vision)
+    executable = tmp_path / "dispatch"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, shutil, sys\n"
+        "job = json.load(sys.stdin)\n"
+        "assert job['event'] == 'translation.requested'\n"
+        "assert job['protocol_version'] == 1 and job['attempt'] == 0\n"
+        "assert job['ai']['api_key'] == 'ai-test-secret'\n"
+        "assert job['vision']['api_key'] == 'vision-test-secret'\n"
+        "assert job['vision']['model'] == 'vision-model'\n"
+        f"shutil.copyfile({str(output)!r}, job['result_path'])\n"
+    )
+    executable.chmod(0o700)
+    await manager._process_attempt(job)
+    result = manager.store.get(job["id"])
+    if receipt_vision == "wrong-model":
+        assert result["status"] == "failed"
+        assert result["result_chapter_id"] is None
+        return
+    assert result["status"] == "completed"
+    imported = database.get_chapter(result["result_chapter_id"])
+    with zipfile.ZipFile(imported["library_path"]) as archive:
+        metadata = archive.read("ComicInfo.xml").decode()
+    assert "vision model vision-model" in metadata
+    assert "vision-test-secret" not in metadata
+
+
+@pytest.mark.asyncio
 async def test_receipt_checked_and_machine_provenance_published(translation, tmp_path):
     manager, database, _service, source = translation
     job = stage(manager, source, tmp_path)
@@ -885,3 +979,104 @@ async def test_stale_translation_cannot_publish_after_waiting_for_mutation_lock(
         await task
     assert manager.store.get(old["id"]) == current
     assert not any(row["downloaded"] for row in database.list_all_chapters("manga-1"))
+
+
+@pytest.mark.asyncio
+async def test_unavailable_hook_jobs_do_not_starve_other_workers(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    jobs = [
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+        for n in range(1, 5)
+    ]
+    blocked = {job["id"] for job in jobs[:2]}
+    calls = []
+    now = [100.0]
+    monkeypatch.setattr(
+        "tankarr.translation.time", SimpleNamespace(monotonic=lambda: now[0])
+    )
+    active = 0
+    peak = 0
+
+    async def process(job):
+        nonlocal active, peak
+        calls.append(job["id"])
+        if job["id"] in blocked:
+            raise WorkerUnavailable("Worker is busy")
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+
+    monkeypatch.setattr(manager, "process", process)
+    await manager.tick()
+    assert set(calls) == blocked
+    calls.clear()
+    await manager.tick()
+    assert set(calls) == {job["id"] for job in jobs[2:]}
+    assert peak == 2
+    assert all(manager.store.get(job["id"])["status"] == "queued" for job in jobs)
+    now[0] += 61
+    calls.clear()
+    await manager.tick()
+    assert set(calls) == blocked
+
+
+@pytest.mark.asyncio
+async def test_unavailable_hook_retries_when_there_is_no_alternative(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    job = manager.store.create("manga-1", source, "en")
+    process = AsyncMock(side_effect=WorkerUnavailable("Worker is offline"))
+    monkeypatch.setattr(manager, "process", process)
+    await manager.tick()
+    await manager.tick()
+    assert process.await_count == 2
+    assert manager.store.get(job["id"])["status"] == "queued"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "backend,limit,expected",
+    [("hook", 1, 1), ("hook", 3, 3), ("hook", 4, 4), ("auto", 4, 1)],
+)
+async def test_configurable_hook_capacity_preserves_native_serial_processing(
+    translation, monkeypatch, backend, limit, expected
+):
+    manager, database, _service, source = translation
+    update_settings(manager.settings, database, {"translation_hook_concurrency": limit})
+    manager.settings.translation_backend = backend
+    for n in range(5):
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+    active = peak = calls = 0
+
+    async def process(_job):
+        nonlocal active, peak, calls
+        calls += 1
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+
+    monkeypatch.setattr(manager, "process", process)
+    await manager.tick()
+    assert peak == expected
+    assert calls == (limit if backend == "hook" else 2)
+
+
+@pytest.mark.parametrize("limit", [0, 17, 2.5])
+def test_hook_capacity_rejects_invalid_values(translation, limit):
+    manager, database, _service, _source = translation
+    with pytest.raises(ValueError):
+        update_settings(
+            manager.settings, database, {"translation_hook_concurrency": limit}
+        )
+    assert manager.settings.translation_hook_concurrency == 2

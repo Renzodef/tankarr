@@ -563,7 +563,7 @@ export default function SeriesPage({ id }: { id: string }) {
         {coverUrl ? (
           <div
             className="series-backdrop"
-            style={{ backgroundImage: `url(${artworkThumbnailUrl(coverUrl, 640) ?? coverUrl})` }}
+            style={{ backgroundImage: `url(${artworkThumbnailUrl(coverUrl, 320) ?? coverUrl})` }}
           />
         ) : null}
         <div className="series-hero-content">

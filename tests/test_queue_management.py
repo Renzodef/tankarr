@@ -968,6 +968,50 @@ def _write_library_file(root: Path, relative: str) -> Path:
     return path
 
 
+@pytest.mark.asyncio
+async def test_empty_folder_cleanup_keeps_books_and_rechecks_the_preview(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "tankarr.sqlite3")
+    database.initialize()
+    service = build_service(tmp_path, database)
+    root = service.settings.library_dir
+    root.mkdir(parents=True)
+    (root / ".tankarr-library-id").write_text("0" * 32, encoding="utf-8")
+    service.settings.data_dir.mkdir(parents=True, exist_ok=True)
+    (service.settings.data_dir / ".tankarr-library-id").write_text(
+        "0" * 32, encoding="utf-8"
+    )
+    for name in ("Remove", "Still importing", ".staging", "Cover only", "Empty nested"):
+        (root / name).mkdir()
+    (root / "Empty nested" / "Subfolder").mkdir()
+    (root / "Cover only" / "cover.jpg").write_bytes(b"image")
+    (root / "Link").symlink_to(root / "Remove", target_is_directory=True)
+    book = _write_library_file(root, "Book/volume.cbz")
+
+    preview = service.library_folder_cleanup()
+    assert preview["empty_folders"] == ["Remove", "Still importing"]
+    assert preview["review_folders"] == ["Cover only", "Empty nested"]
+
+    with pytest.raises(ValueError):
+        await service.delete_empty_library_folders(["Remove", "../outside"])
+    assert (root / "Remove").is_dir()
+
+    new_book = _write_library_file(root, "Still importing/volume.cbz")
+    result = await service.delete_empty_library_folders(
+        [*preview["empty_folders"], "Cover only", "Link"]
+    )
+    assert result == {
+        "removed": ["Remove"],
+        "skipped": ["Still importing", "Cover only", "Link"],
+    }
+    assert not (root / "Remove").exists()
+    assert book.is_file() and new_book.is_file()
+    assert (root / "Cover only" / "cover.jpg").is_file()
+    assert (root / ".staging").is_dir()
+    assert (root / "Link").is_symlink()
+
+
 def test_library_files_no_release_claims_are_named_as_orphans(tmp_path: Path):
     # Live: a series deleted from Tankarr without its files left 27 chapters
     # on disk, which the reader kept serving as "stale books" for two days.

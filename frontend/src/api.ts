@@ -321,10 +321,8 @@ export const api = {
   logout: () =>
     request<{ authenticated: false }>("/api/auth/logout", { method: "POST" }),
   health: () => request<Health>("/api/system/health"),
-  search: (query: string, language: string, provider: string) =>
-    request<SearchResponse>(
-      `/api/search?q=${encodeURIComponent(query)}&language=${encodeURIComponent(language)}&provider=${encodeURIComponent(provider)}`,
-    ),
+  search: (query: string) =>
+    request<SearchResponse>(`/api/search?q=${encodeURIComponent(query)}`),
   library: loadLibrary,
   manga: (id: string, fresh = false, signal?: AbortSignal) => {
     const path = `/api/manga/${encodeURIComponent(id)}?compact=true`;
@@ -665,6 +663,16 @@ export const api = {
       `/api/manga/${encodeURIComponent(mangaId)}/volumes/${encodeURIComponent(volume)}/monitoring`,
       { method: "PATCH", body: JSON.stringify({ state }) },
     ),
+  libraryFolderCleanup: () => request<{
+    empty_count: number;
+    empty_folders: string[];
+    review_count: number;
+    review_folders: string[];
+  }>("/api/library/folders/cleanup"),
+  deleteEmptyLibraryFolders: (folders: string[]) =>
+    request<{ removed: string[]; skipped: string[] }>("/api/library/folders/cleanup", {
+      method: "POST", body: JSON.stringify({ folders }),
+    }),
   libraryOrphans: () => request<LibraryOrphans>("/api/library/orphans"),
   deleteLibraryOrphans: (folders?: string[]) =>
     request<{ deleted: number; folders: string[]; errors: string[] }>(

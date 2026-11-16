@@ -125,6 +125,10 @@ class ChapterMapRequest(BaseModel):
     )
 
 
+class EmptyLibraryFolderDeleteRequest(BaseModel):
+    folders: list[str] = Field(min_length=1, max_length=100)
+
+
 class LibraryOrphanDeleteRequest(BaseModel):
     """Which untracked library folders to remove; empty means all of them."""
 

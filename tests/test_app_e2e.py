@@ -733,7 +733,8 @@ def test_catalogue_add_maps_a_source_downloads_and_imports(tmp_path: Path):
         app.state.providers.clear()
         app.state.providers["suwayomi"] = source
 
-        search = client.get("/api/search", params={"q": "Tankarr", "language": "en"})
+        # Older clients can pass a language outside the library profile.
+        search = client.get("/api/search", params={"q": "Tankarr", "language": "zh"})
         assert search.status_code == 200, search.text
         work = search.json()["works"][0]
         assert work["id"] == "mb:377" and work["provider"] == "catalogue"

@@ -175,6 +175,45 @@ async def test_archive_fallback_accepts_unlisted_language_without_prowlarr(
 
 
 @pytest.mark.asyncio
+async def test_archive_finds_translated_title_for_italian_destination(
+    translation, monkeypatch
+):
+    manager, database, _service, _source = translation
+    acquisition = setup_acquisition(manager, monkeypatch)
+    database.update_manga("manga-1", {"preferred_language": "it"})
+    manager.settings.prowlarr_enabled = False
+    manager.release_sources._target.return_value = {"alternate_titles": ["Exemple"]}
+    add_archive(acquisition, [])
+    search = acquisition.torrents.internet_archive.search_translation
+    search.side_effect = [
+        [],
+        [
+            {
+                **release(),
+                "id": "archive-fr",
+                "provider": "internetarchive",
+                "protocol": "http",
+                "title": "Exemple v02",
+                "language": "fr",
+            }
+        ],
+    ]
+
+    assert await acquisition.hunt("manga-1", ["fr"]) == 1
+    assert [call.args[0] for call in search.await_args_list] == ["Example", "Exemple"]
+    acquisition.torrents.grab.assert_awaited_once_with(
+        "manga-1",
+        "internetarchive",
+        "archive-fr",
+        translation={
+            "source_language": "fr",
+            "target_language": "it",
+            "slots": ["volume:2"],
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_indexer_outage_does_not_hide_archive_candidates(
     translation, monkeypatch
 ):

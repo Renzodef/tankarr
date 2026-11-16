@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from tankarr.config import Settings
 from tankarr.database import Database
+from tankarr.reading_direction import infer_reading_direction
 from tankarr.series_form import _is_webtoon
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
@@ -223,21 +224,14 @@ def _reader_direction(manga: dict[str, Any], display_mode: str) -> str:
         return "ltr"
     if direction in {"right_to_left", "right-to-left", "rtl"}:
         return "rtl"
-    content_kind = str(metadata.get("content_kind") or "").strip().casefold()
-    if content_kind in {"manhua", "manhwa", "comic", "book"}:
-        return "ltr"
-    if content_kind == "manga":
-        return "rtl"
-    language = (
-        str(metadata.get("original_language") or manga.get("original_language") or "")
-        .strip()
-        .casefold()
+    return (
+        infer_reading_direction(
+            metadata.get("original_language") or manga.get("original_language"),
+            work_type=metadata.get("work_type"),
+            content_kind=metadata.get("content_kind"),
+        )
+        or "rtl"
     )
-    if language == "zh" or language.startswith("zh-") or language == "ko":
-        return "ltr"
-    if language == "ja" or language.startswith("ja-"):
-        return "rtl"
-    return "rtl"
 
 
 def native_reader_link(database: Database, manga_id: str) -> dict[str, Any]:

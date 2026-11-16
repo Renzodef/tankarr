@@ -72,6 +72,23 @@ class Settings(BaseSettings):
     default_language: str = "en"
     search_languages: str = "en"
     translation_enabled: bool = False
+    translation_backend: Literal["auto", "mit", "hook"] = "auto"
+    translation_hook_concurrency: int = Field(default=2, ge=1, le=16)
+    translation_hook: str | None = None
+    translation_hook_directory: Path | None = None
+    translation_mit_worker: Path = (
+        Path(__file__).resolve().parents[1] / "contrib/mit_worker.py"
+    )
+    mit_engine_root: Path | None = None
+    mit_engine_revision: str | None = None
+    mit_engine_python: Path | None = None
+    mit_venv: Path | None = None
+    mit_setup_python: str | None = None
+    mit_config: Path | None = None
+    mit_gpu: bool = False
+    translation_vision_url: str | None = None
+    translation_vision_model: str = ""
+    translation_vision_api_key: str | None = Field(default=None, repr=False)
     # Legacy setting, ignored by automatic source selection.
     translation_source_languages: str = "auto"
     translation_processor_url: str | None = None
@@ -330,6 +347,13 @@ class Settings(BaseSettings):
     @classmethod
     def validate_setup_completed_at(cls, value: str | None) -> str | None:
         return normalize_setup_completed_at(value) if value else None
+
+    @field_validator(
+        "mit_engine_root", "mit_engine_python", "mit_venv", "mit_config", mode="before"
+    )
+    @classmethod
+    def blank_mit_path(cls, value):
+        return value or None
 
     @field_validator("default_language", "suwayomi_language")
     @classmethod
