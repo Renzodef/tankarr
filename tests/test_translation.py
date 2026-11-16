@@ -1014,7 +1014,7 @@ async def test_unavailable_hook_jobs_do_not_starve_other_workers(
 
     monkeypatch.setattr(manager, "process", process)
     await manager.tick()
-    assert set(calls) == blocked
+    assert set(calls) == {job["id"] for job in jobs}
     calls.clear()
     await manager.tick()
     assert set(calls) == {job["id"] for job in jobs[2:]}
@@ -1023,7 +1023,7 @@ async def test_unavailable_hook_jobs_do_not_starve_other_workers(
     now[0] += 61
     calls.clear()
     await manager.tick()
-    assert set(calls) == blocked
+    assert set(calls) == {job["id"] for job in jobs}
 
 
 @pytest.mark.asyncio
@@ -1069,7 +1069,7 @@ async def test_configurable_hook_capacity_preserves_native_serial_processing(
     monkeypatch.setattr(manager, "process", process)
     await manager.tick()
     assert peak == expected
-    assert calls == (limit if backend == "hook" else 2)
+    assert calls == (5 if backend == "hook" else 2)
 
 
 @pytest.mark.parametrize("limit", [0, 17, 2.5])
@@ -1080,3 +1080,120 @@ def test_hook_capacity_rejects_invalid_values(translation, limit):
             manager.settings, database, {"translation_hook_concurrency": limit}
         )
     assert manager.settings.translation_hook_concurrency == 2
+
+
+@pytest.mark.asyncio
+async def test_hook_refills_a_slot_before_the_longest_job_finishes(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    jobs = [
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+        for n in range(3)
+    ]
+    release = asyncio.Event()
+    replacement_started = asyncio.Event()
+    calls = []
+
+    async def process(job):
+        calls.append(job["id"])
+        if job["id"] == jobs[0]["id"]:
+            await release.wait()
+        if job["id"] == jobs[2]["id"]:
+            replacement_started.set()
+
+    monkeypatch.setattr(manager, "process", process)
+    task = asyncio.create_task(manager.tick())
+    try:
+        await asyncio.wait_for(replacement_started.wait(), 2)
+        assert not task.done()
+        assert len(calls) == len(set(calls)) == 3
+    finally:
+        release.set()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_stopping_translation_cancels_all_owned_hook_tasks(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    for n in range(2):
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+    started, cancelled = set(), set()
+    ready = asyncio.Event()
+
+    async def process(job):
+        started.add(job["id"])
+        if len(started) == 2:
+            ready.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.add(job["id"])
+
+    monkeypatch.setattr(manager, "process", process)
+    await manager.start()
+    try:
+        await asyncio.wait_for(ready.wait(), 2)
+    finally:
+        await manager.stop()
+    assert cancelled == started
+    assert len(cancelled) == 2
+
+
+@pytest.mark.asyncio
+async def test_hook_retries_a_free_worker_while_another_job_is_running(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    jobs = [
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+        for n in range(2)
+    ]
+    now = [100.0]
+    monkeypatch.setattr(
+        "tankarr.translation.time", SimpleNamespace(monotonic=lambda: now[0])
+    )
+    original_wait = asyncio.wait
+
+    async def quick_wait(tasks, **kwargs):
+        kwargs["timeout"] = 0.01
+        return await original_wait(tasks, **kwargs)
+
+    monkeypatch.setattr("tankarr.translation.asyncio.wait", quick_wait)
+    release, retried = asyncio.Event(), asyncio.Event()
+    attempts = 0
+
+    async def process(job):
+        nonlocal attempts
+        if job["id"] == jobs[0]["id"]:
+            await release.wait()
+            return
+        attempts += 1
+        if attempts == 1:
+            raise WorkerUnavailable("Worker is busy")
+        retried.set()
+
+    monkeypatch.setattr(manager, "process", process)
+    task = asyncio.create_task(manager.tick())
+    try:
+        async with asyncio.timeout(2):
+            while attempts < 1:
+                await asyncio.sleep(0)
+        now[0] += 61
+        await asyncio.wait_for(retried.wait(), 2)
+        assert not task.done()
+        assert attempts == 2
+    finally:
+        release.set()
+        await task

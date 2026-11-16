@@ -291,17 +291,83 @@ class TranslationManager:
                         (job["id"], job["attempts"]) in self._hook_retry_after
                     )
                 )
-                await asyncio.gather(
-                    *(
-                        self._process_attempt(job)
-                        for job in active[: self.settings.translation_hook_concurrency]
-                    )
-                )
+                await self._process_hooks(active)
             else:
                 for job in active[:2]:
                     await self._process_attempt(job)
             if self.acquisition is not None:
                 await self.acquisition.finish_sources()
+
+    async def _process_hooks(self, active):
+        pending = {}
+        visited = set()
+        first_pass = True
+        try:
+            while True:
+                self.service.assert_mutations_allowed()
+                if (
+                    not self.configured()
+                    or self.settings.restored_safe_mode
+                    or self.settings.translation_backend != "hook"
+                ):
+                    return
+                current = {(job["id"], job["attempts"]) for job in active}
+                for task, key in pending.items():
+                    if key not in current:
+                        task.cancel()
+                running_ids = {key[0] for key in pending.values()}
+                now = time.monotonic()
+                capacity = max(
+                    0, self.settings.translation_hook_concurrency - len(pending)
+                )
+                for job in active:
+                    key = (job["id"], job["attempts"])
+                    deadline = self._hook_retry_after.get(key)
+                    if not capacity:
+                        break
+                    if job["id"] in running_ids:
+                        continue
+                    if key in visited and (deadline is None or deadline > now):
+                        continue
+                    if not first_pass and deadline is not None and deadline > now:
+                        continue
+                    self._hook_retry_after.pop(key, None)
+                    task = asyncio.create_task(self._process_attempt(job))
+                    pending[task] = key
+                    visited.add(key)
+                    running_ids.add(job["id"])
+                    capacity -= 1
+                first_pass = False
+                if not pending:
+                    return
+                # Refill a released slot without waiting for the longest book.
+                # A bounded wake-up also notices newly queued work and retries
+                # unavailable workers while another book is still processing.
+                done, _ = await asyncio.wait(
+                    pending, timeout=15, return_when=asyncio.FIRST_COMPLETED
+                )
+                finished = set()
+                for task in done:
+                    finished.add(pending.pop(task))
+                    with suppress(asyncio.CancelledError):
+                        await task
+                active = self.store.list(active=True)
+                remaining = {(job["id"], job["attempts"]) for job in active}
+                if finished - remaining and self.acquisition is not None:
+                    await self.acquisition.finish_sources()
+                active.sort(
+                    key=lambda job: (
+                        (job["id"], job["attempts"]) in self._hook_retry_after,
+                        job["status"] == "waiting_native",
+                        job["status"] == "queued",
+                        job["created_at"],
+                    )
+                )
+        finally:
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
     async def _process_attempt(self, job: dict):
         endpoint = (

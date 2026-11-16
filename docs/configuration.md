@@ -527,7 +527,10 @@ renderer; output should still be checked on representative pages of each style.
 Hook jobs that report a busy or unavailable worker yield priority to other jobs
 for up to one minute. Concurrent hooks are bounded by
 `TANKARR_TRANSLATION_HOOK_CONCURRENCY` (default two). Tankarr keeps retrying when
-no alternative work is available; a retry uses the same job attempt.
+no alternative work is available; a retry uses the same job attempt. Released
+slots are refilled while longer books continue processing. Newly queued work
+and unavailable-worker retries are reconsidered at least every 15 seconds while
+hooks are active, without starting the same job twice.
 
 ## Advanced
 
