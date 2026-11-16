@@ -372,9 +372,29 @@ def merge_balloon_fragments(shapes, boxes, regions=()):
             for index, shape in enumerate(group)
             if shape[1].sum() >= dominant[1].sum() * 0.7
         ]
-        score, index = max(intact, default=(0, -1))
-        if score >= 0.985:
-            merged.append(group[index])
+        score, index = max(
+            (item for item in intact if item[0] >= 0.97),
+            key=lambda item: int(group[item[1]][1].sum()),
+            default=(0, -1),
+        )
+        if score >= 0.97:
+            bounds, mask, color = group[index]
+            # A narrow fragment can itself look more elliptical than the
+            # complete balloon. Prefer the complete oval, clipping small
+            # protrusions without extending removal into adjacent artwork.
+            if score < 0.985:
+                contours, _ = cv2.findContours(
+                    mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                fitted = np.zeros_like(mask)
+                cv2.ellipse(
+                    fitted,
+                    cv2.fitEllipse(max(contours, key=cv2.contourArea)),
+                    1,
+                    -1,
+                )
+                mask = mask & fitted
+            merged.append((bounds, mask, color))
             continue
         # A complete tighter contour avoids color bleed into neighbouring art.
         # Fragmented contours cannot win merely by having a smaller area.
