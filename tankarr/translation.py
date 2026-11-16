@@ -265,9 +265,8 @@ class TranslationManager:
         async with self.lock:
             self.service.assert_mutations_allowed()
             active = self.store.list(active=True)
-            # Two outstanding processor jobs allow small installations to use
-            # two workers. Downloads and archive work on the Tankarr host stay
-            # serial.
+            # Hook capacity is operator-controlled; native processing retains
+            # its existing limit. Hooks enforce per-worker resource limits.
             active.sort(
                 key=lambda job: (
                     2
@@ -284,7 +283,7 @@ class TranslationManager:
                     for key, deadline in self._hook_retry_after.items()
                     if key in active_attempts and deadline > now
                 }
-                # A busy or offline worker must not keep the same two jobs at
+                # A busy or offline worker must not keep the same jobs at
                 # the head of every pass. Retry them after other eligible work;
                 # when there is no other work, keep the normal retry cadence.
                 active.sort(
@@ -293,7 +292,10 @@ class TranslationManager:
                     )
                 )
                 await asyncio.gather(
-                    *(self._process_attempt(job) for job in active[:2])
+                    *(
+                        self._process_attempt(job)
+                        for job in active[: self.settings.translation_hook_concurrency]
+                    )
                 )
             else:
                 for job in active[:2]:
