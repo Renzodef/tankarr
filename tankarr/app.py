@@ -100,6 +100,7 @@ from tankarr.models import (
     ChapterSearchRequest,
     DismissAlertRequest,
     DownloadRequest,
+    EmptyLibraryFolderDeleteRequest,
     ImportRequest,
     LibraryOrphanDeleteRequest,
     LoginRequest,
@@ -5734,6 +5735,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await monitor.run_cycle()
         except RecoveryBlocked as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/library/folders/cleanup")
+    async def preview_library_folder_cleanup():
+        try:
+            return await asyncio.to_thread(service.library_folder_cleanup)
+        except (LibraryUnavailable, OSError) as exc:
+            raise HTTPException(status_code=503, detail="Library unavailable") from exc
+
+    @app.post("/api/library/folders/cleanup")
+    async def delete_empty_library_folders(request: EmptyLibraryFolderDeleteRequest):
+        try:
+            return await service.delete_empty_library_folders(request.folders)
+        except (LibraryUnavailable, RecoveryBlocked) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/library/orphans")
     async def list_library_orphans():

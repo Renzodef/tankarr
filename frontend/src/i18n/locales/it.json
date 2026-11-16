@@ -1839,5 +1839,11 @@
   "Vision API key": "Chiave API del modello visivo",
   "Enter a credential if required by your vision provider.": "Inserisci una credenziale se il provider del modello visivo la richiede.",
   "Concurrent translation hooks": "Hook di traduzione simultanei",
-  "Maximum concurrent hook attempts (1–16). Match the capacity of your external workers. Each hook must enforce its worker limits.": "Numero massimo di hook simultanei (1–16). Impostalo in base alla capacità dei worker esterni. Ogni hook deve rispettare i limiti del proprio worker."
+  "Maximum concurrent hook attempts (1–16). Match the capacity of your external workers. Each hook must enforce its worker limits.": "Numero massimo di hook simultanei (1–16). Impostalo in base alla capacità dei worker esterni. Ogni hook deve rispettare i limiti del proprio worker.",
+  "Library folder cleanup": "Pulizia delle cartelle della libreria",
+  "Check library folders": "Controlla le cartelle",
+  "Empty folders: {empty}. Folders to review: {review}.": "Cartelle vuote: {empty}. Cartelle da verificare: {review}.",
+  "Remove listed empty folders": "Rimuovi le cartelle vuote elencate",
+  "Check these folders for loose files, nested books or storage errors.": "Controlla se queste cartelle contengono file sfusi, libri in sottocartelle o errori di accesso.",
+  "Empty folders removed: {removed}. Skipped: {skipped}.": "Cartelle vuote rimosse: {removed}. Saltate: {skipped}."
 }
