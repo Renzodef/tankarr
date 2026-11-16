@@ -25,6 +25,7 @@ from tankarr import page_quality
 from tankarr.archive import IMAGE_SUFFIXES
 from tankarr.artwork_thumbnails import ARTWORK_THUMBNAIL_VERSION, ArtworkThumbnailCache
 from tankarr.chapter_map import canonical_label
+from tankarr.chapter_mapping import build_chapter_index
 from tankarr.database import Database
 
 MAX_ENTRIES = 10_000
@@ -177,6 +178,23 @@ class SeriesAudit:
             ]
             qualities = self.database.page_quality(manga_id)
             sources = self.database.list_release_sources(manga_id, enabled_only=False)
+            alignment = self.database.content_alignment(manga_id)
+            chapter_map = self.database.chapter_map(manga_id)
+            index = (
+                build_chapter_index(
+                    manga,
+                    (self.database.get_series_metadata(manga_id) or {}).get("data"),
+                    self.database.list_chapters(manga_id, manga["preferred_language"]),
+                    chapter_map=chapter_map,
+                )
+                if chapter_map
+                else {}
+            )
+            catalogue_cleanup = {
+                "last_chapter": index.get("edition_chapter_limit"),
+                "chapter_count": len(index.get("out_of_edition_chapters", {})),
+                "release_count": sum(index.get("out_of_edition_chapters", {}).values()),
+            }
         root = self.service._library_root()
         fingerprints = {}
         for release in releases:
@@ -194,6 +212,8 @@ class SeriesAudit:
                 "releases": releases,
                 "sources": sources,
                 "fingerprints": fingerprints,
+                "catalogue_cleanup": catalogue_cleanup,
+                "alignment": alignment,
             }
         )
         return {
@@ -203,6 +223,8 @@ class SeriesAudit:
             "sources": sources,
             "fingerprints": fingerprints,
             "revision": revision,
+            "catalogue_cleanup": catalogue_cleanup,
+            "alignment": alignment,
         }
 
     def _report(self, snapshot: dict) -> dict:
@@ -220,6 +242,7 @@ class SeriesAudit:
             and record.get("verdict") != page_quality.REFUSED
         )
         identities = {}
+        books = {}
         for release in releases:
             unit = "volume" if release.get("release_unit") == "volume" else "chapter"
             number = canonical_label(
@@ -229,6 +252,10 @@ class SeriesAudit:
                 identities.setdefault((unit, number), set()).add(
                     (release.get("provider"), release.get("source_name"))
                 )
+                if unit == "volume" and release.get("library_sha256"):
+                    books.setdefault((release.get("language"), number), set()).add(
+                        release["library_sha256"]
+                    )
         files = []
         for release in releases:
             identifier = str(release["id"])
@@ -270,6 +297,22 @@ class SeriesAudit:
                     {
                         "code": "multiple_sources",
                         "label": "This number has files from different sources",
+                    }
+                )
+            alignment = snapshot["alignment"].get(identifier, {})
+            if (
+                unit == "chapter"
+                and alignment.get("verdict") == "inside"
+                and alignment.get("pages", 0) > 0
+                and alignment["matched_pages"] == alignment["pages"]
+                and alignment.get("chapter_sha256") == release.get("library_sha256")
+                and alignment.get("book_sha256")
+                in books.get((release.get("language"), alignment.get("volume")), ())
+            ):
+                anomalies.append(
+                    {
+                        "code": "pages_match_owned_book",
+                        "label": "Every chapter page matches an owned book",
                     }
                 )
             if not available or (cached or {}).get("error"):
@@ -373,6 +416,7 @@ class SeriesAudit:
         return {
             "manga_id": manga["id"],
             "revision": snapshot["revision"],
+            "catalogue_cleanup": snapshot["catalogue_cleanup"],
             "files": files,
             "sources": sources,
         }

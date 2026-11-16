@@ -161,6 +161,13 @@ export default function SeriesAuditDialog({ mangaId, title, client, onClose, onC
       <table className="table"><thead><tr><th>{t("File")}</th><th>{t("Source")}</th><th>{t("Language")}</th><th>{t("Pages")}</th></tr></thead><tbody>{review.files.map((file) => <tr key={file.id}><td>{fileLabel(file)}{file.title ? <div className="muted small">{file.title}</div> : null}</td><td>{sourceLabel(file)}</td><td>{languageName(file.language)}</td><td>{file.pages !== null && file.pages >= 0 ? file.pages : t("Unknown")}</td></tr>)}</tbody></table>
       <label className="checkbox-row"><input type="checkbox" checked={confirmed} disabled={Boolean(busy)} onChange={(event) => setConfirmed(event.target.checked)} />{review.action === "reject_source" ? t("I reviewed this source and its files and confirm rejection and retirement") : t("I reviewed these files and confirm moving them to the recycle bin")}</label>
     </> : report ? <>
+      {report.catalogue_cleanup && report.catalogue_cleanup.chapter_count > 0 ? (
+        <p className="banner banner-info">{t("The edition ends at chapter {last}. Chapter numbers hidden from the library: {chapters}. Source releases kept for audit: {releases}.", {
+          last: report.catalogue_cleanup.last_chapter ?? "",
+          chapters: report.catalogue_cleanup.chapter_count,
+          releases: report.catalogue_cleanup.release_count,
+        })}</p>
+      ) : null}
       <div className="toolbar"><div className="toolbar-group"><label className="checkbox-row"><input type="checkbox" checked={onlyAnomalies} onChange={(event) => { setOnlyAnomalies(event.target.checked); setVisibleCount(FILE_BATCH); }} />{t("Only files with anomalies")}</label><button type="button" className="btn" disabled={Boolean(busy) || selected.size >= MAX_SELECTION} onClick={() => setSelected((previous) => new Set([...new Set([...previous, ...visible.filter((file) => file.can_retire).map((file) => file.id)])].slice(0, MAX_SELECTION)))}>{t("Select visible files")}</button><button type="button" className="btn" disabled={Boolean(busy) || !selected.size} onClick={() => setSelected(new Set())}>{t("Clear selection")}</button></div><button type="button" className="btn" disabled={Boolean(busy)} onClick={() => void load()}>{t("Refresh audit")}</button></div>
       {selected.size >= MAX_SELECTION ? <p className="muted small" role="status">{t("Select at most {count} files per action.", { count: MAX_SELECTION })}</p> : null}
       <p className="muted small">{tn(report.files.length, "{count} downloaded file. First and last page previews load as you scroll.", "{count} downloaded files. First and last page previews load as you scroll.")}</p>

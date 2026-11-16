@@ -53,6 +53,41 @@ def book(volume, **changes):
     )
 
 
+@pytest.mark.parametrize(
+    ("status", "last_book_present", "map_complete", "suppressed"),
+    [
+        ("ended", True, True, True),
+        ("ended", False, True, False),
+        ("ended", True, False, False),
+        ("continuing", True, True, False),
+    ],
+)
+def test_closed_volume_edition_filters_undownloaded_catalogue_tail(
+    status, last_book_present, map_complete, suppressed
+):
+    entries = [MapEntry(("1",), ("1", "2"), True, "ocr")]
+    if map_complete:
+        entries.append(MapEntry(("2",), ("3", "3.5"), True, "ocr"))
+    result = build_series_units(
+        manga(status=status),
+        {"status": status, "volume_count": 2, "chapter_count": 70},
+        [
+            book(1, provider="assembled"),
+            book(2, provider="assembled", downloaded=last_book_present),
+            chapter(48, downloaded=False),
+            chapter(49),
+            chapter(50, downloaded=False, queue_status="queued"),
+            chapter(51, downloaded=False, source_name="MANGA Plus (EN)"),
+        ],
+        entries,
+    )
+    loose = {row["chapter"] for row in result["unassigned_chapters"]}
+    assert ("48" not in loose) is suppressed
+    assert {"49", "50", "51"} <= loose
+    if map_complete:
+        assert result["books"][1]["chapter_range"]["last"] == "3.5"
+
+
 @pytest.mark.parametrize("last_present", [True, False])
 def test_complete_read_map_keeps_a_final_book_of_decimal_extras(last_present):
     result = build_series_units(
