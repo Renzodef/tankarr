@@ -26,7 +26,7 @@ languages per pass; the cursor survives restarts so a language is not permanentl
 excluded. A local processor only selects languages its OCR supports. External
 processors remain responsible for validating their supported language pairs.
 
-## On this computer (default)
+## Automatic processing (default)
 
 Enter the AI provider API base URL, model and API key. No translation processor
 URL or token is required. Tankarr runs local Tesseract OCR and basic lettering,
@@ -114,6 +114,90 @@ temporary connection failures retry automatically with the same processor ID.
 An explicit retry starts a new attempt. Late responses, progress updates and
 results from the cancelled attempt cannot update or publish the new attempt;
 each attempt keeps its output in a separate staging directory.
+
+## Manga Image Translator on demand
+
+Select **Manga Image Translator (MIT)** under Settings → Translation to run the
+advanced worker on the Tankarr host. Install Tankarr from the checkout or use its
+Docker image. Give the worker a writable, administrator-managed
+[Manga Image Translator checkout](https://github.com/zyddnys/manga-image-translator#installation)
+pinned to a compatible commit. The engine writes its model cache there.
+
+- Set `TANKARR_MIT_ENGINE_ROOT` to an existing checkout. For Compose, mount it at
+  `/mit-engine` and set the variable to that container path. Alternatively, set
+  `TANKARR_MIT_ENGINE_REVISION` to a full upstream commit. The first job fetches
+  the pinned checkout into `<data dir>/mit/engine` if that directory is absent.
+- Set `TANKARR_MIT_VENV` to a persistent, writable path on that host. At the first
+  job, the worker creates the virtual environment and installs the checkout's
+  requirements. MIT loads its model weights as needed. Compose defaults to
+  `/config/mit/venv` and includes a Python 3.11 environment builder. In a native
+  installation, `TANKARR_MIT_SETUP_PYTHON` can select another interpreter.
+- To reuse an existing MIT virtual environment, set
+  `TANKARR_MIT_ENGINE_PYTHON` to its Python executable instead. For CUDA and other
+  hardware-specific dependencies, prepare the environment on the worker host
+  and set `TANKARR_MIT_GPU=true` when the engine supports that device. CPU is the
+  default. `TANKARR_MIT_CONFIG` can point to an engine configuration JSON file.
+
+Initialization starts only when fallback is enabled and an eligible job reaches
+this worker. The first job can take longer. Prepare a fresh virtual environment
+when changing the pinned checkout. Choose an external processor or a script hook
+to keep the work off the Tankarr host.
+
+Enter an independent **Vision API base URL** and **OCR and balloon lettering
+model** to guide MIT's detection, OCR, validation and in-balloon lettering. Use an
+OpenAI-compatible multimodal endpoint. The vision API key is optional and stored
+as a secret. This endpoint may receive page images and OCR text. The dialogue
+translation endpoint receives recognized text. MIT falls back to its native
+rendering where the vision geometry cannot be matched confidently. Automatic
+mode with basic local Tesseract uses its own OCR and renderer.
+
+## Script hook and external worker routing
+
+Select **Script hook** and save an executable filename. The host administrator
+sets `TANKARR_TRANSLATION_HOOK_DIRECTORY` and installs the executable in that
+directory. With Docker, mount the directory read-only at `/hooks` or configure
+the corresponding container path. Keep the files and the directory under trusted
+administrator control. The web interface can select a filename in that
+directory. Deployment-specific device lists and credentials can live outside
+the Tankarr checkout.
+
+Tankarr invokes the executable directly and writes one version 1 JSON object
+to its standard input, then closes it. Example fields:
+
+```json
+{
+  "protocol_version": 1,
+  "event": "translation.requested",
+  "job_id": "job-id",
+  "attempt": 1,
+  "manga_id": "series-id",
+  "source_path": "/staging/source.cbz",
+  "source_sha256": "<sha256>",
+  "source_language": "zh",
+  "target_language": "en",
+  "result_path": "/staging/attempt-1/worker-result.cbz",
+  "checkpoint_directory": "/staging/attempt-1/worker-checkpoints",
+  "ai": {"base_url": "https://translation.example/v1", "model": "translator", "api_key": "<secret>"},
+  "vision": {"base_url": "https://vision.example/v1", "model": "vision-model", "api_key": null}
+}
+```
+
+The optional `vision` block is omitted if no vision provider is configured.
+The hook keeps the source unchanged, routes the job, and writes the completed
+CBZ atomically to `result_path` before exiting with status 0. Its CBZ must
+contain the same receipt as the HTTP processor, with the configured `model`
+and, when supplied, `vision_model`. Tankarr checks the receipt and imports the
+result. Exit 75 to retry the same attempt on a later pass. Other nonzero exits
+fail the attempt. Two hook jobs may run concurrently.
+
+Treat the hook input as sensitive. Forward it only over authenticated, private
+transport to trusted workers. Use `job_id` and `attempt` for deduplication.
+On pause, cancellation, relevant settings changes or the six-hour limit,
+Tankarr terminates the local hook. The hook owns cancellation and cleanup on
+remote hosts. If replacing an HTTP processor, finish or cancel active HTTP jobs
+before switching to the hook. To rerun OCR and lettering from the original,
+retry the failed or cancelled translation from Activity. An installed translation
+must be replaced through the normal library import workflow.
 
 ## Optional external reference processor
 

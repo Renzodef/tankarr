@@ -35,9 +35,12 @@ RUN apt-get update \
         curl \
         fontconfig \
         fonts-dejavu-core \
+        git \
         libarchive-tools \
         libfreetype6 \
+        libgl1 \
         poppler-utils \
+        python3-venv \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-osd \
@@ -61,6 +64,9 @@ RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml
 
 COPY README.md ./
 COPY tankarr/ ./tankarr/
+COPY contrib/mit_worker.py contrib/translate_archive.py contrib/vision_balloon.py ./contrib/
+ENV TANKARR_TRANSLATION_MIT_WORKER=/app/contrib/mit_worker.py \
+    TANKARR_MIT_SETUP_PYTHON=/usr/bin/python3
 RUN pip install --no-cache-dir --no-deps . \
     && mkdir -p /config /library /import /downloads /usenet \
     && chown tankarr:tankarr /config /library /import /downloads /usenet

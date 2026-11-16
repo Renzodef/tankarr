@@ -487,6 +487,20 @@ language. Enable it once here for all monitored series; see
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TANKARR_TRANSLATION_ENABLED` | `false` | Allow translation fallback globally for every monitored series with missing books or chapters, including newly added series. There is no per-series switch. While it is on, a release in the series language is still preferred; if none is usable, a source in any other language may be mapped and translated into the series language. While it is off, sources that do not offer the series language are refused. It only runs when the AI provider URL, model and API key are set. Settings → Translation. |
+| `TANKARR_TRANSLATION_BACKEND` | `auto` | Select `auto` for basic local OCR or the configured HTTP processor, `mit` for the bundled MIT worker, or `hook` for an executable. Settings → Translation. |
+| `TANKARR_TRANSLATION_HOOK` | *unset* | Executable filename for hook mode. Settings → Translation. |
+| `TANKARR_TRANSLATION_HOOK_DIRECTORY` | *unset* | Administrator-controlled directory containing hook executables. Compose uses `/hooks` by default. Restart required. |
+| `TANKARR_TRANSLATION_MIT_WORKER` | bundled worker | Absolute path to the MIT worker when installed separately from the Tankarr checkout or image. Restart required. |
+| `TANKARR_TRANSLATION_VISION_URL` | *unset* | OpenAI-compatible multimodal API base URL for MIT and compatible workers. Settings → Translation. |
+| `TANKARR_TRANSLATION_VISION_MODEL` | *empty* | Independent model for OCR and balloon lettering guidance. Settings → Translation. |
+| `TANKARR_TRANSLATION_VISION_API_KEY` | *unset* | Optional vision API credential. Secret. Settings → Translation. |
+| `TANKARR_MIT_ENGINE_ROOT` | `<data dir>/mit/engine` | Path to the pinned MIT checkout on the worker. |
+| `TANKARR_MIT_ENGINE_REVISION` | *unset* | Full upstream Git commit. If the checkout path is missing, the first MIT job fetches this commit. |
+| `TANKARR_MIT_ENGINE_PYTHON` | *unset* | Interpreter in an existing MIT environment. Skips provisioning. |
+| `TANKARR_MIT_VENV` | `<data dir>/mit/venv` | Persistent virtual environment initialized by the first MIT job. |
+| `TANKARR_MIT_SETUP_PYTHON` | application Python | Interpreter used to build the MIT environment. Compose uses the image's system Python 3.11. |
+| `TANKARR_MIT_CONFIG` | *unset* | Engine configuration JSON file on the worker. |
+| `TANKARR_MIT_GPU` | `false` | Use a GPU in the MIT worker. Requires a compatible GPU environment. |
 | `TANKARR_TRANSLATION_SOURCE_LANGUAGES` | `auto` | Deprecated compatibility setting. Source languages are selected automatically from every language supported by the processing backend. This global value does not restrict acquisition. |
 | `TANKARR_TRANSLATION_AI_URL` | *unset* | Base URL of an AI provider with an OpenAI-compatible chat API, including its API path when the provider needs one. HTTP or HTTPS, without credentials, query or fragment. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_MODEL` | *empty* | Model identifier at that provider. Settings → Translation. |
