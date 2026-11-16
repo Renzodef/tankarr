@@ -1,29 +1,11 @@
-"""Choose chapters or volumes before a series is hunted.
+"""Choose the managed format before acquisition.
 
-A source that publishes a tankōbon as its only entries (``Volume 3``,
-``第3卷``) used to be stored as chapter 3. Strict unit rules then correctly
-refused to let that book satisfy a chapter in Wanted, so a series whose only
-completable releases were volumes stayed on chapters forever.
-
-This module decides when the series should follow volumes instead. It does
-not treat a volume as a chapter. The caller changes the unit, stops
-monitoring chapter releases that have no file, and leaves downloaded chapter
-files where they are.
-
-The decision is conservative:
-
-* an explicit chapters or volumes choice on the series is kept;
-* a webtoon stays on episodes;
-* the catalogue must have a reliable volume count (or the operator's edition
-  count), and offers must include every book from 1 through that count;
-* the preferred language is used first; another language counts only when
-  global translation is on, and only when the preferred language cannot
-  finish that unit;
-* chapters win whenever they already cover the catalogue chapter total,
-  including through translation;
-* a finished work whose preferred-language books are already on disk follows
-  volumes even if chapter releases also exist, so Wanted stops asking for
-  chapter files the library does not have.
+An explicit series choice wins. Finished works with a reliable volume edition
+follow books independently of current offers; Japanese scrolling publications
+can have such an edition too. Other webtoons remain chapters. For works without
+that settled target, the legacy source-coverage strategy can still identify a
+complete book-only edition. Translation determines eligible sources, never
+whether a missing volume can be declared owned.
 """
 
 from __future__ import annotations
@@ -190,7 +172,11 @@ def decide_unit_strategy(
         return UnitStrategyDecision(
             "stay", "chapters", "automatic unit strategy is off"
         )
-    if _is_webtoon(metadata):
+    from tankarr.series_form import series_form
+
+    expected_books = _expected_volumes(manga, metadata)
+    form, form_reason = series_form(manga, metadata, expected_books)
+    if _is_webtoon(metadata) and form != "volumes":
         return UnitStrategyDecision(
             "stay", "chapters", "a webtoon is followed in episodes"
         )
@@ -242,6 +228,24 @@ def decide_unit_strategy(
     chosen_volumes = (
         preferred_volumes if preferred_complete else preferred_volumes | foreign_volumes
     )
+
+    publication = publication_summary(manga, metadata)
+    if (
+        form == "volumes"
+        and expected_books
+        and publication["status"] == "ended"
+        and not publication["paused"]
+    ):
+        return UnitStrategyDecision(
+            "switch",
+            "volumes",
+            form_reason,
+            translation_used=translation_used,
+            languages=languages,
+            volumes=tuple(sorted(chosen_volumes)) if volumes_complete else (),
+            volume_expected=expected_books,
+            chapter_expected=chapter_expected,
+        )
 
     if volumes_complete and not chapters_complete:
         where = (

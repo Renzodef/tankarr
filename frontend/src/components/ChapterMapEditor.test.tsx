@@ -189,3 +189,16 @@ describe("confirmed map mutations", () => {
     expect(saved).not.toHaveBeenCalled();
   });
 });
+
+
+it("imports JSON only into a draft and still requires preview", async () => {
+  const rendered = editor();
+  await loaded();
+  const file = new File([], "boundaries.json", { type: "application/json" });
+  Object.defineProperty(file, "text", { value: async () => JSON.stringify([{ volume: "1", first_chapter: "1" }, { volume: "2", first_chapter: "6" }]) });
+  fireEvent.change(rendered.container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+  await waitFor(() => expect((screen.getByRole("textbox", { name: "First chapter in row 2" }) as HTMLInputElement).value).toBe("6"));
+  expect(api.saveChapterMap).not.toHaveBeenCalled();
+  await previewChanges();
+  expect(api.previewChapterMap).toHaveBeenCalledWith("series-one", [{ volume: "1", first_chapter: "1" }, { volume: "2", first_chapter: "6" }], expect.any(AbortSignal));
+});

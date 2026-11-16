@@ -18,7 +18,7 @@ from tests.test_deletion import chapter, manga, provision_library_identity
 
 @pytest.mark.asyncio
 async def test_batch_requires_preview_and_returns_completed_books(complete_book):
-    database, _service, assembler, _paths = complete_book
+    database, service, assembler, _paths = complete_book
     batch = BookAssemblyBatch(assembler)
     with pytest.raises(AssemblyConflict, match="Preview"):
         await batch.assemble("manga-1", None)
@@ -35,7 +35,7 @@ async def test_batch_requires_preview_and_returns_completed_books(complete_book)
 async def test_batch_reports_partial_failure_without_claiming_success(
     complete_book, monkeypatch
 ):
-    _database, _service, assembler, _paths = complete_book
+    _database, service, assembler, _paths = complete_book
     batch = BookAssemblyBatch(assembler)
     preview = batch.preview("manga-1")
     monkeypatch.setattr(
@@ -51,11 +51,11 @@ async def test_batch_reports_partial_failure_without_claiming_success(
 
 @pytest.mark.asyncio
 async def test_automatic_assembly_is_opt_in_and_defers_when_busy(complete_book):
-    database, _service, assembler, paths = complete_book
+    database, service, assembler, paths = complete_book
     batch = BookAssemblyBatch(assembler)
     assert await batch.run_automatic() == {"assembled": 0, "errors": []}
     assert all(path.exists() for path in paths)
-    database.update_manga("manga-1", {"assemble_books_automatically": True})
+    service.settings.assemble_books_automatically = True
     batch.busy = lambda: True
     assert await batch.run_automatic() == {"assembled": 0, "errors": []}
     batch.busy = lambda: False
@@ -66,7 +66,7 @@ async def test_automatic_assembly_is_opt_in_and_defers_when_busy(complete_book):
 @pytest.mark.asyncio
 async def test_automatic_assembly_respects_safe_mode(complete_book):
     database, service, assembler, paths = complete_book
-    database.update_manga("manga-1", {"assemble_books_automatically": True})
+    service.settings.assemble_books_automatically = True
     service.settings.restored_safe_mode = True
     assert await BookAssemblyBatch(assembler).run_automatic() == {
         "assembled": 0,
@@ -89,12 +89,12 @@ def test_api_persists_automatic_opt_in_without_starting_downloads(tmp_path):
             response = client.patch(
                 "/api/manga/manga-1", json={"assemble_books_automatically": enabled}
             )
-            assert response.status_code == 200, response.text
-            assert response.json()["assemble_books_automatically"] is enabled
-            assert (
-                database.get_manga("manga-1")["assemble_books_automatically"] is enabled
+            assert response.status_code == 422, response.text
+            changed = client.put(
+                "/api/settings", json={"assemble_books_automatically": enabled}
             )
-            assert response.json()["queued"] == 0
+            assert changed.status_code == 200, changed.text
+            assert app.state.service.settings.assemble_books_automatically is enabled
         assert (
             client.post("/api/manga/manga-1/assemble?dry_run=true").status_code == 409
         )
@@ -135,14 +135,15 @@ async def test_one_batch_confirmation_assembles_two_books(complete_book):
 
 @pytest.mark.asyncio
 async def test_automatic_assembly_bounds_failed_attempts(complete_book, monkeypatch):
-    database, _service, assembler, _paths = complete_book
-    database.update_manga("manga-1", {"assemble_books_automatically": True})
+    database, service, assembler, _paths = complete_book
+    service.settings.assemble_books_automatically = True
     monkeypatch.setattr(
         "tankarr.assembly_batch.load_series_units",
         lambda *_: {
+            "form": "volumes",
             "books": [
                 {"volume": str(number), "can_assemble": True} for number in range(1, 10)
-            ]
+            ],
         },
     )
     preview = Mock(side_effect=AssemblyConflict("file changed"))
@@ -151,3 +152,48 @@ async def test_automatic_assembly_bounds_failed_attempts(complete_book, monkeypa
     assert preview.call_count == 4
     assert len(result["errors"]) == 4
     assert result["assembled"] == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_series_flag_never_enables_automatic_assembly(complete_book):
+    database, service, assembler, paths = complete_book
+    database.update_manga("manga-1", {"assemble_books_automatically": True})
+    assert not service.settings.assemble_books_automatically
+    assert await BookAssemblyBatch(assembler).run_automatic() == {
+        "assembled": 0,
+        "errors": [],
+    }
+    assert all(path.exists() for path in paths)
+
+
+@pytest.mark.asyncio
+async def test_global_assembly_skips_explicit_chapter_series(complete_book):
+    database, service, assembler, paths = complete_book
+    service.settings.assemble_books_automatically = True
+    database.update_manga("manga-1", {"series_unit_override": "chapters"})
+    assert await BookAssemblyBatch(assembler).run_automatic() == {
+        "assembled": 0,
+        "errors": [],
+    }
+    assert all(path.exists() for path in paths)
+
+
+@pytest.mark.asyncio
+async def test_ready_chapters_prevent_late_whole_book_download(complete_book):
+    database, service, assembler, paths = complete_book
+    service.settings.assemble_books_automatically = True
+    database.upsert_chapters(
+        "manga-1",
+        [
+            {
+                **chapter("late-book", "", volume="12"),
+                "chapter": None,
+                "release_unit": "volume",
+            }
+        ],
+    )
+    assert await service.create_missing_download_jobs("manga-1") == []
+    assert await BookAssemblyBatch(assembler).run_automatic() == {
+        "assembled": 1,
+        "errors": [],
+    }

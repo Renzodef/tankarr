@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
 import { LoadError } from "../components/LoadError";
+import ChapterRecoveryDialog from "../components/ChapterRecoveryDialog";
 import ChapterMapEditor from "../components/ChapterMapEditor";
 import SeriesUnitGroups from "../components/SeriesUnitGroups";
 import SeriesAuditDialog from "../components/SeriesAuditDialog";
@@ -183,6 +184,7 @@ export default function SeriesPage({ id }: { id: string }) {
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
+  const [showChapterRecovery, setShowChapterRecovery] = useState(false);
   const [showChapterMap, setShowChapterMap] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
   const [showMetadataSources, setShowMetadataSources] = useState(false);
@@ -881,6 +883,13 @@ export default function SeriesPage({ id }: { id: string }) {
 
       {unitsError ? <LoadError message={unitsError} retryLabel={t("Retry books and chapters")} retry={() => void load(true)} loading={loading} hasData={Boolean(units?.manga_id === manga.id)} /> : null}
       <TranslationPanel key={manga.id} manga={manga} />
+      {units?.manga_id === manga.id && units.form === "volumes" ? <section className="banner banner-info">
+        {units.map_confidence?.level !== "exact" ? <p>{t("Book boundaries are missing or incomplete. Whole volumes can still be downloaded. Confirm a map before assembling chapters.")}</p> : null}
+        <div className="toolbar-group">
+          <button className="btn" onClick={() => setShowChapterMap(true)}>{t("Compile or import map")}</button>
+          <button className="btn" onClick={() => setShowChapterRecovery(true)}>{t("Download chapters anyway")}</button>
+        </div>
+      </section> : null}
       {units?.manga_id === manga.id ? <SeriesUnitGroups
         key={`series-units:${manga.id}`}
         data={units}
@@ -951,6 +960,9 @@ export default function SeriesPage({ id }: { id: string }) {
         onClose={() => setShowAudit(false)}
         onChanged={async () => { await Promise.allSettled([load(true), loadJobs(), refreshJobs()]); }}
       /> : null}
+      {showChapterRecovery ? <ChapterRecoveryDialog key={manga.id} mangaId={manga.id}
+        onClose={() => setShowChapterRecovery(false)}
+        onQueued={async () => { await Promise.all([load(true), loadJobs(), refreshJobs()]); }} /> : null}
       {showChapterMap ? (
         <ChapterMapEditor
           key={`chapter-map:${manga.id}`}
@@ -2152,7 +2164,6 @@ export function EditModal({
         warning = renamed.warnings.length > 0;
       }
       const changes: Partial<Pick<Manga, "preferred_language" | "monitor_mode">> & {
-        assemble_books_automatically?: boolean;
         status_override?: PublicationStatusOverride;
         library_status_override?: LibraryStatusOverride;
         expected_count_override?: number | "automatic";

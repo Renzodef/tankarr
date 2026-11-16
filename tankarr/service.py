@@ -2887,8 +2887,11 @@ class TankarrService:
                     },
                 )
                 logger.info("Following %s as volumes: %s", manga_id, decision.reason)
-            unmonitored = self.database.unmonitor_undownloaded_chapters(manga_id)
+            # Keep chapter monitoring available for confirmed-map fallback.
+            # Unit selection prevents ordinary chapter grabs; it must not erase
+            # the operator's monitoring choices or cancel an accepted recovery.
             cancelled = self.database.cancel_queued_chapter_jobs(manga_id)
+
         return {
             "manga_id": manga_id,
             "action": decision.action,
@@ -2917,9 +2920,11 @@ class TankarrService:
             manga = self.database.get_manga(manga_id)
             covered = self._chapters_covered_by_books(manga)
             jobs: list[dict[str, Any]] = []
-            for chapter in self.database.preferred_download_candidates(
+            candidates = self.database.preferred_download_candidates(
                 manga_id, chapter_ids
-            ):
+            )
+            candidates = self._volume_first_candidates(manga_id, candidates)
+            for chapter in candidates:
                 # Persisted indexer offers are visible as releases, but only
                 # registered download providers can turn one into a job.
                 # A torrent/usenet offer must go through its own acquisition
@@ -2940,7 +2945,9 @@ class TankarrService:
                             manga_id,
                             chapter["id"],
                             manga["preferred_language"],
-                            origin="monitor",
+                            origin="volume-fallback"
+                            if chapter.get("assembly_fallback")
+                            else "monitor",
                         )
                     )
                 except ValueError as exc:
@@ -2950,6 +2957,78 @@ class TankarrService:
                         "Skipped release %s of %s: %s", chapter["id"], manga_id, exc
                     )
             return jobs
+
+    def _volume_first_candidates(
+        self, manga_id: str, candidates: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Only recover mapped chapters after the whole-book path is exhausted."""
+        from tankarr.series_unit import is_volume_release, select_releases
+
+        manga = self.database.get_manga(manga_id)
+        metadata = (self.database.get_series_metadata(manga_id) or {}).get("data") or {}
+        releases = self.database.list_all_chapters(manga_id)
+        unit = select_releases(manga, metadata, releases)[0]["unit"]
+        if unit != "volumes":
+            return candidates
+        books = {
+            str(row.get("volume"))
+            for row in candidates
+            if is_volume_release(row)
+            and not row.get("blocked")
+            and self.can_download_release(row)
+        }
+        pending = {
+            str(n)
+            for n in self.database.pending_book_volumes([manga_id]).get(manga_id, set())
+        }
+        current = self.database.preferred_missing_releases(manga_id)
+        pending.update(
+            str(row.get("volume"))
+            for row in current
+            if is_volume_release(row) and row.get("queue_status")
+        )
+        assembling = {
+            str(row.get("volume"))
+            for row in current
+            if not is_volume_release(row) and row.get("queue_status")
+        }
+        if self.settings.assemble_books_automatically:
+            from tankarr.series_units import load_series_units
+
+            assembling.update(
+                str(group["volume"])
+                for group in load_series_units(self.database, manga_id)["books"]
+                if group.get("can_assemble")
+            )
+        attempts = self.database.wanted_attempts(manga_id)
+        indexers_enabled = bool(
+            (
+                self.settings.prowlarr_enabled
+                and self.settings.prowlarr_url
+                and self.settings.prowlarr_api_key
+            )
+            or self.settings.internet_archive_enabled
+        )
+        result = []
+        for row in candidates:
+            if is_volume_release(row):
+                if str(row.get("volume")) not in assembling:
+                    result.append(row)
+                continue
+            volume = str(row.get("volume") or "")
+            if (
+                not self.settings.assemble_books_automatically
+                or volume in books | pending
+            ):
+                continue
+            if indexers_enabled and not any(
+                attempt.get("channel") == "indexer_book"
+                and attempt.get("outcome") in {"not_offered", "unavailable"}
+                for attempt in attempts.get(f"volume:{volume}", [])
+            ):
+                continue
+            result.append({**row, "assembly_fallback": True})
+        return result
 
     def _chapters_covered_by_books(self, manga: dict[str, Any]) -> set[int]:
         """Integer chapters that owned books cover (map or declared edition).

@@ -3772,6 +3772,12 @@ class Database:
             manga_id, chapter_ids, include_active=False
         )
 
+    def chapter_recovery_candidates(self, manga_id: str) -> list[dict[str, Any]]:
+        """Explicit chapter recovery, retaining normal safety and dedupe gates."""
+        return self._preferred_missing_releases(
+            manga_id, None, include_active=False, unit_override="chapters"
+        )
+
     def wanted_inputs(self) -> dict[str, Any]:
         """Load every Wanted input in one read snapshot.
 
@@ -4033,6 +4039,7 @@ class Database:
         chapter_ids: Iterable[str] | None,
         *,
         include_active: bool,
+        unit_override: str | None = None,
         explain: dict[str, list[str]] | None = None,
     ) -> list[dict[str, Any]]:
         def rejected(release: dict[str, Any], reason: str) -> None:
@@ -4180,7 +4187,7 @@ class Database:
             metadata,
             all_chapters,
             canonical_labels=canonical_labels,
-            unit=series_unit,
+            unit=unit_override or series_unit,
         )
         if (
             continuing
@@ -4236,9 +4243,18 @@ class Database:
         operator_volumes = {
             label: entry.volumes[0]
             for entry in map_entries
-            if entry.source == "operator" and entry.exact and len(entry.volumes) == 1
+            if entry.source in {"operator", "ocr"}
+            and entry.exact
+            and len(entry.volumes) == 1
             for label in entry.chapters
         }
+        if unit_override == "chapters" and operator_volumes:
+            chapters = [
+                {**row, "volume": operator_volumes[label]}
+                if (label := canonical_number(row.get("chapter"))) in operator_volumes
+                else row
+                for row in chapters
+            ]
         if _unit_info["unit"] == "volumes" and operator_volumes:
             owned_books = {
                 volume
@@ -4298,7 +4314,7 @@ class Database:
             selected_ids = expanded or selected_ids
         owned_volumes = {
             str(canonical_number(chapter.get("volume")))
-            for chapter in (all_chapters if continuing else chapters)
+            for chapter in (all_chapters if continuing or unit_override else chapters)
             if chapter["downloaded"]
             and canonical_number(chapter.get("chapter")) is None
             and canonical_number(chapter.get("volume")) is not None
@@ -4313,7 +4329,9 @@ class Database:
             # A continuing work can have new chapters outside every book.
             # Its estimates and missing mappings cannot close the search.
             return coverage.covered or (
-                not continuing and (coverage.unmapped or not map_entries)
+                not unit_override
+                and not continuing
+                and (coverage.unmapped or not map_entries)
             )
 
         active_by_logical_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -4501,7 +4519,7 @@ class Database:
                 JOIN chapter_release c ON c.id = j.chapter_id
                 WHERE j.manga_id=?
                   AND j.status='queued'
-                  AND lower(COALESCE(j.origin, '')) != 'manual'
+                  AND lower(COALESCE(j.origin, '')) NOT IN ('manual', 'volume-fallback')
                   AND COALESCE(c.release_unit, 'chapter') != 'volume'
                   AND c.downloaded=0
                 """,

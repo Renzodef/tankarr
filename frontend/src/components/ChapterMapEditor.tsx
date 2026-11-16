@@ -170,6 +170,27 @@ export default function ChapterMapEditor({ mangaId, title, onClose, onSaved }: {
         </tbody></table></div>
         {!rows.length ? <p className="muted">{t("No boundaries in this draft. Add the books you can verify.")}</p> : null}
         <div className="toolbar-group">
+          <label className="btn">{t("Import map JSON")}
+            <input type="file" accept="application/json,.json" hidden onChange={async event => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) return;
+              const current = version.current;
+              try {
+                if (file.size > 256 * 1024) throw new Error("Map JSON must be smaller than 256 KiB");
+                const parsed: unknown = JSON.parse(await file.text());
+                if (current !== version.current) return;
+                const data = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === "object" && "boundaries" in parsed ? parsed.boundaries : null);
+                if (!Array.isArray(data)) throw new Error("Expected a boundaries array");
+                const imported = data.map(row => {
+                  if (!row || typeof row !== "object" || typeof row.volume !== "string" || typeof row.first_chapter !== "string") throw new Error("Boundary numbers must be strings");
+                  return { volume: row.volume, first_chapter: row.first_chapter };
+                });
+                edit(validatedRows(imported));
+                setFromSuggestions(false);
+              } catch (caught) { if (current === version.current) setError(String(caught)); }
+            }} />
+          </label>
           <button type="button" className="btn" disabled={rows.length >= MAX_BOUNDARIES} onClick={() => edit([...rows, { volume: "", first_chapter: "" }])}>{t("Add book boundary")}</button>
           {saved.boundaries.length > 0 && saved.suggestions.length > 0 ? <button type="button" className="btn" onClick={() => { edit(saved.suggestions); setFromSuggestions(true); }}>{t("Use catalogue suggestions")}</button> : null}
           {saved.boundaries.length > 0 ? <button type="button" className="btn btn-danger" disabled={busy !== null} onClick={() => void previewChanges("remove")}>{t("Preview removing operator map")}</button> : null}

@@ -237,6 +237,17 @@ def resolve_series_unit(
     override = normalize_series_unit(manga.get("series_unit_override"))
     if override:
         return {"unit": override, "reason": "chosen for this series", "override": True}
+    from tankarr.series_form import series_form
+    from tankarr.unit_strategy import _expected_volumes
+
+    publication = publication_summary(manga, metadata)
+    form, reason = series_form(manga, metadata, _expected_volumes(manga, metadata))
+    if (
+        form == "volumes"
+        and publication["status"] == "ended"
+        and not publication["paused"]
+    ):
+        return {"unit": "volumes", "reason": reason, "override": False}
     # A webtoon is read and published as episodes. Books exist for some of
     # them, late and as a courtesy, and they only say which episodes a
     # publisher chose to bind together - an arbitrary line drawn over a work

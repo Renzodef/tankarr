@@ -100,15 +100,20 @@ def series_form(
 ) -> tuple[str, str]:
     """Return ``("volumes" | "chapters", reason)``."""
 
-    status = _status(manga)
-    # No shelf is pinned to a unit by hand. The form is read from the work and
-    # from what the reader owns, every time: a hand-set unit was how Adekan
-    # came to be a list of books while it was still running, and how the same
-    # pin then had to be undone to bound its numbering. What suits a shelf is
-    # decided here, from evidence, not stored as a preference beside it.
+    status = _status({"status": (metadata or {}).get("status"), **manga})
+    from tankarr.series_unit import normalize_series_unit
+    from tankarr.unit_strategy import operator_chose_unit
+
+    if operator_chose_unit(manga):
+        return normalize_series_unit(
+            manga["series_unit_override"]
+        ) or "chapters", "operator-selected format"
     if status in RUNNING_STATUSES:
         return "chapters", "running series: chapters until it ends"
-    if _is_webtoon(metadata):
+    japanese_books = (
+        str(manga.get("original_language") or "").casefold() == "ja" and expected_books
+    )
+    if _is_webtoon(metadata) and not japanese_books:
         return "chapters", "webtoon: no certain division into books"
     if not expected_books:
         if status in PAUSED_STATUSES:
@@ -967,6 +972,10 @@ def apply_series_form(
     ):
         form = "chapters"
         reason = "an unfinished shelf of chapters is not divided into books"
+    from tankarr.unit_strategy import operator_chose_unit
+
+    if operator_chose_unit(manga):
+        form, reason = series_form(manga, metadata, expected_books)
     if form != "volumes" and len(books) > 1 and len(unassigned) >= len(books):
         # A chapter shelf still has books on it, and showing them empty beside
         # a heap of loose chapters is the disorder the even split exists to

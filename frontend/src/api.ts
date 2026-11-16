@@ -1,3 +1,4 @@
+import type { ChapterRecoveryPreview } from "./types";
 import { serverUrl } from "./serverUrl";
 import type {
   SystemLogs,
@@ -388,7 +389,6 @@ export const api = {
   updateManga: (
     id: string,
     changes: Partial<Pick<Manga, "preferred_language" | "monitor_mode">> & {
-      assemble_books_automatically?: boolean;
       status_override?: PublicationStatusOverride;
       library_status_override?: "automatic" | "up_to_date";
       expected_count_override?: number | "automatic";
@@ -688,6 +688,8 @@ export const api = {
     for (const id of expectedChapterIds) parameters.append("expected_chapter_id", id);
     return request<DuplicateRetirementResult>(`/api/manga/${encodeURIComponent(mangaId)}/duplicates/files?${parameters}`, { method: "DELETE" });
   },
+  previewChapterRecovery: (mangaId: string, signal?: AbortSignal) => request<ChapterRecoveryPreview>(`/api/manga/${encodeURIComponent(mangaId)}/recover-chapters?dry_run=true`, { method: "POST", signal }),
+  recoverChapters: (mangaId: string, snapshot: string) => request<{ queued: number }>(`/api/manga/${encodeURIComponent(mangaId)}/recover-chapters?${new URLSearchParams({ confirmation_snapshot: snapshot })}`, { method: "POST" }),
   chapterMap: (mangaId: string, signal?: AbortSignal) => request<ChapterMapState>(`/api/manga/${encodeURIComponent(mangaId)}/chapter-map`, { signal }),
   previewChapterMap: (mangaId: string, boundaries: ChapterMapBoundary[], signal?: AbortSignal) => request<ChapterMapPreview>(`/api/manga/${encodeURIComponent(mangaId)}/chapter-map?dry_run=true`, { method: "PUT", body: JSON.stringify({ boundaries, mode: "replace" }), signal }),
   saveChapterMap: (mangaId: string, boundaries: ChapterMapBoundary[], snapshot: string, signal?: AbortSignal) => request<ChapterMapPreview>(`/api/manga/${encodeURIComponent(mangaId)}/chapter-map?confirmation_snapshot=${encodeURIComponent(snapshot)}`, { method: "PUT", body: JSON.stringify({ boundaries, mode: "replace" }), signal }),

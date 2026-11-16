@@ -434,7 +434,7 @@ const SECTIONS: SectionDef[] = [
       {
         key: "preferred_unit",
         label: msg("Preferred unit"),
-        hint: msg("Tankarr follows whatever the sources can deliver in full: chapters or whole books. When both can complete a finished work, this preference decides; a running work follows chapters unless only books exist."),
+        hint: msg("Used when the media and edition do not determine a format. Finished works with a reliable volume edition follow volumes; an explicit series choice takes precedence."),
         kind: "select",
         options: [
           ["volumes", msg("Whole volumes (books)")],
@@ -442,9 +442,15 @@ const SECTIONS: SectionDef[] = [
         ],
       },
       {
+        key: "assemble_books_automatically",
+        label: msg("Automatically assemble volumes from chapters"),
+        hint: msg("Applies to every monitored series followed as volumes. Assemble only when confirmed boundaries and every required chapter file are available. Without a map, download whole volumes or review chapter recovery on the series page."),
+        kind: "boolean",
+      },
+      {
         key: "auto_unit_strategy",
-        label: msg("Follow volumes when chapters cannot finish the series"),
-        hint: msg("When mapped sources can supply every book of the edition and cannot supply every chapter, follow books. The preferred language is tried first; other languages count only while translation fallback is on. A finished series whose books are already in the library follows books too. Chapter releases with no file are left unmonitored, downloaded chapters stay, and a unit you set on the series is kept. On by default."),
+        label: msg("Automatically select the series format"),
+        hint: msg("Finished works with a reliable volume count follow volumes, including Japanese scrolling publications with a book edition. Other webtoons stay in chapters. A series format you choose is always kept. This selects the target edition; it does not claim that the files are available. On by default."),
         kind: "boolean",
       },
     ],

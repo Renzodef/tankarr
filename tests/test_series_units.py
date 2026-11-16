@@ -645,7 +645,8 @@ def test_mapped_side_stories_keep_their_books_without_inflating_chapter_count():
         build_series_units(item, metadata, rows, entries), item, metadata
     )
     assert result["expected_chapter_count"] == 2
-    assert result["map_confidence"]["level"] == "partial"
+    assert result["form"] == "chapters"
+    assert result["map_confidence"]["level"] == "none"
     assert [[s["chapter"] for s in b["chapters"]] for b in result["books"]] == [
         ["1", "2"],
         [],
@@ -656,7 +657,7 @@ def test_mapped_side_stories_keep_their_books_without_inflating_chapter_count():
 def test_catalogue_totals_lay_out_books_without_generating_boundaries():
     from tankarr.series_form import apply_series_form, chapter_volume_assignments
 
-    item = manga(status="ended", series_unit_override="chapters")
+    item = manga(status="ended", series_unit_override="volumes")
     metadata = {"status": "ended", "chapter_count": 12, "volume_count": 3}
     rows = [chapter(n, volume=None) for n in range(1, 13)]
     # Include an old persisted layout to exercise the real legacy data path.
@@ -813,7 +814,7 @@ def test_platform_link_preserves_owned_printed_edition_coverage(link):
     assert all(slot["covered_unmapped"] and not slot["missing"] for slot in slots)
     assert not any(slot["coverage_exact"] for slot in slots)
     result = apply_series_form(built, work, metadata)
-    assert result["form"] == "volumes"
+    assert result["form"] == "chapters"  # explicit operator choice wins
     assert sum(book["owned"] for book in result["books"]) == 13
     assert not any(
         slot["missing"]
