@@ -500,7 +500,9 @@ def test_status_does_not_scan_series_rows_or_wait_for_chapter_totals(
 
         deadline = time.monotonic() + 5
         seen = first
-        while seen["totals"]["series"] != 1 and time.monotonic() < deadline:
+        while (
+            seen["totals"]["series"] != 1 or seen["totals"]["chapters"] != 2
+        ) and time.monotonic() < deadline:
             time.sleep(0.05)
             seen = client.get("/api/system/status").json()
         assert seen["totals"]["series"] == 1
