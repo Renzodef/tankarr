@@ -4,7 +4,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from threading import Event, Lock
-from time import sleep
+from time import monotonic, sleep
 from unittest.mock import Mock
 
 import pytest
@@ -19,6 +19,15 @@ def image_bytes(size: tuple[int, int], color: str) -> bytes:
     output = BytesIO()
     Image.new("RGB", size, color=color).save(output, format="JPEG")
     return output.getvalue()
+
+
+def wait_for_library(client: TestClient) -> None:
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        if client.get("/api/ready").status_code == 200:
+            return
+        sleep(0.05)
+    pytest.fail("Tankarr did not become ready for library mutations")
 
 
 def seed_reader(
@@ -352,6 +361,7 @@ def test_series_can_override_paged_reading_direction_and_reset_it(tmp_path: Path
     app, database = seed_reader(tmp_path, original_language="ja")
     with TestClient(app) as client:
         automatic = client.get("/api/reader/books/book-1").json()
+        wait_for_library(client)
         updated = client.patch("/api/manga/series-1", json={"reader_direction": "ltr"})
         left_to_right = client.get("/api/reader/books/book-1").json()
         reset = client.patch(
@@ -407,6 +417,7 @@ def test_manhua_catalogue_family_does_not_force_vertical_reader(tmp_path: Path):
 def test_reader_modes_can_be_saved_globally_and_per_series(tmp_path: Path):
     app, database = seed_reader(tmp_path)
     with TestClient(app) as client:
+        wait_for_library(client)
         global_update = client.put(
             "/api/settings", json={"reader_display_mode": "webtoon"}
         )
