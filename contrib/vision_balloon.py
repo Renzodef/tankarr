@@ -36,6 +36,10 @@ GEOMETRY_FORMAT = {
 }
 
 
+class InvalidBalloonGeometry(ValueError):
+    """The provider answered both requests without usable page geometry."""
+
+
 def intersection(a, b):
     return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(
         0.0, min(a[3], b[3]) - max(a[1], b[1])
@@ -148,7 +152,9 @@ async def analyze_page(ctx, vision, source_language):
                 continue
             break
     if boxes is None:
-        raise ValueError("Vision provider returned no usable balloon geometry")
+        raise InvalidBalloonGeometry(
+            "Vision provider returned no usable balloon geometry"
+        )
     ctx.vision_boxes = boxes
     used = set()
     for region in ctx.text_regions:
