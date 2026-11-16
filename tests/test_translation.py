@@ -995,3 +995,44 @@ async def test_unavailable_hook_retries_when_there_is_no_alternative(
     await manager.tick()
     assert process.await_count == 2
     assert manager.store.get(job["id"])["status"] == "queued"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "backend,limit,expected",
+    [("hook", 1, 1), ("hook", 3, 3), ("hook", 4, 4), ("auto", 4, 1)],
+)
+async def test_configurable_hook_capacity_preserves_native_serial_processing(
+    translation, monkeypatch, backend, limit, expected
+):
+    manager, database, _service, source = translation
+    update_settings(manager.settings, database, {"translation_hook_concurrency": limit})
+    manager.settings.translation_backend = backend
+    for n in range(5):
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+    active = peak = calls = 0
+
+    async def process(_job):
+        nonlocal active, peak, calls
+        calls += 1
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+
+    monkeypatch.setattr(manager, "process", process)
+    await manager.tick()
+    assert peak == expected
+    assert calls == (limit if backend == "hook" else 2)
+
+
+@pytest.mark.parametrize("limit", [0, 17, 2.5])
+def test_hook_capacity_rejects_invalid_values(translation, limit):
+    manager, database, _service, _source = translation
+    with pytest.raises(ValueError):
+        update_settings(
+            manager.settings, database, {"translation_hook_concurrency": limit}
+        )
+    assert manager.settings.translation_hook_concurrency == 2

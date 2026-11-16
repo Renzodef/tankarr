@@ -66,6 +66,7 @@ class SettingSpec:
 EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "translation_enabled": SettingSpec("bool"),
     "translation_backend": SettingSpec("str", max_length=12),
+    "translation_hook_concurrency": SettingSpec("int", minimum=1, maximum=16),
     "translation_hook": SettingSpec("optional_str", max_length=80),
     "translation_vision_url": SettingSpec("optional_str", max_length=500),
     "translation_vision_model": SettingSpec("str", max_length=200),
