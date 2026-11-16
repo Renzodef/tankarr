@@ -358,6 +358,10 @@ class TranslationManager:
                 active.sort(
                     key=lambda job: (
                         (job["id"], job["attempts"]) in self._hook_retry_after,
+                        # Retry the longest-waiting attempt first. Otherwise
+                        # early jobs can repeatedly overtake later retries
+                        # while another book keeps this loop running.
+                        self._hook_retry_after.get((job["id"], job["attempts"]), 0.0),
                         job["status"] == "waiting_native",
                         job["status"] == "queued",
                         job["created_at"],
