@@ -192,6 +192,7 @@ class Processor:
         directory = self.directory(job_id)
         state = "failed"
         try:
+            (directory / "result.failure.json").unlink(missing_ok=True)
             write_json(directory / "status.json", {"status": "running"})
             self.execute(directory, request)
             if not (directory / "result.cbz").is_file():
@@ -205,7 +206,30 @@ class Processor:
             with self.lock:
                 if (directory / "cancel.json").exists():
                     state = "cancelled"
-                write_json(directory / "status.json", {"status": state})
+                status = {"status": state}
+                if state == "failed":
+                    try:
+                        receipt = directory / "result.failure.json"
+                        with receipt.open("r") as stream:
+                            failure = json.loads(stream.read(1024))
+                        if (
+                            failure.get("code")
+                            in {
+                                "provider_unavailable",
+                                "page_review_required",
+                                "translation_failed",
+                                "provider_interrupted",
+                                "validation_failed",
+                            }
+                            and type(failure.get("retryable")) is bool
+                        ):
+                            status["failure"] = {
+                                "code": failure["code"],
+                                "retryable": failure["retryable"],
+                            }
+                    except (OSError, ValueError, TypeError, AttributeError):
+                        pass  # An absent or malformed receipt must not hide the failure.
+                write_json(directory / "status.json", status)
                 self.active.discard(job_id)
 
 
