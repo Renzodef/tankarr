@@ -220,6 +220,104 @@ def dark_palette_masks(source, dark):
         ).astype(bool)
 
 
+def ellipse_fit_score(mask):
+    import cv2
+    import numpy as np
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return 0.0
+    contour = max(contours, key=cv2.contourArea)
+    if len(contour) < 5:
+        return 0.0
+    fitted = np.zeros_like(mask)
+    cv2.ellipse(fitted, cv2.fitEllipse(contour), 1, -1)
+    union = np.count_nonzero((fitted != 0) | (mask != 0))
+    return np.count_nonzero((fitted != 0) & (mask != 0)) / union if union else 0.0
+
+
+def vision_palette_masks(source, boxes):
+    """Include vivid and pastel balloon colors that fixed HSV bands miss."""
+    import cv2
+    import numpy as np
+
+    height, width = source.shape[:2]
+    colors = set()
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box)
+        clip = source[max(0, y1) : min(height, y2), max(0, x1) : min(width, x2)]
+        if clip.size == 0:
+            continue
+        samples = clip.reshape(-1, 3).astype(np.int32) // 16
+        counts = np.bincount(samples @ np.array([256, 16, 1]), minlength=4096)
+        for index in np.argsort(counts)[-2:]:
+            if counts[index] < len(samples) * 0.1 or int(index) in colors:
+                continue
+            colors.add(int(index))
+            color = np.array([index // 256, index // 16 % 16, index % 16]) * 16 + 8
+            pixels = cv2.inRange(
+                source, np.maximum(color - 16, 0), np.minimum(color + 16, 255)
+            )
+            yield cv2.morphologyEx(
+                pixels, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8)
+            ).astype(bool)
+
+
+def merge_balloon_fragments(shapes, boxes):
+    """Combine compatible color fragments belonging to one vision balloon."""
+    import cv2
+    import numpy as np
+
+    groups = defaultdict(list)
+    for shape in shapes:
+        bounds = shape[0]
+        ranked = []
+        for index, box in enumerate(boxes):
+            overlap = intersection(bounds, box)
+            union = intersection(bounds, bounds) + intersection(box, box) - overlap
+            if union > 0:
+                ranked.append((overlap / union, index))
+        score, index = max(ranked, default=(0, -1))
+        if score >= 0.06:
+            groups[index].append(shape)
+
+    merged = []
+    for group in groups.values():
+        dominant = max(group, key=lambda shape: int(shape[1].sum()))
+        group = [
+            shape
+            for shape in group
+            if np.max(np.abs(shape[2].astype(float) - dominant[2])) <= 32
+        ]
+        # Prefer a complete outline when one color mask already recovered it.
+        # Otherwise a duplicate with a small extension into the artwork would
+        # enlarge an otherwise accurate oval when taking the union.
+        intact = [
+            (ellipse_fit_score(shape[1]), index)
+            for index, shape in enumerate(group)
+            if shape[1].sum() >= dominant[1].sum() * 0.7
+        ]
+        score, index = max(intact, default=(0, -1))
+        if score >= 0.985:
+            merged.append(group[index])
+            continue
+        x = min(shape[0][0] for shape in group)
+        y = min(shape[0][1] for shape in group)
+        right = max(shape[0][2] for shape in group)
+        bottom = max(shape[0][3] for shape in group)
+        mask = np.zeros((bottom - y, right - x), dtype=np.uint8)
+        for (sx, sy, sr, sb), fragment, _ in group:
+            mask[sy - y : sb - y, sx - x : sr - x] |= fragment
+        points = cv2.findNonZero(mask)
+        if points is None:
+            continue
+        # Printed letters can split the flat background into disconnected
+        # components. Join only fragments assigned to this same vision box.
+        cv2.fillConvexPoly(mask, cv2.convexHull(points), 1)
+        merged.append(((x, y, right, bottom), mask, dominant[2]))
+    return merged
+
+
 async def render_guided(fallback, config, ctx):
     import cv2
     import numpy as np
@@ -243,6 +341,7 @@ async def render_guided(fallback, config, ctx):
         (saturation <= 24) & (value >= 180),
     ]
     masks.extend(dark_palette_masks(source, dark))
+    masks.extend(vision_palette_masks(source, ctx.vision_boxes))
     shapes = []
     for pixels in masks:
         opened = cv2.morphologyEx(
@@ -274,13 +373,14 @@ async def render_guided(fallback, config, ctx):
                 continue
             shapes.append((bounds, mask, median.astype(np.uint8)))
 
+    shapes = merge_balloon_fragments(shapes, list(ctx.vision_boxes))
     groups = defaultdict(list)
     regions = list(ctx.text_regions)
     for region in regions:
         rect = tuple(map(float, region.xyxy))
         area = intersection(rect, rect)
         scores = [
-            (intersection(rect, bounds) / area, -intersection(bounds, bounds), index)
+            (intersection(rect, bounds) / area, intersection(bounds, bounds), index)
             for index, (bounds, _, _) in enumerate(shapes)
             if area > 0
         ]

@@ -513,6 +513,12 @@ for a full-page vision request, accommodating CPU inference. Connecting to the
 vision provider still times out after ten seconds. Job cancellation stops the
 worker process even while a vision request is pending.
 
+For flat-color balloons, vision guidance groups compatible background fragments
+before placing the translated text. This keeps multiple OCR columns in the same
+balloon and handles vivid and pastel fills. Complete oval outlines take priority
+over fragments that extend into nearby artwork. Other regions retain the MIT
+renderer; output should still be checked on representative pages of each style.
+
 ## Advanced
 
 Internal settings and service addresses that rarely need changing.
