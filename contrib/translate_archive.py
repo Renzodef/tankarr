@@ -2445,7 +2445,7 @@ def checkpoint_identity(request, config):
         value["vision"] = {
             "base_url": vision["base_url"],
             "model": vision["model"],
-            "rendering_version": 4,
+            "rendering_version": 5,
         }
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 

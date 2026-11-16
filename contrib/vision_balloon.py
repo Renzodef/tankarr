@@ -476,6 +476,11 @@ async def render_guided(fallback, config, ctx):
         & (value >= 149),
         (saturation <= 24) & (value >= 180),
     ]
+    # Include bright caption backgrounds while keeping their printed outline.
+    masks.extend(
+        (saturation > 120) & (value >= 135) & (hue >= low) & (hue < low + 30)
+        for low in range(0, 180, 30)
+    )
     masks.extend(dark_palette_masks(source, dark))
     masks.extend(vision_palette_masks(source, boxes))
     shapes = []
@@ -489,7 +494,7 @@ async def render_guided(fallback, config, ctx):
             area = cv2.contourArea(contour)
             if (
                 min(w, h) < 35
-                or not 0.30 <= area / (w * h) <= 0.95
+                or not 0.30 <= area / (w * h) <= 1.0
                 or not 0.001 <= area / (width * height) <= 0.12
             ):
                 continue
@@ -503,7 +508,14 @@ async def render_guided(fallback, config, ctx):
             if len(samples) < 100:
                 continue
             median = np.median(samples, axis=0)
-            if np.median(np.max(np.abs(samples.astype(float) - median), axis=1)) > 14:
+            # Compressed narrow labels can vary more than flat speech balloons.
+            tolerance = (
+                24 if area / (w * h) >= 0.9 and min(w, h) <= max(w, h) * 0.5 else 14
+            )
+            if (
+                np.median(np.max(np.abs(samples.astype(float) - median), axis=1))
+                > tolerance
+            ):
                 continue
             shapes.append((bounds, mask, median.astype(np.uint8)))
 

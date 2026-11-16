@@ -258,3 +258,36 @@ def test_em_dash_is_a_safe_line_break_in_narrow_balloon():
         "".join(row[2] for row in fitted[1]).replace(" ", "")
         == "Donotdeceiveyourself—hereallyisalreadydead."
     )
+
+
+def test_bright_vertical_caption_preserves_art_and_uses_bounded_lettering():
+    import asyncio
+
+    source = np.full((400, 300, 3), [140, 160, 170], dtype=np.uint8)
+    for row in range(70, 270):
+        source[row, 90:145] = [227, 48 + (row % 50), 46]
+    for top in (90, 140, 190, 235):
+        source[top : top + 12, 101:135] = [248, 214, 37]
+    region = SimpleNamespace(
+        xyxy=[95, 78, 140, 262], center=[117.5, 170], translation="Dr. Lee"
+    )
+    ctx = SimpleNamespace(
+        img_rgb=source,
+        img_inpainted=np.zeros_like(source),
+        vision_boxes={(85, 65, 150, 275): ""},
+        text_regions=[region],
+    )
+
+    async def fallback(_config, _ctx):
+        pytest.fail("The caption should be rendered within its own outline")
+
+    result = asyncio.run(vision.render_guided(fallback, None, ctx))
+    outside = np.ones(source.shape[:2], dtype=bool)
+    outside[70:270, 90:145] = False
+    assert np.array_equal(result[outside], source[outside])
+    for top in (90, 140, 190, 235):
+        assert not np.any(
+            np.all(result[top : top + 12, 101:135] == [248, 214, 37], axis=2)
+        )
+    assert np.any(np.all(result[70:270, 90:145] == [21, 21, 21], axis=2))
+    assert ctx.text_regions == [region]
