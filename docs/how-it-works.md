@@ -119,12 +119,13 @@ verified. Ordinary monitoring skips content already owned or queued.
 ## Language per release and the OCR language audit
 
 A series is followed in one language, chosen when you add it from your
-**Search languages** (Settings → General). Tankarr records the language on each
+**Library languages** (Settings → General). Tankarr records the language on each
 release, so different series can follow different languages. How the language
 is established depends on the channel:
 
 - **Suwayomi sources** declare their language structurally. Tankarr searches
-  only the sources in the series' language, and no further check is needed.
+  the series' language first. With translation enabled, it can also search
+  configured sources in other languages.
 - **Library Import** uses the language you choose at import time.
 - **Indexer and archive.org releases** are only a claim: a release name or an
   indexer category says nothing reliable about the pages. These channels are
@@ -511,11 +512,16 @@ Open a book from its row on the series page.
 The display mode is chosen in this order: the series' own setting in its Edit
 dialog, then **Default reading mode** in **Settings → Reader**, then the
 catalogue (a webtoon scrolls vertically, a manga is paged), then the page shape
-(tall strips scroll vertically). Paged books read right to left for manga and
-left to right for manhwa, manhua, comics and books, with Japanese, Korean and
-Chinese originals as a fallback rule; a series can override the direction. The
-reader's toolbar switches between paged and vertical display for the current
-session and between **Fit page** and **Fit width**.
+(tall strips scroll vertically). A series can set its own page direction.
+Automatic direction uses the catalogue's stated direction, then the type and
+original language of the work. Manga is usually right to left, while paged
+manhwa, manhua and Western comics are usually left to right. With only a known
+original language, an English or Italian comic reads left to right and a
+Japanese comic reads right to left, even when the downloaded edition is in
+another language. With no direction, recognised type or known original
+language, the reader defaults to right to left. The reader's toolbar switches
+between paged and vertical display for the current session and between
+**Fit page** and **Fit width**.
 
 Turning pages records nothing. **Save bookmark** in the reader records one
 resume point per series, the book and the page, and the series page then offers

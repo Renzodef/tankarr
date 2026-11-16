@@ -333,6 +333,21 @@ def test_chinese_books_read_left_to_right_by_default(tmp_path: Path):
     assert manifest["reading_direction"] == "ltr"
 
 
+@pytest.mark.parametrize(
+    ("original_language", "expected"),
+    [("en", "ltr"), ("it", "ltr"), ("pt-BR", "ltr"), ("ja", "rtl")],
+)
+def test_paged_direction_uses_original_language_of_local_import(
+    tmp_path: Path, original_language: str, expected: str
+):
+    app, _ = seed_reader(tmp_path, original_language=original_language)
+    with TestClient(app) as client:
+        manifest = client.get("/api/reader/books/book-1").json()
+
+    assert manifest["display_mode"] == "manga"
+    assert manifest["reading_direction"] == expected
+
+
 def test_series_can_override_paged_reading_direction_and_reset_it(tmp_path: Path):
     app, database = seed_reader(tmp_path, original_language="ja")
     with TestClient(app) as client:

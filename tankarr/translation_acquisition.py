@@ -212,17 +212,20 @@ class TranslationAcquisition:
         candidates = {}
         archive = getattr(self.torrents, "internet_archive", None)
         if archive is not None and archive.enabled:
-            try:
-                # One unrestricted Archive search, not one search per language.
-                releases = await archive.search_translation(manga["title"], limit=50)
-            except Exception as error:  # noqa: BLE001 - Archive must not hide indexer candidates
-                logger.warning(
-                    "Translation Archive search unavailable (%s)", type(error).__name__
-                )
-            else:
+            # Localised editions may only be listed under the translated
+            # title. Search each known title once, across all languages.
+            for title in titles:
+                try:
+                    releases = await archive.search_translation(title, limit=50)
+                except Exception as error:  # noqa: BLE001 - keep results from the other titles and indexers
+                    logger.warning(
+                        "Translation Archive search unavailable (%s)",
+                        type(error).__name__,
+                    )
+                    continue
                 for release in releases:
                     if release.get("language") in languages and title_matches_release(
-                        manga["title"], release["title"]
+                        title, release["title"]
                     ):
                         candidates[(release["provider"], str(release["id"]))] = dict(
                             release
@@ -230,8 +233,7 @@ class TranslationAcquisition:
         if self.manager.settings.prowlarr_enabled:
             # One search, not one search per library language. The language
             # argument is not a filter: a release is eligible only when its
-            # name claims a source language translation can read. English
-            # stays on the preferred-language path and is not in ``languages``.
+            # name claims a source language translation can read.
             for title in titles:
                 try:
                     releases = await self.torrents.prowlarr.search(

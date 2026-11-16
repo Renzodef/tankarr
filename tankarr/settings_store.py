@@ -35,6 +35,7 @@ SETTINGS_COMMIT_KEY = "__settings_commit_token"
 
 MANAGED_SECRET_ENV: dict[str, str] = {
     "translation_ai_api_key": "TANKARR_TRANSLATION_AI_API_KEY",
+    "translation_vision_api_key": "TANKARR_TRANSLATION_VISION_API_KEY",
     "translation_processor_token": "TANKARR_TRANSLATION_PROCESSOR_TOKEN",
     "auth_password": "TANKARR_AUTH_PASSWORD",
     "suwayomi_password": "TANKARR_SUWAYOMI_PASSWORD",
@@ -64,6 +65,14 @@ class SettingSpec:
 
 EDITABLE_SETTINGS: dict[str, SettingSpec] = {
     "translation_enabled": SettingSpec("bool"),
+    "translation_backend": SettingSpec("str", max_length=12),
+    "translation_hook_concurrency": SettingSpec("int", minimum=1, maximum=16),
+    "translation_hook": SettingSpec("optional_str", max_length=80),
+    "translation_vision_url": SettingSpec("optional_str", max_length=500),
+    "translation_vision_model": SettingSpec("str", max_length=200),
+    "translation_vision_api_key": SettingSpec(
+        "optional_str", secret=True, max_length=500
+    ),
     "translation_source_languages": SettingSpec("str", min_length=2, max_length=200),
     "translation_processor_url": SettingSpec("optional_str", max_length=500),
     "translation_processor_token": SettingSpec(
@@ -201,7 +210,17 @@ def coerce_setting(name: str, raw: str) -> Any:
             from tankarr.translation_policy import normalize_fallback_languages
 
             return normalize_fallback_languages(value)
-        if name in {"translation_processor_url", "translation_ai_url"}:
+        if name == "translation_backend" and value not in {"auto", "mit", "hook"}:
+            raise ValueError("Unknown translation processing mode")
+        if name == "translation_hook":
+            from tankarr.translation_worker import validate_hook_name
+
+            return validate_hook_name(value)
+        if name in {
+            "translation_processor_url",
+            "translation_ai_url",
+            "translation_vision_url",
+        }:
             from tankarr.translation_policy import validate_translation_url
 
             return validate_translation_url(value)
@@ -455,6 +474,21 @@ def _update_settings_locked(
                 raise ValueError(
                     f"{key} is required while translation fallback is enabled"
                 )
+        if coerced.get(
+            "translation_backend", settings.translation_backend
+        ) == "hook" and not coerced.get("translation_hook", settings.translation_hook):
+            raise ValueError(
+                "Choose a translation hook when hook processing is enabled"
+            )
+    vision_url = coerced.get("translation_vision_url", settings.translation_vision_url)
+    vision_model = coerced.get(
+        "translation_vision_model", settings.translation_vision_model
+    )
+    vision_key = coerced.get(
+        "translation_vision_api_key", settings.translation_vision_api_key
+    )
+    if (vision_url or vision_model or vision_key) and not (vision_url and vision_model):
+        raise ValueError("Vision processing requires both an API URL and a model")
     proposed_password = coerced.get("auth_password", settings.auth_password)
     if bool(proposed_username) != bool(proposed_password):
         raise ValueError("Authentication username and password must be set together")

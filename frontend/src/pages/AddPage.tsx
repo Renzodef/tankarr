@@ -25,7 +25,6 @@ const RESULT_PAGE_SIZE = 20;
 export default function AddPage({ initialQuery }: { initialQuery: string }) {
   const { health, notify, refreshJobs } = useApp();
   const [query, setQuery] = useState(initialQuery);
-  const [language, setLanguage] = useState<string | null>(null);
   const [results, setResults] = useState<MangaSummary[] | null>(null);
   const [errors, setErrors] = useState<{ provider: string; error: string }[]>([]);
   const [searching, setSearching] = useState(false);
@@ -37,14 +36,13 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
   const configuredDefault = enabledLanguageCodes.includes(health?.default_language ?? "")
     ? health!.default_language
     : enabledLanguageCodes[0] ?? "en";
-  const selectedLanguage = language && enabledLanguageCodes.includes(language) ? language : configuredDefault;
   const pastedId = /mangabaka\.(org|dev)\//i.test(query.trim());
 
   const runSearch = async (term: string) => {
     if (term.trim().length < 2) return;
     setSearching(true);
     try {
-      const response = await api.search(term.trim(), selectedLanguage, CATALOGUE);
+      const response = await api.search(term.trim());
       setResults(response.works ?? response.results);
       setResultPage(1);
       setErrors(response.errors);
@@ -78,13 +76,6 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <select className="input" aria-label={t("Search language")} value={selectedLanguage} onChange={(event) => setLanguage(event.target.value)}>
-            {languageOptions.map(([code, label]) => (
-              <option key={code} value={code}>
-                {label}
-              </option>
-            ))}
-          </select>
           <button type="submit" className="btn btn-primary" disabled={searching || query.trim().length < 2}>
             <Icon name="search" /> {pastedId ? t("Look up") : t("Search")}
           </button>
@@ -183,7 +174,7 @@ export default function AddPage({ initialQuery }: { initialQuery: string }) {
       {selected ? (
         <AddModal
           work={selected}
-          initialLanguage={selectedLanguage}
+          initialLanguage={configuredDefault}
           languageOptions={languageOptions}
           onClose={() => setSelected(null)}
           onAdded={async (id) => {

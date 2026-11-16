@@ -30,6 +30,7 @@ from tankarr.translation_policy import (
     validate_translation_url,
 )
 from tankarr.translation_store import TranslationStore
+from tankarr.translation_worker import WorkerUnavailable, run_worker, worker_executable
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class TranslationManager:
         self.importer = LibraryImporter(settings, database, service)
         self.task = None
         self.acquisition = None
+        self._hook_retry_after: dict[tuple[str, int], float] = {}
         self.lock = asyncio.Lock()
 
     def directory(self, job: dict) -> Path:
@@ -263,9 +265,8 @@ class TranslationManager:
         async with self.lock:
             self.service.assert_mutations_allowed()
             active = self.store.list(active=True)
-            # Two outstanding processor jobs allow small installations to use
-            # two workers. Downloads and archive work on the Tankarr host stay
-            # serial.
+            # Hook capacity is operator-controlled; native processing retains
+            # its existing limit. Hooks enforce per-worker resource limits.
             active.sort(
                 key=lambda job: (
                     2
@@ -274,53 +275,90 @@ class TranslationManager:
                     job["created_at"],
                 )
             )
-            for job in active[:2]:
-                endpoint = (
-                    "Translation processor"
-                    if self.settings.translation_processor_url
-                    else "AI provider"
+            if self.settings.translation_backend == "hook":
+                now = time.monotonic()
+                active_attempts = {(job["id"], job["attempts"]) for job in active}
+                self._hook_retry_after = {
+                    key: deadline
+                    for key, deadline in self._hook_retry_after.items()
+                    if key in active_attempts and deadline > now
+                }
+                # A busy or offline worker must not keep the same jobs at
+                # the head of every pass. Retry them after other eligible work;
+                # when there is no other work, keep the normal retry cadence.
+                active.sort(
+                    key=lambda job: (
+                        (job["id"], job["attempts"]) in self._hook_retry_after
+                    )
                 )
-                try:
-                    await self.process(job)
-                except LocalTranslationError as exc:
-                    self._update_attempt(job, status="failed", message=str(exc))
-                except httpx.HTTPStatusError as exc:
-                    if (
-                        400 <= exc.response.status_code < 500
-                        and exc.response.status_code != 429
-                    ):
-                        self._update_attempt(
-                            job,
-                            status="failed",
-                            message=f"{endpoint} rejected the request (HTTP {exc.response.status_code}); check its settings before retrying",
-                        )
-                    else:
-                        self._update_attempt(
-                            job,
-                            message=f"Waiting for {endpoint.lower()}; retrying automatically",
-                        )
-                except (httpx.HTTPError, OSError):
-                    self._update_attempt(
-                        job,
-                        message=f"Waiting for {endpoint.lower()}; retrying automatically",
+                await asyncio.gather(
+                    *(
+                        self._process_attempt(job)
+                        for job in active[: self.settings.translation_hook_concurrency]
                     )
-                except (ValueError, KeyError, zipfile.BadZipFile, ProviderRequestError):
-                    self._update_attempt(
-                        job,
-                        status="failed",
-                        message="Translation or archive validation failed; retry after checking the processor",
-                    )
+                )
+            else:
+                for job in active[:2]:
+                    await self._process_attempt(job)
             if self.acquisition is not None:
                 await self.acquisition.finish_sources()
+
+    async def _process_attempt(self, job: dict):
+        endpoint = (
+            "Translation processor"
+            if self.settings.translation_processor_url
+            or self.settings.translation_backend != "auto"
+            else "AI provider"
+        )
+        try:
+            await self.process(job)
+        except WorkerUnavailable as exc:
+            if self.settings.translation_backend == "hook":
+                self._hook_retry_after[(job["id"], job["attempts"])] = (
+                    time.monotonic() + 60
+                )
+            self._update_attempt(job, message=str(exc))
+        except LocalTranslationError as exc:
+            self._update_attempt(job, status="failed", message=str(exc))
+        except httpx.HTTPStatusError as exc:
+            if (
+                400 <= exc.response.status_code < 500
+                and exc.response.status_code != 429
+            ):
+                self._update_attempt(
+                    job,
+                    status="failed",
+                    message=f"{endpoint} rejected the request (HTTP {exc.response.status_code}); check its settings before retrying",
+                )
+            else:
+                self._update_attempt(
+                    job,
+                    message=f"Waiting for {endpoint.lower()}; retrying automatically",
+                )
+        except (httpx.HTTPError, OSError):
+            self._update_attempt(
+                job,
+                message=f"Waiting for {endpoint.lower()}; retrying automatically",
+            )
+        except (ValueError, KeyError, zipfile.BadZipFile, ProviderRequestError):
+            self._update_attempt(
+                job,
+                status="failed",
+                message="Translation or archive validation failed; retry after checking the processor",
+            )
 
     def cancel_job(self, job, message=None):
         current = self.store.get(job["id"])
         if current["attempts"] != job["attempts"] or current["status"] == "completed":
             return current
+        remote = (
+            self.settings.translation_backend == "auto"
+            and self.settings.translation_processor_url
+        )
         if message is None:
             message = (
                 "Cancelled; remote cancellation requested"
-                if self.settings.translation_processor_url
+                if remote
                 else "Cancelled; stopping local processing"
             )
         result = self.store.update(
@@ -329,8 +367,8 @@ class TranslationManager:
             status="cancelled",
             message=message,
         )
-        if self.settings.translation_processor_url:
-            base = validate_translation_url(self.settings.translation_processor_url)
+        if remote:
+            base = validate_translation_url(remote)
             remote_id = f"{job['id']}-{job['attempts']}"
             root = self.settings.staging_dir / "translations" / "cancel-requests"
             root.mkdir(parents=True, exist_ok=True)
@@ -486,6 +524,9 @@ class TranslationManager:
         source = await self._prepare(job, manga)
         if source is None or self._current(job) is None:
             return
+        if self.settings.translation_backend != "auto":
+            await self._process_worker(job, source)
+            return
         if not self.settings.translation_processor_url:
             await self._process_local(job, source)
             return
@@ -520,18 +561,7 @@ class TranslationManager:
                     return
                 response = await client.post(
                     url,
-                    json={
-                        "source_sha256": source_hash,
-                        "source_language": job["source"]["language"],
-                        "target_language": job["target_language"],
-                        "ai": {
-                            "base_url": validate_translation_url(
-                                self.settings.translation_ai_url
-                            ),
-                            "model": self.settings.translation_ai_model,
-                            "api_key": self.settings.translation_ai_api_key,
-                        },
-                    },
+                    json=self._worker_request(job, source_hash),
                 )
                 response.raise_for_status()
             else:
@@ -575,6 +605,118 @@ class TranslationManager:
                 partial.unlink(missing_ok=True)
         await self._publish(job, output, source)
 
+    def _worker_request(self, job: dict, source_hash: str):
+        request = {
+            "source_sha256": source_hash,
+            "source_language": job["source"]["language"],
+            "target_language": job["target_language"],
+            "ai": {
+                "base_url": validate_translation_url(self.settings.translation_ai_url),
+                "model": self.settings.translation_ai_model,
+                "api_key": self.settings.translation_ai_api_key,
+            },
+        }
+        if (
+            self.settings.translation_vision_url
+            and self.settings.translation_vision_model
+        ):
+            request["vision"] = {
+                "base_url": validate_translation_url(
+                    self.settings.translation_vision_url
+                ),
+                "model": self.settings.translation_vision_model,
+                "api_key": self.settings.translation_vision_api_key,
+            }
+        return request
+
+    def _worker_name(self):
+        if self.settings.translation_backend == "mit":
+            return "mit"
+        return self.settings.translation_hook or ""
+
+    async def _process_worker(self, job: dict, source: Path):
+        name = self._worker_name()
+        backend = self.settings.translation_backend
+        hook_directory = self.settings.translation_hook_directory
+        environment = None
+        if backend == "mit":
+            mit_worker = self.settings.translation_mit_worker
+            executable = worker_executable(mit_worker.parent, mit_worker.name)
+            environment = {
+                key: str(value)
+                for key, value in {
+                    "TANKARR_MIT_ENGINE_ROOT": self.settings.mit_engine_root
+                    or self.settings.data_dir / "mit/engine",
+                    "TANKARR_MIT_ENGINE_REVISION": self.settings.mit_engine_revision,
+                    "TANKARR_MIT_ENGINE_PYTHON": self.settings.mit_engine_python,
+                    "TANKARR_MIT_VENV": self.settings.mit_venv
+                    or self.settings.data_dir / "mit/venv",
+                    "TANKARR_MIT_SETUP_PYTHON": self.settings.mit_setup_python,
+                    "TANKARR_MIT_CONFIG": self.settings.mit_config,
+                    "TANKARR_MIT_GPU": str(self.settings.mit_gpu).lower(),
+                }.items()
+                if value is not None
+            }
+        else:
+            executable = worker_executable(hook_directory, name)
+        directory = self.attempt_directory(job)
+        output = directory / "worker-result.cbz"
+        source_hash = await asyncio.to_thread(sha256, source)
+        request = self._worker_request(job, source_hash)
+        envelope = {
+            **request,
+            "protocol_version": 1,
+            "event": "translation.requested",
+            "job_id": job["id"],
+            "attempt": job["attempts"],
+            "manga_id": job["manga_id"],
+            "source_path": str(source.resolve()),
+            "result_path": str(output.absolute()),
+            "checkpoint_directory": str((directory / "worker-checkpoints").resolve()),
+        }
+        if self._current(job) is None:
+            return
+        output.unlink(missing_ok=True)
+        self._update_attempt(
+            job,
+            status="processing",
+            message="Translation worker is processing this source",
+        )
+
+        def settings_match():
+            return (
+                self.settings.translation_backend == backend
+                and self._worker_name() == name
+                and self.settings.translation_hook_directory == hook_directory
+                and self._worker_request(job, source_hash) == request
+            )
+
+        task = asyncio.create_task(
+            run_worker(executable, envelope, environment=environment)
+        )
+        try:
+            while not task.done():
+                if (
+                    self.settings.restored_safe_mode
+                    or self._current(job) is None
+                    or not settings_match()
+                ):
+                    return
+                await asyncio.wait({task}, timeout=0.5)
+            await task
+            if not output.is_file() or output.is_symlink():
+                raise ValueError("Translation worker did not produce an archive")
+            if output.stat().st_size > self.settings.import_max_expanded_bytes:
+                raise ValueError("Translation worker result exceeds the import limit")
+            if not settings_match():
+                return
+            await self._publish(job, output, source, worker_request=request)
+        finally:
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
     async def _process_local(self, job: dict, source: Path):
         output = self.attempt_directory(job) / "result.cbz"
         request = {
@@ -606,6 +748,7 @@ class TranslationManager:
                     self.settings.restored_safe_mode
                     or self._current(job) is None
                     or self.settings.translation_processor_url
+                    or self.settings.translation_backend != "auto"
                     or request["ai"]
                     != {
                         "base_url": self.settings.translation_ai_url,
@@ -623,7 +766,14 @@ class TranslationManager:
             with suppress(asyncio.CancelledError):
                 await task
 
-    async def _publish(self, job: dict, output: Path, source: Path):
+    async def _publish(
+        self,
+        job: dict,
+        output: Path,
+        source: Path,
+        *,
+        worker_request: dict | None = None,
+    ):
         manga = self._current(job)
         if manga is None:
             return
@@ -640,6 +790,12 @@ class TranslationManager:
             if info.file_size > 64 * 1024:
                 raise ValueError("Translation receipt too large")
             receipt = json.loads(archive.read(info))
+        if worker_request and (
+            receipt.get("model") != worker_request["ai"]["model"]
+            or receipt.get("vision_model")
+            != worker_request.get("vision", {}).get("model")
+        ):
+            raise ValueError("Translation receipt does not match the selected models")
         reader_check = receipt.get("source_language_reader")
         if reader_check is not None and (
             not isinstance(reader_check, dict)
@@ -664,6 +820,8 @@ class TranslationManager:
             != job["target_language"].split("-")[0]
         ):
             raise ValueError("Translation receipt does not match this job")
+        vision_model = str(receipt.get("vision_model") or "")[:200]
+        vision_note = f"; vision model {vision_model}" if vision_model else ""
         chapter = {
             **job["source"],
             "id": f"translated:{job['id']}",
@@ -671,7 +829,7 @@ class TranslationManager:
             "language": job["target_language"],
             "pages": len(pages),
             "groups": ["Machine translation"],
-            "notes": f"Machine translation {job['source']['language']} → {job['target_language']}; model {str(receipt.get('model') or 'unknown')[:200]}; source SHA-256 {source_info['sha256']}; job {job['id']}",
+            "notes": f"Machine translation {job['source']['language']} → {job['target_language']}; model {str(receipt.get('model') or 'unknown')[:200]}{vision_note}; source SHA-256 {source_info['sha256']}; job {job['id']}",
         }
         published = self.attempt_directory(job) / "published.cbz"
         _, archive_info = await asyncio.to_thread(
@@ -680,6 +838,11 @@ class TranslationManager:
         content_hash = await asyncio.to_thread(local_page_content_sha256, pages)
         async with self.service._mutation_lock:
             self.service.assert_mutations_allowed()
+            if worker_request and (
+                self.settings.translation_backend == "auto"
+                or self._worker_request(job, source_info["sha256"]) != worker_request
+            ):
+                return
             if self._current(job) is None:
                 return
             self._update_attempt(

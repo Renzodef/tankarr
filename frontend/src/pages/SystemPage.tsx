@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { downloadReport } from "../downloadReport";
+import LibraryFolderCleanup from "../components/LibraryFolderCleanup";
 import MaintenanceNotice, { maintenanceErrors } from "../components/MaintenanceNotice";
 import SystemIntegrationHealth from "../components/SystemIntegrationHealth";
 import type { MaintenanceStatus } from "../operationTypes";
@@ -217,6 +218,7 @@ export default function SystemPage() {
           {!status.alerts?.length && !maintenanceNeedsAttention && !maintenanceError ? <p className="muted small"><StatusPill kind="success">{t("All clear")}</StatusPill> {t("Downloads, sources, storage and the Suwayomi runtime report no problems.")}</p> : <p className="muted small">{t("Review the items in Needs attention.")}</p>}
           <a href="#/setup" className="btn">{t("Re-run setup checks")}</a>
         </section>
+        <LibraryFolderCleanup />
         {orphans && orphans.count > 0 ? (
           <section className="panel">
             <h2>{t("Untracked library files")}</h2>

@@ -184,6 +184,7 @@ def suspect_volume_reasons(
     current_map = chapters_by_volume(chapter_map) if chapter_map is not None else None
     suspects = {}
     verified: dict[str, str] = {}
+    exact_assemblies: set[str] = set()
     for release in releases:
         if not release.get("downloaded") or not is_volume_release(release):
             continue
@@ -209,6 +210,7 @@ def suspect_volume_reasons(
             if current_map is not None and set(current_map.get(volume, ())) == set(
                 proof["chapters"]
             ):
+                exact_assemblies.add(volume)
                 continue
             suspects[volume] = (
                 "Saved book boundaries differ from the assembled chapters"
@@ -247,6 +249,11 @@ def suspect_volume_reasons(
     if len(reference) >= 3:
         median = reference[len(reference) // 2]
         for volume, pages in sizes.items():
+            # Byte-verified assembly and unchanged exact boundaries are stronger
+            # evidence than the edition's typical size. Keep any independent
+            # suspicion already recorded for another release of this volume.
+            if volume in exact_assemblies:
+                continue
             # A book built by hand is judged strictly: off the edition's size
             # it is another cut. A book a source delivered as the edition's
             # own is judged by what threatens coverage: a half (a wrong split)

@@ -53,6 +53,7 @@ from tankarr.metadata.publications import (
     publication_number,
 )
 from tankarr.providers.base import Provider, ProviderHTTP
+from tankarr.reading_direction import infer_reading_direction
 from tankarr.series_summary import automatic_updates_paused
 
 AUTO_MATCH_THRESHOLD = 0.86
@@ -3452,16 +3453,17 @@ class MetadataService:
         )
         if corroborated_origin:
             provenance["original_language"] = "corroborated Asian origin"
-        reading_direction = None
-        if normalized_type == "manga" or (
-            original_language == "ja"
-            and normalized_type in {"one_shot", "doujinshi", "novel"}
-        ):
-            reading_direction = "RIGHT_TO_LEFT"
-        elif "webtoon" in normalized_type:
+        if "webtoon" in normalized_type:
             reading_direction = "WEBTOON"
-        elif normalized_type in {"comic", "manhwa", "manhua", "book"}:
-            reading_direction = "LEFT_TO_RIGHT"
+        else:
+            direction = infer_reading_direction(
+                original_language,
+                work_type=work_type,
+                content_kind=classification["kind"],
+            )
+            reading_direction = {"rtl": "RIGHT_TO_LEFT", "ltr": "LEFT_TO_RIGHT"}.get(
+                direction
+            )
         volume_count = first("volume_count")
         chapter_count = first("chapter_count")
         issue_count = first("issue_count")

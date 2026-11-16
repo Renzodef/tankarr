@@ -246,14 +246,26 @@ const SECTIONS: SectionDef[] = [
   {
     title: msg("Translation fallback"),
     group: "translation",
-    description: msg("Translate missing books or chapters from another language. Tankarr tries the series language first. Enable fallback here for all monitored series, including series added later, then enter your AI provider settings. By default, basic OCR and lettering run on this computer, one job at a time. Docker includes the required tools; other installations need Tesseract and DejaVu fonts. The AI provider may charge for translation. Existing files remain available when fallback is switched off."),
+    description: msg("Translate missing books or chapters into the series language. Choose where to process them and configure the models used by the worker."),
     fields: [
       { key: "translation_enabled", label: msg("Enable translation fallback"), kind: "boolean" },
-      { key: "translation_ai_url", label: msg("AI provider API base URL"), kind: "url", hint: msg("A provider with an OpenAI-compatible chat API, including its API path when required.") },
-      { key: "translation_ai_model", label: msg("AI model"), kind: "text", hint: msg("Model identifier supplied by your AI provider.") },
-      { key: "translation_ai_api_key", label: msg("AI provider API key"), kind: "password", hint: msg("Used to translate recognized dialogue with your provider. If an external processor is configured, it also receives this key. Stored with Tankarr’s other integration secrets.") },
-      { key: "translation_processor_url", label: msg("External processor URL (optional)"), kind: "url", advanced: true, hint: msg("Leave empty to process on this computer. For advanced OCR and lettering, enter the HTTP(S) address of a compatible external processor. This overrides local processing.") },
-      { key: "translation_processor_token", label: msg("External processor access token (optional)"), kind: "password", advanced: true, hint: msg("Only needed if your external processor requires authentication. This is not your AI provider key and is unused for local processing.") },
+      {
+        key: "translation_backend",
+        label: msg("Translation processing"),
+        kind: "select",
+        options: [["auto", msg("Automatic")], ["mit", msg("Manga Image Translator (MIT)")], ["hook", msg("Script hook")]],
+        hint: msg("Automatic uses the external processor if configured, or basic local OCR. MIT initializes its environment on the first job. A script hook delegates each job to an administrator-installed executable."),
+      },
+      { key: "translation_hook_concurrency", label: msg("Concurrent translation hooks"), kind: "number", visibleWhen: { key: "translation_backend", equals: "hook" }, hint: msg("Maximum concurrent hook attempts (1–16). Match the capacity of your external workers. Each hook must enforce its worker limits.") },
+      { key: "translation_hook", label: msg("Translation hook filename"), kind: "text", visibleWhen: { key: "translation_backend", equals: "hook" }, hint: msg("Filename of an executable in the administrator-configured hooks directory.") },
+      { key: "translation_ai_url", label: msg("Translation API base URL"), kind: "url", hint: msg("A provider with an OpenAI-compatible chat API, including its API path when required.") },
+      { key: "translation_ai_model", label: msg("Dialogue translation model"), kind: "text", hint: msg("Model identifier supplied by your AI provider.") },
+      { key: "translation_ai_api_key", label: msg("Translation API key"), kind: "password" },
+      { key: "translation_vision_url", label: msg("Vision API base URL"), kind: "url", hint: msg("Optional OpenAI-compatible vision endpoint used by MIT and compatible workers.") },
+      { key: "translation_vision_model", label: msg("OCR and balloon lettering model"), kind: "text", hint: msg("Choose a multimodal model for balloon detection, OCR assistance and lettering guidance. This provider can receive page images.") },
+      { key: "translation_vision_api_key", label: msg("Vision API key"), kind: "password", hint: msg("Enter a credential if required by your vision provider.") },
+      { key: "translation_processor_url", label: msg("External processor URL (optional)"), kind: "url", advanced: true, visibleWhen: { key: "translation_backend", equals: "auto" }, hint: msg("Leave empty to process on this computer. For advanced OCR and lettering, enter the HTTP(S) address of a compatible external processor. This overrides local processing.") },
+      { key: "translation_processor_token", label: msg("External processor access token (optional)"), kind: "password", advanced: true, visibleWhen: { key: "translation_backend", equals: "auto" } },
     ],
   },
   {
@@ -311,8 +323,8 @@ const SECTIONS: SectionDef[] = [
     fields: [
       {
         key: "search_languages",
-        label: msg("Search languages"),
-        hint: msg("Choose which translation languages appear when adding a series. English is enabled by default."),
+        label: msg("Library languages"),
+        hint: msg("Choose the reading languages offered when adding a series. Translation can use other source languages."),
         kind: "languages",
       },
       { key: "default_language", label: msg("Default language"), kind: "language" },

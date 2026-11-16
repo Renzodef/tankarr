@@ -111,6 +111,18 @@ from the `.env` file next to the Compose file; Tankarr never reads them.
 The same file publishes the web interface on the host port given by
 `TANKARR_PORT` (default `8787`).
 
+## Automatic chapter retirement
+
+These controls apply to the automatic rule that retires loose chapters once
+all expected books are owned. Explicit book assembly still proves every source
+page and always recycles its inputs. Both controls are environment-only;
+restart Tankarr after changing them.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TANKARR_RETIRE_REDUNDANT_CHAPTERS` | `verified` | `off` disables the automatic rule. `verified` requires a positive content match (at least 80% of pages), one uniquely numbered book, agreement with the chapter map, and coverage of at least 90% of its mapped loose chapters. Unreadable or unverified files stay. `on` explicitly selects the legacy map-only policy and is not recommended. |
+| `TANKARR_RETIRE_RECYCLE` | `true` | Keep automatically retired chapters in the recycle bin for the configured retention period. `false` permits permanent deletion; it is not recommended. |
+
 ## Server and storage
 
 | Variable | Default | Description |
@@ -134,7 +146,7 @@ Languages are written as codes. Supported codes: `ar`, `bg`, `bn`, `ca`, `cs`,
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TANKARR_SEARCH_LANGUAGES` | `en` | The translation languages you want, comma-separated, for example `en,it`. Searches and new series must use one of them. In managed mode, Suwayomi extensions are installed for these languages unless `TANKARR_SUWAYOMI_SOURCE_IDS` lists sources. Settings → General. |
+| `TANKARR_SEARCH_LANGUAGES` | `en` | The reading languages available when adding a series, comma-separated, for example `en,it`. Catalogue searches and translation source languages are independent of this list. In managed mode, Suwayomi extensions are installed for these languages unless `TANKARR_SUWAYOMI_SOURCE_IDS` lists sources. Settings → General. |
 | `TANKARR_DEFAULT_LANGUAGE` | `en` | Language preselected for searches and new series. It must be one of the search languages, otherwise Tankarr does not start. Settings → General. |
 
 ## Monitoring and Wanted
@@ -475,12 +487,47 @@ language. Enable it once here for all monitored series; see
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TANKARR_TRANSLATION_ENABLED` | `false` | Allow translation fallback globally for every monitored series with missing books or chapters, including newly added series. There is no per-series switch. While it is on, a release in the series language is still preferred; if none is usable, a source in any other language may be mapped and translated into the series language. While it is off, sources that do not offer the series language are refused. It only runs when the AI provider URL, model and API key are set. Settings → Translation. |
+| `TANKARR_TRANSLATION_BACKEND` | `auto` | Select `auto` for basic local OCR or the configured HTTP processor, `mit` for the bundled MIT worker, or `hook` for an executable. Settings → Translation. |
+| `TANKARR_TRANSLATION_HOOK_CONCURRENCY` | `2` | Maximum concurrent hook attempts (1–16). Set to the capacity of external workers. Hooks must enforce their own worker limits; this setting does not increase local MIT or HTTP processor concurrency. Settings → Translation. |
+| `TANKARR_TRANSLATION_HOOK` | *unset* | Executable filename for hook mode. Settings → Translation. |
+| `TANKARR_TRANSLATION_HOOK_DIRECTORY` | *unset* | Administrator-controlled directory containing hook executables. Compose uses `/hooks` by default. Restart required. |
+| `TANKARR_TRANSLATION_MIT_WORKER` | bundled worker | Absolute path to the MIT worker when installed separately from the Tankarr checkout or image. Restart required. |
+| `TANKARR_TRANSLATION_VISION_URL` | *unset* | OpenAI-compatible multimodal API base URL for MIT and compatible workers. Settings → Translation. |
+| `TANKARR_TRANSLATION_VISION_MODEL` | *empty* | Independent model for OCR and balloon lettering guidance. Settings → Translation. |
+| `TANKARR_TRANSLATION_VISION_API_KEY` | *unset* | Optional vision API credential. Secret. Settings → Translation. |
+| `TANKARR_MIT_ENGINE_ROOT` | `<data dir>/mit/engine` | Path to the pinned MIT checkout on the worker. |
+| `TANKARR_MIT_ENGINE_REVISION` | *unset* | Full upstream Git commit. If the checkout path is missing, the first MIT job fetches this commit. |
+| `TANKARR_MIT_ENGINE_PYTHON` | *unset* | Interpreter in an existing MIT environment. Skips provisioning. |
+| `TANKARR_MIT_VENV` | `<data dir>/mit/venv` | Persistent virtual environment initialized by the first MIT job. |
+| `TANKARR_MIT_SETUP_PYTHON` | application Python | Interpreter used to build the MIT environment. Compose uses the image's system Python 3.11. |
+| `TANKARR_MIT_CONFIG` | *unset* | Engine configuration JSON file on the worker. |
+| `TANKARR_MIT_GPU` | `false` | Use a GPU in the MIT worker. Requires a compatible GPU environment. |
 | `TANKARR_TRANSLATION_SOURCE_LANGUAGES` | `auto` | Deprecated compatibility setting. Source languages are selected automatically from every language supported by the processing backend. This global value does not restrict acquisition. |
 | `TANKARR_TRANSLATION_AI_URL` | *unset* | Base URL of an AI provider with an OpenAI-compatible chat API, including its API path when the provider needs one. HTTP or HTTPS, without credentials, query or fragment. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_MODEL` | *empty* | Model identifier at that provider. Settings → Translation. |
 | `TANKARR_TRANSLATION_AI_API_KEY` | *unset* | API key of the AI provider. An external processor, when configured, receives it too. Secret; stored in the secrets file. Settings → Translation. |
 | `TANKARR_TRANSLATION_PROCESSOR_URL` | *unset* | Address of an external translation processor for OCR and lettering. When set, it replaces the local processing on the Tankarr host. Settings → Translation (advanced). |
 | `TANKARR_TRANSLATION_PROCESSOR_TOKEN` | *unset* | Bearer token Tankarr sends to the external processor, if the processor requires one. It is not the AI provider key. Secret; stored in the secrets file. Settings → Translation (advanced). |
+
+The optional MIT vision helper allows up to ten minutes of network read inactivity
+for a full-page vision request, accommodating CPU inference. Connecting to the
+vision provider still times out after ten seconds. Job cancellation stops the
+worker process even while a vision request is pending.
+
+For flat-color balloons, vision guidance groups compatible background fragments
+before placing the translated text. This keeps multiple OCR columns in the same
+balloon and handles vivid and pastel fills. Complete oval outlines take priority
+over fragments that extend into nearby artwork. Panel-sized vision boxes are
+checked against OCR geometry, and omitted text receives separate guidance. Lines
+wrap inside the detected contour, including narrow and irregular balloons. The
+tighter complete contour is preferred when a wider color mask reaches artwork.
+Other regions retain the MIT
+renderer; output should still be checked on representative pages of each style.
+
+Hook jobs that report a busy or unavailable worker yield priority to other jobs
+for up to one minute. Concurrent hooks are bounded by
+`TANKARR_TRANSLATION_HOOK_CONCURRENCY` (default two). Tankarr keeps retrying when
+no alternative work is available; a retry uses the same job attempt.
 
 ## Advanced
 

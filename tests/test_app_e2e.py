@@ -137,6 +137,21 @@ def test_artwork_candidate_api_persists_choice_and_serves_versioned_image(
         with Image.open(BytesIO(thumbnail.content)) as resized:
             assert resized.format == "WEBP"
             assert resized.size == (320, 480)
+        repeated = client.get(
+            f"/api/metadata/artwork/{manga_id}/series/thumbnail/320",
+            headers={"If-None-Match": thumbnail.headers["etag"]},
+        )
+        assert repeated.status_code == 304
+        assert repeated.content == b""
+        assert repeated.headers["etag"] == thumbnail.headers["etag"]
+        # A validator for another width must never reuse the wrong image.
+        assert (
+            client.get(
+                f"/api/metadata/artwork/{manga_id}/series/thumbnail/192",
+                headers={"If-None-Match": thumbnail.headers["etag"]},
+            ).status_code
+            == 200
+        )
         assert (
             client.get(
                 f"/api/metadata/artwork/{manga_id}/series/thumbnail/123?v={digest}"
@@ -316,6 +331,14 @@ def test_artwork_hash_resolver_is_shared_by_library_series_and_volumes(
             == "public, max-age=31536000, immutable"
         )
         assert series_artwork.headers["etag"] == f'"sha256-{series_digest}"'
+        for url in (expected_series_url, expected_volume_url):
+            first = client.get(url)
+            revalidated = client.get(
+                url, headers={"If-None-Match": first.headers["etag"]}
+            )
+            assert revalidated.status_code == 304
+            assert revalidated.content == b""
+            assert revalidated.headers["etag"] == first.headers["etag"]
         assert (
             client.get(f"/api/metadata/artwork/{manga_id}/series").headers[
                 "cache-control"
@@ -339,6 +362,12 @@ def test_artwork_hash_resolver_is_shared_by_library_series_and_volumes(
             source_status=[],
         )
         changed_url = client.get(f"/api/manga/{manga_id}").json()["artwork_url"]
+        replaced = client.get(
+            expected_series_url,
+            headers={"If-None-Match": series_artwork.headers["etag"]},
+        )
+        assert replaced.status_code == 200
+        assert replaced.content == changed_content
         assert changed_url == (
             f"/api/metadata/artwork/{manga_id}/series?v={changed_digest}"
         )
@@ -704,7 +733,8 @@ def test_catalogue_add_maps_a_source_downloads_and_imports(tmp_path: Path):
         app.state.providers.clear()
         app.state.providers["suwayomi"] = source
 
-        search = client.get("/api/search", params={"q": "Tankarr", "language": "en"})
+        # Older clients can pass a language outside the library profile.
+        search = client.get("/api/search", params={"q": "Tankarr", "language": "zh"})
         assert search.status_code == 200, search.text
         work = search.json()["works"][0]
         assert work["id"] == "mb:377" and work["provider"] == "catalogue"

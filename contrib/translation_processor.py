@@ -127,6 +127,23 @@ class Processor:
             for key in ("source_sha256", "source_language", "target_language")
         }
         identity["ai"] = {key: ai[key] for key in ("base_url", "model")}
+        if "vision" in request:
+            vision = request["vision"]
+            if not isinstance(vision, dict):
+                raise ValueError("Invalid vision provider settings")
+            parsed = urlsplit(str(vision.get("base_url") or ""))
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or not vision.get("model")
+            ):
+                raise ValueError("Vision endpoint and model are required")
+            identity["vision"] = {key: vision[key] for key in ("base_url", "model")}
+
         with self.lock:
             if (directory / "cancel.json").exists():
                 return {"status": "cancelled"}
@@ -184,6 +201,7 @@ class Processor:
             pass
         finally:
             request.get("ai", {}).pop("api_key", None)
+            request.get("vision", {}).pop("api_key", None)
             with self.lock:
                 if (directory / "cancel.json").exists():
                     state = "cancelled"

@@ -10,6 +10,10 @@ function pageUrl(id: string, index: number, version?: string): string {
   return version ? `${path}?v=${encodeURIComponent(version)}` : path;
 }
 
+function saveDataEnabled(): boolean {
+  return (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData === true;
+}
+
 function BackgroundPagePreload({ id, version, pageCount, page, ready }: {
   id: string; version?: string; pageCount: number; page: number; ready: boolean;
 }) {
@@ -24,16 +28,13 @@ function BackgroundPagePreload({ id, version, pageCount, page, ready }: {
 
   useEffect(() => {
     if (!ready || !visible || !pageCount) return;
-    const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
-    if (saveData) return;
+    if (saveDataEnabled()) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void (async () => {
-        // Nearby pages use image preloads or the webtoon's eager images.
-        // Warm the remaining pages in reading order without retaining their
-        // decoded pixels or competing with the page currently being shown.
-        for (let offset = 0; offset < pageCount; offset += 1) {
-          const index = (page + 3 + offset) % pageCount;
+        // Nearby pages already use image preloads/eager images. Warm only a
+        // small lookahead, never the rest of a volume or a wrap to its start.
+        for (let index = page + 3; index < Math.min(pageCount, page + 7); index += 1) {
           if (controller.signal.aborted) return;
           if (warmedPages.current.has(index)) continue;
           try {
@@ -42,9 +43,22 @@ function BackgroundPagePreload({ id, version, pageCount, page, ready }: {
               priority: "low",
             });
             if (!response.ok) return;
-            await response.arrayBuffer();
+            // Drain chunks into the browser cache without allocating a second
+            // full-size page buffer in JavaScript.
+            const reader = response.body?.getReader();
+            if (reader) {
+              try {
+                while (!(await reader.read()).done) {
+                  if (controller.signal.aborted) { await reader.cancel(); return; }
+                }
+              } finally { reader.releaseLock(); }
+            }
             if (controller.signal.aborted) return;
             warmedPages.current.add(index);
+            // Retain only a small recent set even after reading a long book.
+            if (warmedPages.current.size > 32) {
+              warmedPages.current.delete(warmedPages.current.values().next().value!);
+            }
           } catch {
             return;
           }
@@ -83,6 +97,7 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
 
   useEffect(() => {
     let active = true;
+    for (const image of preloadedPages.current.values()) image.src = "";
     preloadedPages.current.clear();
     setPreloadReady(false);
     setBook(null);
@@ -102,12 +117,14 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
     });
     return () => {
       active = false;
+      for (const image of preloadedPages.current.values()) image.src = "";
       preloadedPages.current.clear();
     };
   }, [id, initialPage]);
 
   const preloadNearbyPages = useCallback((loadedPage: number, pageCount: number, version?: string) => {
     const preloads = preloadedPages.current;
+    if (saveDataEnabled() || document.hidden) return;
     for (const index of [loadedPage + 1, loadedPage + 2, loadedPage - 1]) {
       if (index < 0 || index >= pageCount || preloads.has(index)) continue;
       const image = new Image();
@@ -117,7 +134,10 @@ export default function ReaderPage({ id, initialPage }: { id: string; initialPag
       preloads.set(index, image);
     }
     for (const index of preloads.keys()) {
-      if (index < loadedPage - 1 || index > loadedPage + 2) preloads.delete(index);
+      if (index < loadedPage - 1 || index > loadedPage + 2) {
+        preloads.get(index)!.src = "";
+        preloads.delete(index);
+      }
     }
   }, [id]);
 
