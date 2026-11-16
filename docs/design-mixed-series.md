@@ -41,6 +41,10 @@ and never authorize assembly or deletion.
 Freshly downloaded pages are judged before packaging: black cards above 15 %
 of the chapter, or strip slices in a series that reads in pages, mark the
 download degraded and the recovery replaces it from another source.
+Black cards must be both dark and nearly uniform at source resolution: at
+least 90 % of their pixels share a 17-level luminance band. This keeps sparse
+text slates detectable without rejecting shaded night-scene panels surrounded
+by black gutters. No pages are removed or changed by this classification.
 
 ## 4. Series page: one list, grouped by book
 Operators set book boundaries in a dedicated editor.
