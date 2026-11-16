@@ -103,7 +103,10 @@ def source_languages_to_search(
 
 def processor_languages(manga: dict, settings) -> list[str]:
     languages = fallback_languages(manga)
-    if not settings.translation_processor_url:
+    if (
+        not settings.translation_processor_url
+        and settings.translation_backend == "auto"
+    ):
         from tankarr.local_translation import OCR_LANGUAGES
 
         languages = [language for language in languages if language in OCR_LANGUAGES]

@@ -1827,5 +1827,21 @@
   "← Previous": "← Precedente",
   "↑ Previous": "↑ Precedente",
   "MangaBaka is the only manga catalogue Tankarr queries: it identifies the work and already aggregates MangaUpdates, AniList, MAL and Kitsu. Running works follow the latest chapters on configured sources until MangaBaka marks them complete.": "MangaBaka è il catalogo manga interrogato da Tankarr: identifica l’opera e aggrega già MangaUpdates, AniList, MAL e Kitsu. Le serie in corso seguono gli ultimi capitoli delle fonti configurate finché MangaBaka non le indica come concluse.",
-  "Replace an owned chapter only with a strictly preferred source in the same language and numbering. The old file stays until the replacement is verified. Equal preferences, age and size never trigger replacement.": "Sostituisce un capitolo posseduto solo con una fonte strettamente preferita, nella stessa lingua e con la stessa numerazione. Il vecchio file resta fino alla verifica della sostituzione. Preferenze equivalenti, età e dimensioni non avviano sostituzioni."
+  "Replace an owned chapter only with a strictly preferred source in the same language and numbering. The old file stays until the replacement is verified. Equal preferences, age and size never trigger replacement.": "Sostituisce un capitolo posseduto solo con una fonte strettamente preferita, nella stessa lingua e con la stessa numerazione. Il vecchio file resta fino alla verifica della sostituzione. Preferenze equivalenti, età e dimensioni non avviano sostituzioni.",
+  "Translate missing books or chapters into the series language. Choose where to process them and configure the models used by the worker.": "Traduci i volumi o i capitoli mancanti nella lingua della serie. Scegli dove elaborarli e configura i modelli usati dal worker.",
+  "Translation processing": "Elaborazione della traduzione",
+  "Manga Image Translator (MIT)": "Manga Image Translator (MIT)",
+  "Script hook": "Script esterno",
+  "Automatic uses the external processor if configured, or basic local OCR. MIT initializes its environment on the first job. A script hook delegates each job to an administrator-installed executable.": "La modalità automatica usa il processore esterno, se configurato, oppure l’OCR locale di base. MIT prepara l’ambiente al primo lavoro. Lo script esterno delega ogni lavoro a un eseguibile installato dall’amministratore.",
+  "Translation hook filename": "Nome del file dello script",
+  "Filename of an executable in the administrator-configured hooks directory.": "Nome di un eseguibile nella cartella degli script configurata dall’amministratore.",
+  "Translation API base URL": "URL base dell’API di traduzione",
+  "Dialogue translation model": "Modello di traduzione dei dialoghi",
+  "Translation API key": "Chiave API di traduzione",
+  "Vision API base URL": "URL base dell’API del modello visivo",
+  "Optional OpenAI-compatible vision endpoint used by MIT and compatible workers.": "Endpoint visivo facoltativo compatibile con OpenAI, usato da MIT e dai worker compatibili.",
+  "OCR and balloon lettering model": "Modello per OCR e lettering nei balloon",
+  "Choose a multimodal model for balloon detection, OCR assistance and lettering guidance. This provider can receive page images.": "Scegli un modello multimodale per rilevare i balloon e assistere OCR e lettering. Il provider può ricevere le immagini delle tavole.",
+  "Vision API key": "Chiave API del modello visivo",
+  "Enter a credential if required by your vision provider.": "Inserisci una credenziale se il provider del modello visivo la richiede."
 }

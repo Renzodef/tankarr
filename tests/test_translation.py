@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import zipfile
 from unittest.mock import AsyncMock, Mock
 
@@ -211,11 +212,17 @@ def test_translation_settings_defaults_secrets_and_validation(tmp_path):
         {
             "translation_ai_api_key": "hidden-provider-key",
             "translation_processor_token": "hidden-processor-token",
+            "translation_vision_url": "https://vision.example.test/v1",
+            "translation_vision_model": "test-vision",
+            "translation_vision_api_key": "hidden-vision-key",
         },
     )
     assert "hidden-provider-key" not in json.dumps(database.get_setting_overrides())
     assert "hidden-provider-key" not in json.dumps(settings_view(settings, database))
     assert "hidden-processor-token" not in repr(settings)
+    assert "hidden-vision-key" not in repr(settings)
+    assert "hidden-vision-key" not in json.dumps(settings_view(settings, database))
+    assert "hidden-vision-key" not in json.dumps(database.get_setting_overrides())
     update_settings(settings, database, {"translation_ai_api_key": SECRET_PLACEHOLDER})
     assert settings.translation_ai_api_key == "hidden-provider-key"
     with pytest.raises(ValueError):
@@ -555,6 +562,47 @@ async def test_native_first_and_foreign_queue_idempotence(translation, monkeypat
     assert database.get_manga("manga-1")["preferred_language"] == "en"
     assert manager.store.list()[0]["source"]["language"] == "ja"
     assert not database.get_chapter(source["id"])["downloaded"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_vision", ["vision-model", "wrong-model"])
+async def test_hook_delegates_and_validates_selected_models(
+    translation, tmp_path, receipt_vision
+):
+    manager, database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    manager.settings.translation_hook = "dispatch"
+    manager.settings.translation_hook_directory = tmp_path
+    manager.settings.translation_vision_url = "http://vision.local/v1"
+    manager.settings.translation_vision_model = "vision-model"
+    manager.settings.translation_vision_api_key = "vision-test-secret"
+    job = stage(manager, source, tmp_path)
+    output = output_archive(manager, job, tmp_path, vision_model=receipt_vision)
+    executable = tmp_path / "dispatch"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, shutil, sys\n"
+        "job = json.load(sys.stdin)\n"
+        "assert job['event'] == 'translation.requested'\n"
+        "assert job['protocol_version'] == 1 and job['attempt'] == 0\n"
+        "assert job['ai']['api_key'] == 'ai-test-secret'\n"
+        "assert job['vision']['api_key'] == 'vision-test-secret'\n"
+        "assert job['vision']['model'] == 'vision-model'\n"
+        f"shutil.copyfile({str(output)!r}, job['result_path'])\n"
+    )
+    executable.chmod(0o700)
+    await manager._process_attempt(job)
+    result = manager.store.get(job["id"])
+    if receipt_vision == "wrong-model":
+        assert result["status"] == "failed"
+        assert result["result_chapter_id"] is None
+        return
+    assert result["status"] == "completed"
+    imported = database.get_chapter(result["result_chapter_id"])
+    with zipfile.ZipFile(imported["library_path"]) as archive:
+        metadata = archive.read("ComicInfo.xml").decode()
+    assert "vision model vision-model" in metadata
+    assert "vision-test-secret" not in metadata
 
 
 @pytest.mark.asyncio
