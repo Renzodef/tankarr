@@ -1027,6 +1027,51 @@ async def test_unavailable_hook_jobs_do_not_starve_other_workers(
 
 
 @pytest.mark.asyncio
+async def test_expired_hook_retries_are_fair_while_a_long_job_is_running(
+    translation, monkeypatch
+):
+    manager, _database, _service, source = translation
+    manager.settings.translation_backend = "hook"
+    jobs = [
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+        for n in range(4)
+    ]
+    now = [100.0]
+    monkeypatch.setattr(
+        "tankarr.translation.time", SimpleNamespace(monotonic=lambda: now[0])
+    )
+    manager._hook_retry_after = {
+        (job["id"], job["attempts"]): 90.0 + n for n, job in enumerate(jobs[1:])
+    }
+    three_attempts = asyncio.Event()
+    hold_long_job = asyncio.Event()
+    calls = []
+
+    async def process(job):
+        if job["id"] == jobs[0]["id"]:
+            await hold_long_job.wait()
+            return
+        calls.append(job["id"])
+        # A slow availability check can outlast the previous job's cooldown.
+        now[0] += 61
+        if len(calls) == 3:
+            three_attempts.set()
+        await asyncio.sleep(0)
+        raise WorkerUnavailable("Worker is busy")
+
+    monkeypatch.setattr(manager, "process", process)
+    task = asyncio.create_task(manager._process_hooks(jobs))
+    try:
+        await asyncio.wait_for(three_attempts.wait(), 2)
+        assert calls[:3] == [job["id"] for job in jobs[1:]]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_unavailable_hook_retries_when_there_is_no_alternative(
     translation, monkeypatch
 ):
