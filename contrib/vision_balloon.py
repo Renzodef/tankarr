@@ -334,7 +334,17 @@ def merge_balloon_fragments(shapes, boxes, regions=()):
     import numpy as np
 
     groups = defaultdict(list)
-    for shape in shapes:
+    for bounds, mask, color in shapes:
+        # Printed columns can leave a deep opening in an otherwise oval
+        # background. Recover only near-elliptical hulls; jagged dialogue
+        # balloons must retain their intentional concavities.
+        points = cv2.findNonZero(mask)
+        if points is not None and ellipse_fit_score(mask) < 0.97:
+            hull = np.zeros_like(mask)
+            cv2.fillConvexPoly(hull, cv2.convexHull(points), 1)
+            if mask.sum() >= 0.8 * hull.sum() and ellipse_fit_score(hull) >= 0.97:
+                mask = hull
+        shape = (bounds, mask, color)
         bounds = shape[0]
         ranked = []
         for index, box in enumerate(boxes):
@@ -507,7 +517,7 @@ async def render_guided(fallback, config, ctx):
         layout = fit_mask(text, interior)
         if layout is None:
             continue
-        erase = cv2.erode(mask, np.ones((5, 5), np.uint8))
+        erase = cv2.erode(mask, np.ones((3, 3), np.uint8))
         placements.append((x, y, right, bottom, erase, color, layout))
         assigned.update(map(id, group))
 
@@ -520,8 +530,10 @@ async def render_guided(fallback, config, ctx):
             # native inpainting only around regions still rendered by MIT.
             clean = source.copy()
             for region in regions:
+                if id(region) in assigned:
+                    continue
                 x1, y1, x2, y2 = map(int, region.xyxy)
-                padding = 0 if id(region) in assigned else 16
+                padding = 16
                 x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
                 x2, y2 = min(width, x2 + padding), min(height, y2 + padding)
                 clean[y1:y2, x1:x2] = inpainted[y1:y2, x1:x2]

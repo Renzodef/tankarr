@@ -45,6 +45,15 @@ def test_neighbouring_same_color_balloons_stay_separate():
     assert [shape[0] for shape in result] == [first[0], second[0]]
 
 
+def test_printed_column_opening_in_oval_does_not_split_english_layout():
+    bounds, whole, color = oval()
+    broken = whole.copy()
+    broken[:150, 95:120] = 0
+    result = vision.merge_balloon_fragments([(bounds, broken, color)], [bounds])
+    assert result[0][1][80, 110] == 1
+    assert result[0][1].sum() >= whole.sum() * 0.98
+
+
 def test_text_color_fragment_does_not_replace_balloon_background():
     shape = oval()
     fragment = (
