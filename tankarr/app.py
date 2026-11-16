@@ -1934,8 +1934,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"{language} is disabled. Enable it under Settings > "
-                    "General > Search languages."
+                    f"Choose {language} under Settings > General > "
+                    "Library languages before using it as a reading language."
                 ),
             )
         return language
@@ -2490,12 +2490,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return record
 
     @app.get("/api/search")
-    async def search(
-        q: str = Query(min_length=2, max_length=2_000),
-        language: str | None = Query(default=None, min_length=2, max_length=16),
-        provider_name: str = Query(default="all", alias="provider", max_length=32),
-    ):
-        language = enabled_search_language(language)
+    async def search(q: str = Query(min_length=2, max_length=2_000)):
         parsed_query = urlsplit(q.strip())
         query_mode = (
             "url"
