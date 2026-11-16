@@ -665,6 +665,16 @@ export const api = {
       `/api/manga/${encodeURIComponent(mangaId)}/volumes/${encodeURIComponent(volume)}/monitoring`,
       { method: "PATCH", body: JSON.stringify({ state }) },
     ),
+  libraryFolderCleanup: () => request<{
+    empty_count: number;
+    empty_folders: string[];
+    review_count: number;
+    review_folders: string[];
+  }>("/api/library/folders/cleanup"),
+  deleteEmptyLibraryFolders: (folders: string[]) =>
+    request<{ removed: string[]; skipped: string[] }>("/api/library/folders/cleanup", {
+      method: "POST", body: JSON.stringify({ folders }),
+    }),
   libraryOrphans: () => request<LibraryOrphans>("/api/library/orphans"),
   deleteLibraryOrphans: (folders?: string[]) =>
     request<{ deleted: number; folders: string[]; errors: string[] }>(
