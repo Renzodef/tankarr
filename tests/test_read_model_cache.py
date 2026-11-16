@@ -151,7 +151,7 @@ def test_publication_date_expires_every_layer_without_a_database_write(
         assert card["library_count"]["available_count"] == 2
 
 
-def test_recovery_changes_the_unit_in_library_wanted_and_series(cache_app):
+def test_ambiguous_offer_preserves_target_edition_in_all_read_models(cache_app):
     database = cache_app.state.database
     add_series(database, "recovery", status="ended")
     database.save_series_metadata(
@@ -177,13 +177,13 @@ def test_recovery_changes_the_unit_in_library_wanted_and_series(cache_app):
         "recovery", "volume:1", channel="indexer_book", outcome="ambiguous"
     )
     wanted = client.get("/api/wanted?fresh=true").json()
-    assert wanted[0]["chapters"][0]["slot_key"] == "chapter:1"
+    assert wanted[0]["chapters"][0]["slot_key"] == "volume:1"
     assert (
         client.get("/api/manga?fresh=true").json()[0]["effective_series_unit"]
-        == "chapters"
+        == "volumes"
     )
     series = client.get("/api/manga/recovery?compact=true&fresh=true").json()
-    assert series["chapter_index"]["series_unit"] == "chapters"
+    assert series["chapter_index"]["series_unit"] == "volumes"
 
 
 def test_source_settings_and_health_invalidate_wanted_without_release_changes(

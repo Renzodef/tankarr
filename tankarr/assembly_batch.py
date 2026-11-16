@@ -103,28 +103,37 @@ class BookAssemblyBatch:
 
     async def run_automatic(self, *, limit: int = 4) -> dict[str, Any]:
         result: dict[str, Any] = {"assembled": 0, "errors": []}
-        if self._busy() or self.service.settings.restored_safe_mode:
+        if (
+            not self.service.settings.assemble_books_automatically
+            or self._busy()
+            or self.service.settings.restored_safe_mode
+        ):
             return result
         self.service.assert_mutations_allowed()
         with self.database.connect() as connection:
             series = [
                 str(row["id"])
                 for row in connection.execute(
-                    "SELECT id FROM manga WHERE assemble_books_automatically=1 ORDER BY id"
+                    """SELECT m.id FROM manga m WHERE m.monitored=1
+                    AND COALESCE(m.library_status_override, '') != 'up_to_date'
+                    AND EXISTS (SELECT 1 FROM chapter_release c
+                        WHERE c.manga_id=m.id AND c.downloaded=1
+                        AND COALESCE(c.release_unit, 'chapter') = 'chapter')
+                    ORDER BY m.id"""
                 )
             ]
         attempted = 0
         for manga_id in series:
             groups = await asyncio.to_thread(load_series_units, self.database, manga_id)
+            if groups.get("form") != "volumes":
+                continue
             for group in groups["books"]:
                 if not group["can_assemble"]:
                     continue
                 if attempted >= limit or self._busy():
                     return result
-                if not self.database.get_manga(
-                    manga_id, include_logical_counts=False
-                ).get("assemble_books_automatically"):
-                    break
+                if not self.service.settings.assemble_books_automatically:
+                    return result
                 try:
                     attempted += 1
                     preview = await asyncio.to_thread(

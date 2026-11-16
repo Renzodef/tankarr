@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     # and stop monitoring chapter releases that have no file. An explicit
     # unit on the series is left alone. Downloaded chapter files stay.
     auto_unit_strategy: bool = True
+    assemble_books_automatically: bool = False
     source_priority_fresh: str = ""
     source_priority_backfill: str = ""
     suwayomi_enabled: bool = False

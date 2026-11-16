@@ -270,6 +270,7 @@ def test_complete_read_map_counts_parts_without_inventing_parent_chapters():
     index = build_chapter_index(
         {
             "status": "ended",
+            "series_unit_override": "chapters",
             "monitor_mode": "all",
             "expected_count_override": 5,
             "expected_count_unit_override": "chapter",
@@ -2334,6 +2335,7 @@ def test_a_source_list_that_matches_the_count_ends_the_numbering_at_its_decimals
         "id": "s",
         "title": "SPRIGGAN",
         "status": "completed",
+        "series_unit_override": "chapters",
         "last_chapter": "62",
         "monitor_mode": "all",
         "preferred_language": "en",
@@ -2629,7 +2631,11 @@ def test_owned_afterword_does_not_cover_a_missing_opening_chapter():
 
 
 def test_unmapped_owned_chapter_with_volume_tag_cannot_supply_a_whole_book():
-    manga = {"status": "ended", "monitor_mode": "all"}
+    manga = {
+        "status": "ended",
+        "series_unit_override": "chapters",
+        "monitor_mode": "all",
+    }
     chapters = [
         {
             **release(str(number), volume="1", downloaded=number != 1),

@@ -80,27 +80,42 @@ def test_running_and_webtoon_series_read_as_chapters():
         series_form({"status": "ongoing", "status_override": "ended"}, None, 3)[0]
         == "volumes"
     )
-    # a unit stored by hand decides nothing: the work and the shelf do. A
-    # running series pinned to books is still read as a list of chapters.
-    assert series_form(
-        {"status": "ongoing", "series_unit_override": "volumes"}, None, 21
-    ) == ("chapters", "running series: chapters until it ends")
-    # and a webtoon pinned to books is still read by episode
+    # An explicit operator format wins over automatic media defaults.
+    assert (
+        series_form({"status": "ongoing", "series_unit_override": "volumes"}, None, 21)[
+            0
+        ]
+        == "volumes"
+    )
     assert (
         series_form(
             {"status": "ended", "series_unit_override": "volumes"},
             {"reading_direction": "WEBTOON"},
             5,
         )[0]
-        == "chapters"
+        == "volumes"
     )
-    # the pin towards chapters is ignored in the same way: a finished work
-    # with a known number of books is a shelf of books
     assert (
         series_form({"status": "ended", "series_unit_override": "chapters"}, None, 44)[
             0
         ]
+        == "chapters"
+    )
+    assert (
+        series_form(
+            {"status": "ended", "original_language": "ja"},
+            {"reading_direction": "WEBTOON"},
+            15,
+        )[0]
         == "volumes"
+    )
+    assert (
+        series_form(
+            {"status": "ended", "original_language": "ko"},
+            {"reading_direction": "WEBTOON"},
+            15,
+        )[0]
+        == "chapters"
     )
 
 

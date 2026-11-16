@@ -595,7 +595,6 @@ export type AuthorCredit = {
 
 export type Manga = MangaSummary & {
   preferred_source_key?: string | null;
-  assemble_books_automatically?: boolean;
   created_at: string;
   monitor_mode: MonitorMode;
   series_unit_override?: SeriesUnit | null;
@@ -1639,3 +1638,8 @@ export type SeriesAuditResult = {
   manga_id: string; files_retired: number; files_deleted: number; chapters_reset: number;
   releases_removed: number; source_removed: boolean; cleanup_errors: string[]; cleanup_warning?: string | null;
 };
+
+export interface ChapterRecoveryPreview {
+  chapters: { id: string; chapter: string; source: string }[];
+  confirmation_snapshot: string;
+}

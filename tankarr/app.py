@@ -3268,9 +3268,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.patch("/api/manga/{manga_id}")
     async def update_manga(manga_id: str, request: UpdateMangaRequest):
+        updates = request.model_dump(exclude_none=True)
+        if "assemble_books_automatically" in updates:
+            raise HTTPException(
+                422, "Automatic assembly is a global setting; use Settings"
+            )
         try:
             service.assert_mutations_allowed()
-            updates = request.model_dump(exclude_none=True)
             queued = 0
             direct_updates = {
                 key: updates[key]
@@ -3282,7 +3286,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "verified_chapter_source",
                     "expected_count_override",
                     "edition_book_count",
-                    "assemble_books_automatically",
                     "reader_mode_override",
                     "reader_direction_override",
                 )
@@ -5790,6 +5793,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         maintenance=maintenance,
     )
 
+    from tankarr.chapter_recovery import register_chapter_recovery_routes
+
+    register_chapter_recovery_routes(app, service, worker)
     register_chapter_map_routes(app, database, service)
     register_verified_book_routes(app, database, service)
     register_native_reader_routes(app, settings, database)

@@ -84,25 +84,26 @@ def test_foreign_volume_pack_switches_when_translation_is_on():
     assert decision.translation_used is True
     assert decision.languages == ("zh",)
     assert decision.volumes == (1, 2, 3, 4, 5, 6)
-    assert "chapters do not cover" in decision.reason
+    assert decision.reason == "finished series with 6 books"
 
 
-def test_real_chapter_coverage_stays_on_chapters():
+def test_complete_chapters_do_not_change_volume_target():
     releases = [_chapter(n) for n in range(1, 54)]
     releases.extend(_foreign_volume(n) for n in range(1, 7))
     decision = _decide(releases)
 
-    assert decision.action == "stay"
-    assert decision.unit == "chapters"
-    assert decision.reason == "chapters already cover the edition"
+    assert decision.action == "switch"
+    assert decision.unit == "volumes"
+    assert decision.reason == "finished series with 6 books"
 
 
-def test_translation_off_does_not_count_foreign_only_volumes():
+def test_translation_off_keeps_volume_target_without_selecting_foreign_books():
     releases = [_foreign_volume(n) for n in range(1, 7)]
     decision = _decide(releases, translation_enabled=False)
 
-    assert decision.action == "stay"
-    assert "translation is off" in decision.reason
+    assert decision.action == "switch"
+    assert decision.translation_used is False
+    assert decision.reason == "finished series with 6 books"
 
 
 def test_preferred_language_volumes_switch_without_translation():
@@ -126,10 +127,11 @@ def test_preferred_language_volumes_switch_without_translation():
     assert decision.languages == ("en",)
 
 
-def test_partial_volumes_and_a_lone_count_do_not_switch():
+def test_partial_offers_use_known_edition_but_unreliable_count_does_not():
     partial = _decide([_foreign_volume(n) for n in range(1, 4)])
-    assert partial.action == "stay"
-    assert partial.reason == "volumes do not cover the edition"
+    assert partial.action == "switch"
+    assert partial.reason == "finished series with 6 books"
+    assert partial.volumes == ()
 
     lone = _decide(
         [_foreign_volume(n) for n in range(1, 7)],
@@ -169,8 +171,8 @@ def test_unknown_chapter_total_with_real_chapters_stays():
             "count_confidence": {"volume": "agreed", "chapter": "lone"},
         },
     )
-    assert decision.action == "stay"
-    assert "chapter total is unknown" in decision.reason
+    assert decision.action == "switch"
+    assert decision.reason == "finished series with 6 books"
 
 
 def test_books_on_disk_switch_a_finished_series():
@@ -191,7 +193,7 @@ def test_books_on_disk_switch_a_finished_series():
     decision = _decide(releases, translation_enabled=False)
 
     assert decision.action == "switch"
-    assert "already in the library" in decision.reason
+    assert decision.reason == "finished series with 6 books"
 
 
 def test_running_work_with_real_chapters_is_not_flipped_for_owned_books():
@@ -333,7 +335,7 @@ def test_apply_switches_clears_chapter_wanted_and_keeps_files(tmp_path: Path):
     assert result["switched"] is True
     assert result["translation_used"] is True
     assert result["reclassified"] == 6
-    assert result["unmonitored_chapters"] == 2
+    assert result["unmonitored_chapters"] == 0
     assert result["cancelled_jobs"] == 1
     manga = database.get_manga("rasputin")
     assert manga["series_unit_override"] == "volumes"
@@ -341,7 +343,7 @@ def test_apply_switches_clears_chapter_wanted_and_keeps_files(tmp_path: Path):
     assert strategy["operator"] is False
     assert strategy["translation_used"] is True
     assert strategy["languages"] == ["zh"]
-    assert "chapters do not cover" in strategy["reason"]
+    assert strategy["reason"] == "finished series with 6 books"
 
     owned = database.get_chapter("owned-1")
     assert owned["downloaded"] is True
@@ -351,8 +353,8 @@ def test_apply_switches_clears_chapter_wanted_and_keeps_files(tmp_path: Path):
 
     gap = database.get_chapter("gap-40")
     assert gap["downloaded"] is False
-    assert gap["monitored"] is False
-    assert database.get_chapter("gap-41")["monitored"] is False
+    assert gap["monitored"] is True
+    assert database.get_chapter("gap-41")["monitored"] is True
 
     for number in range(1, 7):
         book = database.get_chapter(f"zh-{number}")
@@ -393,14 +395,14 @@ def test_apply_does_not_override_an_explicit_chapters_choice(tmp_path: Path):
     assert database.get_chapter("owned-1")["library_path"]
 
 
-def test_apply_leaves_chapters_when_translation_is_off(tmp_path: Path):
+def test_apply_volume_format_is_independent_of_translation(tmp_path: Path):
     database, service = _service(tmp_path, translation_enabled=False)
     _seed(database)
 
     result = service.apply_unit_strategy("rasputin")
 
-    assert result["action"] == "stay"
-    assert "translation is off" in result["reason"]
-    assert database.get_manga("rasputin")["series_unit_override"] is None
+    assert result["action"] == "switch"
+    assert result["translation_used"] is False
+    assert database.get_manga("rasputin")["series_unit_override"] == "volumes"
     assert database.get_chapter("gap-40")["monitored"] is True
     assert database.get_chapter("zh-1")["release_unit"] == "volume"

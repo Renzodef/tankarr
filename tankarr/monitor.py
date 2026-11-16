@@ -637,6 +637,8 @@ class ReleaseMonitor:
             queued += len(hunted.get("grabbed") or [])
             recovered = await self.recover_wanted_slots(entry, hunted)
             queued += int(recovered.get("grabbed") or 0)
+            if self.settings.assemble_books_automatically:
+                queued += await self.queue_missing(manga_id)
             translated = (
                 await self.translations.queue_missing(manga_id)
                 if self.translations
@@ -748,6 +750,8 @@ class ReleaseMonitor:
                         queued += len(hunted.get("grabbed") or [])
                         recovered = await self.recover_wanted_slots(entry, hunted)
                         queued += int(recovered.get("grabbed") or 0)
+                        if self.settings.assemble_books_automatically:
+                            queued += await self.queue_missing(manga_id)
                         searched += int(recovered.get("searched") or 0)
                     if self.translations is not None:
                         await self.translations.queue_missing(manga_id)
@@ -1958,11 +1962,21 @@ class ReleaseMonitor:
         data = (metadata_row or {}).get("data") or {}
         publication = publication_summary(manga, data)
         continuing = publication["status"] == "continuing" or publication["paused"]
-        current = (
-            self.database.preferred_missing_releases(str(manga["id"]))
-            if continuing
-            else []
-        )
+        current = self.database.preferred_missing_releases(str(manga["id"]))
+        busy_volumes = {
+            int(str(row["volume"]))
+            for row in current
+            if row.get("queue_status") and str(row.get("volume") or "").isdigit()
+        }
+        if self.settings.assemble_books_automatically:
+            from tankarr.series_units import load_series_units
+
+            busy_volumes.update(
+                int(str(group["volume"]))
+                for group in load_series_units(self.database, str(manga["id"]))["books"]
+                if group.get("can_assemble")
+                and str(group.get("volume") or "").isdigit()
+            )
         offered_chapters = {
             str(release["chapter"])
             for release in current
@@ -2011,6 +2025,7 @@ class ReleaseMonitor:
                 str(manga["id"]), set()
             )
         }
+        taken.update(str(volume) for volume in busy_volumes)
         taken.update(
             str(release["volume"])
             for release in current
