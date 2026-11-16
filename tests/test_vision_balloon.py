@@ -81,6 +81,21 @@ def test_intact_outline_wins_over_a_duplicate_with_artwork_extension():
     assert np.array_equal(result[0][1], mask)
 
 
+def test_narrow_oval_fragment_does_not_leave_the_last_text_column():
+    bounds, complete, color = oval(width=180)
+    complete[125:145, 172:] = 0
+    narrow = oval(width=150)
+    result = vision.merge_balloon_fragments(
+        [(bounds, complete, color), narrow], [bounds]
+    )
+    assert len(result) == 1
+    assert result[0][0] == bounds
+    # The rightmost text column lies inside the full balloon, outside the
+    # deceptively regular narrower fragment.
+    assert result[0][1][160, 165] == 1
+    assert result[0][1][0, 0] == 0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("background", [[40, 48, 110], [220, 0, 30], [190, 170, 220]])
 @pytest.mark.parametrize("empty_guidance", [False, True])
