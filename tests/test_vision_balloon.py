@@ -291,3 +291,52 @@ def test_bright_vertical_caption_preserves_art_and_uses_bounded_lettering():
         )
     assert np.any(np.all(result[70:270, 90:145] == [21, 21, 21], axis=2))
     assert ctx.text_regions == [region]
+
+
+def test_loose_caption_guidance_does_not_choose_adjacent_artwork_color():
+    caption = (
+        (90, 70, 145, 270),
+        np.ones((200, 55), np.uint8),
+        np.array([227, 74, 46], np.uint8),
+    )
+    artwork = (
+        (70, 210, 215, 390),
+        np.ones((180, 145), np.uint8),
+        np.array([185, 213, 244], np.uint8),
+    )
+    region = SimpleNamespace(xyxy=[95, 78, 140, 262])
+    shapes = vision.merge_balloon_fragments(
+        [caption, artwork], [(65, 60, 160, 395)], [region]
+    )
+    assert len(shapes) == 1
+    assert shapes[0][0] == caption[0]
+    assert np.array_equal(shapes[0][2], caption[2])
+
+
+@pytest.mark.asyncio
+async def test_sky_ring_around_balloon_does_not_replace_its_ink_color():
+    source = np.full((700, 500, 3), [140, 160, 170], dtype=np.uint8)
+    ring_bounds, ring, _ = oval(x=55, y=40, width=190, height=310)
+    x, y, right, bottom = ring_bounds
+    source[y:bottom, x:right][ring != 0] = [185, 213, 244]
+    bounds, mask, color = oval(x=65, y=50, width=170, height=290)
+    x, y, right, bottom = bounds
+    source[y:bottom, x:right][mask != 0] = color
+    region = SimpleNamespace(
+        xyxy=[100, 110, 200, 270],
+        center=[150, 190],
+        translation="The original balloon color survives.",
+    )
+    ctx = SimpleNamespace(
+        img_rgb=source,
+        img_inpainted=np.zeros_like(source),
+        vision_boxes={ring_bounds: ""},
+        text_regions=[region],
+    )
+
+    async def fallback(_config, _ctx):
+        pytest.fail("The balloon should use guided lettering")
+
+    result = await vision.render_guided(fallback, None, ctx)
+    assert np.array_equal(result[90, 150], BLUE)
+    assert np.array_equal(result[45, 150], source[45, 150])
