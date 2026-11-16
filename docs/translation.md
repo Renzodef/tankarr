@@ -151,6 +151,12 @@ translation endpoint receives recognized text. MIT falls back to its native
 rendering where the vision geometry cannot be matched confidently. Automatic
 mode with basic local Tesseract uses its own OCR and renderer.
 
+If both vision requests return unusable balloon geometry, the worker records the
+page for review and continues checkpointing other pages. It withholds the entire
+archive until every page passes; the existing limit on refused pages still stops
+a run with widespread failures. It does not repeat OCR for a geometry failure.
+Vision connection errors and HTTP failures stop the run immediately.
+
 ## Script hook and external worker routing
 
 Select **Script hook** and save an executable filename. The host administrator

@@ -1644,6 +1644,98 @@ async def test_refused_pages_are_put_off_and_the_job_stops_at_the_end_listing_al
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["geometry", "http", "connection"])
+async def test_invalid_balloon_geometry_defers_only_that_page(
+    tmp_path, monkeypatch, failure
+):
+    runner = load("translate_archive")
+    vision = load("vision_balloon")
+    monkeypatch.setitem(sys.modules, "vision_balloon", vision)
+    source, request, output, checkpoints = _book(
+        monkeypatch, tmp_path, runner, [False, False]
+    )
+    request["vision"] = {
+        "base_url": "https://vision.example.test/v1",
+        "model": "vision",
+    }
+    fallback = _fallback(runner, monkeypatch)
+    engine = sys.modules["manga_translator"].MangaTranslator
+    original_translate = engine.translate
+    translated_pages = []
+    visited_pages = []
+
+    async def translate(self, image, config):
+        ctx = await original_translate(self, image, config)
+        ctx.img_rgb = image
+        ctx.text_regions[0].xyxy = (1, 2, 8, 20)
+        visited_pages.append(image.getpixel((0, 0))[0])
+        await self._run_text_translation(config, ctx)
+        return ctx
+
+    async def translate_text(self, config, ctx):
+        translated_pages.append(ctx.img_rgb.getpixel((0, 0))[0])
+
+    monkeypatch.setattr(engine, "translate", translate)
+    monkeypatch.setattr(engine, "_run_text_translation", translate_text, raising=False)
+    monkeypatch.setattr(Image, "fromarray", lambda image: image.copy())
+    calls = []
+
+    def answer(request):
+        calls.append(json.loads(request.content))
+        if failure == "connection":
+            raise httpx.ConnectError("offline", request=request)
+        if failure == "http":
+            return httpx.Response(503)
+        # Both attempts on page one return the observed whole-page rectangle.
+        content = (
+            '{"boxes": [[28, 28, 1000, 972]]}'
+            if len(calls) == 1
+            else '[{"bbox_2d": [28, 28, 1000, 972], "text": ""}]'
+            if len(calls) == 2
+            else '{"boxes": [[10, 20, 400, 600]]}'
+        )
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": content}}]}
+        )
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        vision,
+        "httpx",
+        SimpleNamespace(
+            Timeout=httpx.Timeout,
+            AsyncClient=lambda **kwargs: client_class(
+                transport=httpx.MockTransport(answer), **kwargs
+            ),
+        ),
+    )
+    error = runner.SuspectPage if failure == "geometry" else httpx.HTTPError
+    with pytest.raises(error) as stopped:
+        await runner.translate(source, output, request, checkpoints=checkpoints)
+    assert not output.exists()
+    assert not output.with_suffix(".partial").exists()
+    assert fallback["installed"] == 0
+    if failure == "geometry":
+        assert "1 page(s) need review (1)" in str(stopped.value)
+        assert "Page 1: Vision provider returned no usable balloon geometry" in str(
+            stopped.value
+        )
+        assert visited_pages == [1, 2] and translated_pages == [2]
+        assert len(calls) == 3 and _saved_pages(checkpoints) == [2]
+        rejected = [
+            json.loads(line)
+            for line in (checkpoints / "rejected-pages.jsonl").read_text().splitlines()
+        ]
+        assert len(rejected) == 1 and rejected[0]["page"] == 1
+        assert "no usable balloon geometry" in rejected[0]["problem"]
+    else:
+        # Service outages stop the job instead of marking every page suspect.
+        assert visited_pages == [1] and translated_pages == []
+        assert len(calls) == 1 and _saved_pages(checkpoints) == []
+        assert not (checkpoints / "rejected-pages.jsonl").exists()
+
+
+@pytest.mark.asyncio
 async def test_a_book_may_have_five_refused_pages_but_not_a_sixth(
     tmp_path, monkeypatch
 ):
