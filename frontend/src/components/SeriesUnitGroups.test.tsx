@@ -134,13 +134,12 @@ it("shows a complete book collection with its inferred layout, never as a proble
   expect(screen.getByText(/All expected book files present/).textContent).toBe("10 books on disk · All expected book files present");
   expect(screen.getByText(/Book boundaries:/)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Correct the map" })).toBeNull();
-  // The nine inferred ranges are hidden because no source maps their pages.
-  expect(screen.getAllByText(/ch\. /)).toHaveLength(1);
+  expect(screen.queryByText(/ch\. /)).toBeNull();
   expect(screen.queryByText(/estimated/i)).toBeNull();
   expect(screen.getByRole("button", { name: "Edit book boundaries" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Expand book/ })).toBeNull();
   const first = within(screen.getByRole("region", { name: "Book 1" }));
-  expect(first.getByText(/294 pages/).getAttribute("title")).toBe("ch. 1–1 · catalogue boundaries · 294 pages");
+  expect(first.getByText("294 pages").getAttribute("title")).toBe("294 pages");
   expect(first.getByRole("link", { name: "Read book 1 in Stump" })).toBeTruthy();
 });
 
@@ -240,29 +239,30 @@ it("reverses books and chapters together and lists everything at once", () => {
   expect(screen.queryByRole("button", { name: /more chapters/ })).toBeNull();
 });
 
-it("shows an owned book's range without repeating how it was laid out", () => {
+it("shows the same page count for owned books with exact and inferred ranges", () => {
   view(data([
     book("1", [chapter("1"), chapter("7")], { owned: true, pages: 200, plan_state: "book" }),
     book("2", [chapter("8"), chapter("15")], { owned: true, pages: 200, estimated: true, plan_state: "book" }),
   ]));
-  expect(screen.getByText(/ch\. 1–7 · 200 pages/)).toBeTruthy();
+  expect(screen.getAllByText("200 pages")).toHaveLength(2);
+  expect(screen.queryByText(/ch\. 1–7/)).toBeNull();
   expect(screen.queryByText(/ch\. 8–15/)).toBeNull();
   expect(screen.queryByText(/estimated/i)).toBeNull();
 });
 
-it("labels books placed by the sources' tags and by their pages", () => {
+it("keeps unmatched chapter notices while hiding book ranges from source and content maps", () => {
   view(data([
     book("1", [chapter("1"), chapter("2")], { owned: true, pages: 200, plan_state: "book", estimated: true, map_sources: ["operator", "source_tags"] }),
     book("2", [chapter("3"), chapter("4")], { owned: true, pages: 200, plan_state: "book", map_sources: ["operator", "content"] }),
   ], { content_notes: ["Chapter 5: its pages are not in book 2; the file is kept."] }));
-  expect(screen.getByText(/ch\. 1–2 · 200 pages/)).toBeTruthy();
-  expect(screen.getByText(/ch\. 3–4 · 200 pages/)).toBeTruthy();
+  expect(screen.getAllByText("200 pages")).toHaveLength(2);
+  expect(screen.queryByText(/ch\. (1–2|3–4)/)).toBeNull();
   expect(screen.getByText(/Chapter 5: its pages are not in book 2; the file is kept\./)).toBeTruthy();
 });
 
-it("labels a printed table of contents as read from the book", () => {
+it("keeps a book's tooltip to its page count even with an OCR chapter map", () => {
   view(data([book("1", [chapter("1"), chapter("7")], { owned: true, pages: 200, plan_state: "book", map_sources: ["ocr"] })]));
-  expect(screen.getByTitle(/ch\. 1–7 · read from book/)).toBeTruthy();
+  expect(screen.getByTitle("200 pages")).toBeTruthy();
 });
 
 

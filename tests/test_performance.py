@@ -409,32 +409,30 @@ def test_status_does_not_scan_series_rows_or_wait_for_chapter_totals(
     (settings.library_dir / "Stray").mkdir()
     (settings.library_dir / "Stray" / "Stray 001.cbz").write_bytes(b"PK")
     app = create_app(settings)
-    with TestClient(app) as client:
-        service = app.state.service
-        database = app.state.database
-        database.upsert_manga(manga(), "en", "all")
-        database.upsert_chapters(
-            "performance-work",
-            [
-                chapter(),
-                {**chapter(), "id": "same-slot", "provider": "other"},
-                {**chapter(), "id": "chapter-2", "chapter": "2"},
-            ],
-        )
-        database.mark_chapter_downloaded(
-            "performance-chapter", tmp_path / "chapter.cbz"
-        )
-        rows = database.list_manga(with_logical_counts=False)
-        totals = database.chapter_totals()
-        assert totals == {
-            "chapters": sum(item["chapter_count"] for item in rows),
-            "downloaded": sum(item["downloaded_count"] for item in rows),
-        }
-        assert totals == {"chapters": 2, "downloaded": 1}
-        headline = database.manga_totals()
-        assert headline["series"] == len(rows) == 1
-        assert headline["monitored"] == 1
+    service = app.state.service
+    database = app.state.database
+    database.upsert_manga(manga(), "en", "all")
+    database.upsert_chapters(
+        "performance-work",
+        [
+            chapter(),
+            {**chapter(), "id": "same-slot", "provider": "other"},
+            {**chapter(), "id": "chapter-2", "chapter": "2"},
+        ],
+    )
+    database.mark_chapter_downloaded("performance-chapter", tmp_path / "chapter.cbz")
+    rows = database.list_manga(with_logical_counts=False)
+    totals = database.chapter_totals()
+    assert totals == {
+        "chapters": sum(item["chapter_count"] for item in rows),
+        "downloaded": sum(item["downloaded_count"] for item in rows),
+    }
+    assert totals == {"chapters": 2, "downloaded": 1}
+    headline = database.manga_totals()
+    assert headline["series"] == len(rows) == 1
+    assert headline["monitored"] == 1
 
+    with TestClient(app) as client:
         scans = {"count": 0}
         original_scan = service.library_orphans
 
@@ -498,15 +496,14 @@ def test_status_does_not_scan_series_rows_or_wait_for_chapter_totals(
         assert isinstance(first["totals"]["chapters"], int)
         assert isinstance(first["totals"]["series"], int)
 
+        expected = {"series": 1, "monitored": 1, "chapters": 2, "downloaded": 1}
+        seen = {key: first["totals"][key] for key in expected}
         deadline = time.monotonic() + 5
-        seen = first
-        while seen["totals"]["series"] != 1 and time.monotonic() < deadline:
+        while seen != expected and time.monotonic() < deadline:
             time.sleep(0.05)
-            seen = client.get("/api/system/status").json()
-        assert seen["totals"]["series"] == 1
-        assert seen["totals"]["monitored"] == 1
-        assert seen["totals"]["chapters"] == 2
-        assert seen["totals"]["downloaded"] == 1
+            snapshot = client.get("/api/system/status").json()["totals"]
+            seen = {key: snapshot[key] for key in expected}
+        assert seen == expected
         assert listings["count"] == 0
 
         assert client.get("/api/library/orphans").json()["count"] == 1
