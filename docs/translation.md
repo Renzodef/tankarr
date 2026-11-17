@@ -143,6 +143,13 @@ this worker. The first job can take longer. Prepare a fresh virtual environment
 when changing the pinned checkout. Choose an external processor or a script hook
 to keep the work off the Tankarr host.
 
+For multiple hosts, the optional [capability-aware dispatcher](translation-workers.md)
+selects an available, explicitly enrolled worker using its live resources and
+observed throughput. Adding or removing hardware only changes the registry.
+The reference processor limits admission and keeps checkpoints separate for each
+attempt. Fully checkpointed MIT jobs reuse validated pages without initializing
+the engine; source, runtime and output checks still apply.
+
 Enter an independent **Vision API base URL** and **OCR and balloon lettering
 model** to guide MIT's detection, OCR, validation and in-balloon lettering. Use an
 OpenAI-compatible multimodal endpoint. The vision API key is optional and stored

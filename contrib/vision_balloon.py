@@ -8,6 +8,7 @@ import json
 import re
 from collections import defaultdict
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 import httpx
 
@@ -189,6 +190,11 @@ def fit_mask(text, mask):
     words = re.sub(r"([—–])(?=\S)", r"\1 ", text).split()
     if not words:
         return None
+    # Exact vertical-window queries: repeated candidate layouts used to scan
+    # the same mask rows for every line. Count excluded pixels once, preserving
+    # the irregular contour and all safety margins.
+    excluded = np.zeros((height + 1, width), dtype=np.uint32)
+    np.cumsum(mask == 0, axis=0, dtype=np.uint32, out=excluded[1:])
     for size in range(min(32, height), 10, -1):
         try:
             font = ImageFont.truetype("DejaVuSans.ttf", size)
@@ -199,23 +205,33 @@ def fit_mask(text, mask):
                 font = ImageFont.truetype("fonts/Arial-Unicode-Regular.ttf", size)
             except OSError:
                 font = ImageFont.load_default(size=size)
+        length = lru_cache(maxsize=1024)(font.getlength)
+
+        @lru_cache(maxsize=256)
+        def span(y):
+            safe = excluded[min(height, y + size + 2)] == excluded[y]
+            edges = np.diff(np.r_[False, safe, False].astype(int))
+            starts = np.flatnonzero(edges == 1)
+            ends = np.flatnonzero(edges == -1)
+            return max(
+                zip(starts, ends), key=lambda pair: pair[1] - pair[0], default=None
+            )
+
         step = size + 3
         for row_count in range(1, height // step + 1):
             top = (height - row_count * step) // 2
             rows, pending = [], list(words)
             for row in range(row_count):
                 y = top + row * step
-                safe = np.all(mask[y : y + size + 2] != 0, axis=0)
-                edges = np.diff(np.r_[False, safe, False].astype(int))
-                starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
-                if not len(starts):
+                bounds = span(y)
+                if bounds is None:
                     break
-                left, right = max(zip(starts, ends), key=lambda pair: pair[1] - pair[0])
+                left, right = bounds
                 available = right - left - 6
                 line = ""
                 while pending:
                     candidate = (line + " " + pending[0]).strip()
-                    if font.getlength(candidate) > available:
+                    if length(candidate) > available:
                         # Only split a long word after all ordinary layouts
                         # have been tried. This keeps narrow balloons inside
                         # their contours without dropping dialogue.
@@ -226,7 +242,7 @@ def fit_mask(text, mask):
                             prefix, word, suffix = punctuated.groups()
                             for cut in range(len(word) - 3, 2, -1):
                                 fragment = prefix + word[:cut] + "-"
-                                if font.getlength(fragment) <= available:
+                                if length(fragment) <= available:
                                     line = fragment
                                     pending[0] = word[cut:] + suffix
                                     break
