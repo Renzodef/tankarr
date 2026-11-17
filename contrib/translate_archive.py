@@ -130,10 +130,9 @@ def detect_source_language(page_lines, language, classify):
 # error, returns the original text and drops that as identical. The provider's own answers tell the two
 # apart (see ProviderTrace); a blank page has no lines at all.
 DROPPED_LINE_LIMIT = 3
-# A page that is refused as suspect (SuspectPage) is put off: nothing else in the book depends on it, so the rest is read and
-# saved first and the job stops at the end with every page that needs a look listed. More than this many refusals, or one in
-# twenty pages, mean the reading itself is wrong and the job stops at once. A provider that failed stops it at once too.
-DEFERRED_PAGE_LIMIT = 5
+# Refused pages need review. Keep checkpointing independent pages and stop early
+# only when the worker refuses a sustained run of pages.
+CONSECUTIVE_PAGE_REFUSAL_LIMIT = 5
 # A line the model says is not speech (an invented language, random letters, the broken end of a word) may stay unread when it
 # is this short and the page has no more than this many of them; a longer line, or more of them, and the page is refused.
 NOT_SPEECH = object()
@@ -2691,6 +2690,7 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
     translated = untranslated = provider_failures = 0
     engine_pages = 0
     deferred = []  # (page, why) of pages the proof refused as suspect
+    consecutive_refusals = 0
     target_text, source_by_page = [], []
     job_evidence = None  # original lines of the job's own checkpoints, read once when a vocative needs them
     partial = output.with_suffix(".partial")
@@ -3133,9 +3133,10 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
                             page, data = await read_with_fallback(index, image)
                         except SuspectPage as refused:
                             deferred.append((index, str(refused)))
-                            if len(deferred) > max(
-                                DEFERRED_PAGE_LIMIT, len(pages) // 20
-                            ):
+                            consecutive_refusals += 1
+                            # Isolated bad pages still need review, but valid later pages
+                            # can be checkpointed while the provider is working.
+                            if consecutive_refusals > CONSECUTIVE_PAGE_REFUSAL_LIMIT:
                                 raise SuspectPage(
                                     refused_pages(deferred, early=True)
                                 ) from None
@@ -3143,6 +3144,7 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
                         save_checkpoint(checkpoints, index, data, page)
                     else:
                         data, page = cached
+                    consecutive_refusals = 0
                     translated += page["translated"]
                     untranslated += page["untranslated"]
                     provider_failures += page.get("provider_failures", 0)

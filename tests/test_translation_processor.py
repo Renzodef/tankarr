@@ -1760,6 +1760,18 @@ async def test_a_book_may_have_five_refused_pages_but_not_a_sixth(
 
 
 @pytest.mark.asyncio
+async def test_scattered_refusals_preserve_later_checkpoints(tmp_path, monkeypatch):
+    runner = load("translate_archive")
+    source, request, output, checkpoints = _book(
+        monkeypatch, tmp_path, runner, [True, False] * 6
+    )
+    with pytest.raises(runner.SuspectPage, match=r"6 page\(s\) need review"):
+        await runner.translate(source, output, request, checkpoints=checkpoints)
+    assert _saved_pages(checkpoints) == [2, 4, 6, 8, 10, 12]
+    assert not output.exists()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["text", "empty"])
 async def test_a_page_reviewed_by_hand_lets_the_job_finish(tmp_path, monkeypatch, kind):
     """What the operator's review tool writes: a checkpoint with the job's identity and a note of who looked at the page."""
