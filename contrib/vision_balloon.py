@@ -10,6 +10,9 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 
 import httpx
+import os
+
+THUMBNAIL = int(os.environ.get("TANKARR_VISION_THUMBNAIL", "1440"))
 
 GEOMETRY_FORMAT = {
     "type": "json_schema",
@@ -89,7 +92,7 @@ async def analyze_page(ctx, vision, source_language):
     page = original.copy()
     # 2026-11-17: MLX Qwen has no --image-min-tokens; 1440 px gives ~1300 image
     # tokens (>= 1024 needed for grounding) on a 980x1426 page.
-    page.thumbnail((1440, 1440))
+    page.thumbnail((THUMBNAIL, THUMBNAIL))
     compressed = io.BytesIO()
     page.save(compressed, format="JPEG", quality=90)
     image = "data:image/jpeg;base64," + base64.b64encode(compressed.getvalue()).decode()
@@ -180,6 +183,121 @@ async def analyze_page(ctx, vision, source_language):
         ):
             region.text = text
             used.add(box)
+    if SOUND_EFFECTS and str(source_language or "").split("-")[0].casefold() == "ja":
+        try:
+            await find_sound_effects(ctx, vision, image, headers, timeout)
+        except Exception:  # noqa: BLE001 - sound effects are optional; the page goes on without them
+            pass
+
+
+# 2026-11-17 (Miles, Renzo): sound effects drawn in kana (ドスン, バタタ, ブバーン) are artwork the
+# text detector does not see, so they stayed Japanese. In a Japanese book the vision model is
+# asked for them once per page; each becomes a region the provider translates with the page
+# (as English onomatopoeia, see the Japanese prompt note). Nothing is erased: MIT has no text
+# mask there, and the English is lettered over the original effect.
+# Off by default until reviewed: on the Miles trial half of the effects came back right
+# (RATTATAT, THUD), half split or misread (ド|スン, むく read as お|く). TANKARR_SOUND_EFFECTS=1 enables it.
+SOUND_EFFECTS = os.environ.get("TANKARR_SOUND_EFFECTS", "0") == "1"
+SFX_PROMPT = (
+    "Find the sound effects drawn as part of the artwork (large hand-drawn katakana or hiragana "
+    "onomatopoeia such as ドスン, バタタ, ギャ), not the text inside speech balloons or captions. "
+    "Return only a JSON array of objects with bbox_2d ([x1,y1,x2,y2] normalized to 0..1000, tight "
+    "around the letters) and text (the kana). Return [] if there are none."
+)
+SFX_TEXT = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9fー〜～ッっ!！?？…・゛゜]{1,10}")
+
+
+async def find_sound_effects(ctx, vision, image, headers, timeout):
+    import numpy as np
+    from manga_translator.utils import TextBlock
+
+    height, width = np.asarray(ctx.img_rgb).shape[:2]
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        response = await client.post(
+            vision["base_url"].rstrip("/") + "/chat/completions",
+            headers=headers,
+            json={
+                "model": vision["model"],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": image}},
+                            {"type": "text", "text": SFX_PROMPT},
+                        ],
+                    }
+                ],
+                "temperature": 0,
+                "max_tokens": 600,
+            },
+        )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+    try:
+        found = parse_boxes(content, width, height)
+    except ValueError:
+        return
+    taken = [tuple(map(float, region.xyxy)) for region in ctx.text_regions]
+    effects = []
+    for (x1, y1, x2, y2), text in found.items():
+        text = re.sub(r"\s+", "", text or "")
+        box = (x1, y1, x2, y2)
+        area = (x2 - x1) * (y2 - y1)
+        if (
+            not SFX_TEXT.fullmatch(text)
+            or not re.search(r"[\u3040-\u30ff\uff66-\uff9f]", text)
+            or area <= 0
+            or area > 0.12 * width * height
+            or min(x2 - x1, y2 - y1) < 12
+            or any(intersection(box, other) > 0.2 * area for other in taken + effects)
+        ):
+            continue
+        effects.append(box)
+        x1, y1, x2, y2 = map(int, box)
+        region = TextBlock(
+            [[[x1, y1], [x2, y1], [x2, y2], [x1, y2]]],
+            [text],
+            language="ja",
+            font_size=max(12, min(x2 - x1, y2 - y1)),
+            source_lang="ja",
+        )
+        region.tankarr_sfx = True
+        ctx.text_regions.append(region)
+        if len(effects) >= 8:
+            break
+
+
+def sfx_font(size):
+    from PIL import ImageFont
+
+    for name in ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf", "fonts/Arial-Unicode-Regular.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def draw_sound_effects(canvas, effects):
+    """Letter each translated effect over its original: bold capitals, white with a dark outline."""
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(canvas)
+    for region in effects:
+        text = str(getattr(region, "translation", "") or "").strip().strip("\"'")
+        if not text or not re.search(r"[A-Za-z]", text) or re.search(r"[\u3040-\u30ff]", text):
+            continue
+        text = text.upper()
+        x1, y1, x2, y2 = map(int, region.xyxy)
+        w, h = max(1, x2 - x1), max(1, y2 - y1)
+        size = max(12, min(40, int(min(h, w * 1.6 / max(1, len(text))))))
+        font = sfx_font(size)
+        while size > 12 and font.getlength(text) > max(w, h) * 1.1:
+            size -= 2
+            font = sfx_font(size)
+        stroke = max(2, size // 8)
+        draw.text(((x1 + x2) / 2, (y1 + y2) / 2), text, anchor="mm", font=font,
+                  fill="#ffffff", stroke_width=stroke, stroke_fill="#111111")
 
 
 def fit_strip(text, length, thickness):
@@ -519,11 +637,53 @@ def merge_balloon_fragments(shapes, boxes, regions=()):
     return merged
 
 
+# Share of a balloon candidate covered by dark pixels that are not its lettering.
+# Clean balloons measured <= 1 % (SR 18); panels taken for balloons 3.5-23 % (Miles).
+FOREIGN_INK_LIMIT = 0.02
+
+
+def foreign_ink(source, bounds, mask, group, text_mask=None, color=None):
+    import cv2
+    import numpy as np
+
+    x, y, right, bottom = bounds
+    inside = cv2.erode(mask, np.ones((7, 7), np.uint8)) != 0
+    total = int(inside.sum())
+    if not total:
+        return 1.0
+    clip = source[y:bottom, x:right].astype(np.int32)
+    if color is None:
+        color = np.median(clip[inside], axis=0)
+    # Ink is what differs strongly from the balloon colour (dark lines on white,
+    # light lines on a dark caption), so coloured balloons are measured alike.
+    dark = np.max(np.abs(clip - np.asarray(color, dtype=np.int32)), axis=-1) > 110
+    lettering = np.zeros(mask.shape, dtype=bool)
+    for region in group:
+        rx1, ry1, rx2, ry2 = map(int, region.xyxy)
+        lettering[
+            max(0, ry1 - y - 8) : max(0, ry2 - y + 8), max(0, rx1 - x - 8) : max(0, rx2 - x + 8)
+        ] = True
+    if text_mask is not None:
+        lettering |= cv2.dilate(
+            (text_mask[y:bottom, x:right] > 127).astype(np.uint8), np.ones((9, 9), np.uint8)
+        ) != 0
+    return float((dark & inside & ~lettering).sum()) / total
+
+
 async def render_guided(fallback, config, ctx):
     import cv2
     import numpy as np
     from PIL import Image, ImageDraw
 
+    effects = [r for r in ctx.text_regions if getattr(r, "tankarr_sfx", False)]
+    if effects:
+        ctx.text_regions = [r for r in ctx.text_regions if not getattr(r, "tankarr_sfx", False)]
+        try:
+            canvas = Image.fromarray(np.ascontiguousarray(await render_guided(fallback, config, ctx)))
+        finally:
+            ctx.text_regions = ctx.text_regions + effects
+        draw_sound_effects(canvas, effects)
+        return np.asarray(canvas).copy()
     source = np.asarray(ctx.img_rgb)
     height, width = source.shape[:2]
     boxes = supported_balloon_boxes(
@@ -604,6 +764,13 @@ async def render_guided(fallback, config, ctx):
         if score >= 0.7:
             groups[index].append(region)
 
+    text_mask = getattr(ctx, "mask", None)
+    if text_mask is not None:
+        text_mask = np.asarray(text_mask)
+        if text_mask.ndim == 3:
+            text_mask = text_mask[..., 0]
+        if text_mask.shape[:2] != (height, width):
+            text_mask = None
     assigned = set()
     placements = []
     for index, group in groups.items():
@@ -631,6 +798,13 @@ async def render_guided(fallback, config, ctx):
                 pixels = source[ry1:ry2, rx1:rx2][inside].astype(float)
                 close += int((np.max(np.abs(pixels - color.astype(float)), axis=1) <= 40).sum())
         if not total or covered < 0.5 * total or close < 0.3 * covered:
+            continue
+        # 2026-11-17 (Miles p13/p21/p39): on black-and-white pages a balloon whose
+        # outline touches the panel's white background becomes one shape with the
+        # panel, and filling it erased faces and whole panels. A balloon holds no
+        # ink but its own lettering: refuse the shape (MIT inpaints and letters
+        # the region instead) when line art other than the text is inside it.
+        if foreign_ink(source, (x, y, right, bottom), mask, group, text_mask, color) > FOREIGN_INK_LIMIT:
             continue
         interior = cv2.erode(mask, np.ones((9, 9), np.uint8))
         layout = fit_mask(text, interior)
@@ -679,13 +853,6 @@ async def render_guided(fallback, config, ctx):
     finally:
         ctx.text_regions = regions
         ctx.img_inpainted = inpainted
-    text_mask = getattr(ctx, "mask", None)
-    if text_mask is not None:
-        text_mask = np.asarray(text_mask)
-        if text_mask.ndim == 3:
-            text_mask = text_mask[..., 0]
-        if text_mask.shape[:2] != (height, width):
-            text_mask = None
     for x, y, right, bottom, erase, color, *_ in placements:
         base[y:bottom, x:right][erase != 0] = color
         if text_mask is not None:

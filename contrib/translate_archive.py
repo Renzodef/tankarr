@@ -1106,6 +1106,84 @@ def install_glossary(glossary):
     return restore
 
 
+# 2026-11-17 (Miles trial, Renzo): MIT joins the columns of a vertical Japanese balloon with no
+# separator, so 「オートバイ／ノワさんに」 reached the model as one word and came back as
+# "Mr. Ootobaino". A Japanese book gets a note on columns, honorifics, loanwords and sound
+# effects, and the model sees an ideographic space where a column of the balloon ends.
+JAPANESE_NOTE = (
+    "\n\n## Japanese source\n"
+    "- An ideographic space (\u3000) marks where a column of the vertical balloon ends next to a "
+    "katakana word. Read the balloon as one sentence; the break only tells two words apart: never "
+    "fuse the words on both sides of it into one name, and never write the space in the English.\n"
+    "- さん, くん, ちゃん, 様, 先輩, 先生, 殿 after a name are honorifics, not part of the name: "
+    "ノワさん is Nowa-san (Mr. or Ms. only when the series glossary says so). Names are "
+    "transliterated once in Hepburn and then kept identical.\n"
+    "- An ordinary katakana loanword is translated, not taken for a name "
+    "(オートバイ = motorbike, ブレーキ = brakes, バス = bus).\n"
+    "- Sound effects in kana (ドスン, バタタ, ブバーン, ギャ, ザッ) are short English onomatopoeia "
+    "(THUD, RATTATAT, VROOM, SKREE, SHFF), never a transliteration or an explanation."
+)
+JAPANESE_ACTIVE = False
+COLUMN_TEXT = {}
+KATAKANA = re.compile(r"[\u30a1-\u30fa\uff66-\uff9f]")
+
+
+def japanese_columns(regions):
+    """Remember, for this page, the text of each vertical Japanese region with its column breaks."""
+    COLUMN_TEXT.clear()
+    if not JAPANESE_ACTIVE:
+        return
+    for region in regions or []:
+        texts = [str(t).strip() for t in (getattr(region, "texts", None) or []) if str(t).strip()]
+        text = str(getattr(region, "text", "") or "")
+        if len(texts) > 1 and text == "".join(texts):
+            # Only a break next to katakana is shown: there two words can fuse into a
+            # false name (オートバイ|ノワ). Between kana or kanji a break is often inside
+            # a phrase (素直じゃ|ねーか) and showing it misled the model.
+            joined = texts[0]
+            for previous, current in zip(texts, texts[1:]):
+                katakana = KATAKANA.match(previous[-1]) or KATAKANA.match(current[0])
+                joined += ("\u3000" if katakana else "") + current
+            if joined != text:
+                COLUMN_TEXT[text] = joined
+
+
+def install_japanese_prompt(language):
+    """Add the Japanese note to the system prompt and show column breaks; returns the function that undoes it."""
+    global JAPANESE_ACTIVE
+    if str(language or "").split("-")[0].casefold() != "ja":
+        return lambda: None
+    try:
+        from manga_translator.translators.common_gpt import CommonGPTTranslator
+        from manga_translator.translators.deepseek import DeepseekTranslator
+    except ImportError:
+        return lambda: None
+    JAPANESE_ACTIVE = True
+    template = DeepseekTranslator.__dict__.get("_CHAT_SYSTEM_TEMPLATE")
+    DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = DeepseekTranslator._CHAT_SYSTEM_TEMPLATE + JAPANESE_NOTE
+    original = CommonGPTTranslator._assemble_prompts
+
+    def assemble(self, from_lang, to_lang, queries):
+        return original(self, from_lang, to_lang, [COLUMN_TEXT.get(q, q) for q in queries])
+
+    CommonGPTTranslator._assemble_prompts = assemble
+
+    def restore():
+        global JAPANESE_ACTIVE
+        JAPANESE_ACTIVE = False
+        COLUMN_TEXT.clear()
+        CommonGPTTranslator._assemble_prompts = original
+        if template is None:
+            try:
+                del DeepseekTranslator._CHAT_SYSTEM_TEMPLATE
+            except AttributeError:
+                pass
+        else:
+            DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = template
+
+    return restore
+
+
 # A test sets an httpx transport here; None is the network.
 PROVIDER_TRANSPORT = None
 LANGUAGE_NAMES = {
@@ -1158,7 +1236,7 @@ async def translate_lost(request, texts):
         f"Otherwise, if the line is not speech in {language}, even allowing for OCR mistakes (an invented or made-up language, random "
         "letters, or only the end or the start of a broken word), answer exactly: NOT SPEECH. "
         f"Real {language}, however short or misspelled, is translated."
-    ) + GLOSSARY_NOTE.replace("{{", "{").replace("}}", "}")
+    ) + GLOSSARY_NOTE.replace("{{", "{").replace("}}", "}") + (JAPANESE_NOTE if JAPANESE_ACTIVE else "")
     reasoning = (
         {"thinking": {"type": "disabled"}}
         if "deepseek" in str(ai["base_url"]).lower()
@@ -2813,6 +2891,7 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
                     raise SuspectGeometry(
                         "Vision provider returned no usable balloon geometry"
                     ) from None
+            japanese_columns(ctx.text_regions)
             return await super()._run_text_translation(config, ctx)
 
         async def _run_text_rendering(self, config, ctx):
@@ -2846,6 +2925,7 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
     restore_traffic = trace.install()
     restore_prompts = join_broken_words(request.get("source_language"))
     restore_glossary = install_glossary(glossary)
+    restore_japanese = install_japanese_prompt(request.get("source_language"))
     try:
         with (
             zipfile.ZipFile(source) as archive,
@@ -3364,6 +3444,7 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
             result.writestr("translation.json", json.dumps(receipt))
         partial.replace(output)
     finally:
+        restore_japanese()
         restore_glossary()
         restore_prompts()
         restore_traffic()
