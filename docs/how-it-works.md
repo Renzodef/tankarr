@@ -82,6 +82,19 @@ JPEG of at most 900 KB, scaled to fit without stretching or cropping, and
 published as `cover.jpg` in the series folder, as a poster next to each book
 (`Book name.cbz` gets `Book name.jpg`) and to a managed Komga or Stump.
 
+A single book can have its own cover. **Choose cover** on that book uploads
+one, and **Remove custom cover** returns to the automatic choice. The same
+poster can be supplied as a file beside the book, using the base name Tankarr
+already writes (`Series - v004 [en].cbz` and `Series - v004 [en].jpg`). Either
+choice outranks the catalogue cover and the archive's first page, and a
+metadata refresh does not replace it. A book assembled from chapters keeps
+that poster as well: refresh will not substitute an internal story page while
+the poster or the manual cover is present.
+
+`POST /api/manga/{id}/volumes/{volume}/artwork-upload` stores the image with
+the same checks as a series cover (JPEG, PNG, WebP, GIF or AVIF, at most
+20 MiB). `DELETE` on that path removes the custom cover.
+
 ## Acquisition channels and the order they are tried
 
 | Channel | What it delivers | Language | When it is used |

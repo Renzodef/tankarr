@@ -2015,6 +2015,239 @@ async def test_landscape_volume_first_page_is_normalized_as_last_resort(
         assert cover.size == CANONICAL_ARTWORK_DIMENSIONS
 
 
+def _library_settings(tmp_path: Path) -> Settings:
+    settings = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
+    settings.ensure_directories()
+    return settings
+
+
+def _add_volume_file(
+    settings: Settings,
+    database: Database,
+    *,
+    volume: str = "1",
+    provider: str = "local",
+    color: str = "teal",
+    size: tuple[int, int] = (900, 1350),
+    chapter_id: str | None = None,
+) -> tuple[dict[str, Any], Path]:
+    chapter = {
+        "id": chapter_id or f"volume-{volume}",
+        "volume": volume,
+        "chapter": None,
+        "title": "",
+        "language": "en",
+        "provider": provider,
+        "groups": [],
+        "source_url": f"https://example.test/volume-{volume}",
+    }
+    database.upsert_chapters("manga-1", [chapter])
+    page = settings.data_dir / f"page-{chapter['id']}-{color}.png"
+    page.write_bytes(image_bytes(size, color=color, image_format="PNG"))
+    book = (
+        settings.library_dir
+        / "Example Story"
+        / f"Example Story - v{int(volume):03d} [en].cbz"
+    )
+    if book.exists():
+        book.unlink()
+    package_cbz(book, [page], database.get_manga("manga-1"), chapter)
+    database.mark_chapter_downloaded(str(chapter["id"]), book, sha256(book))
+    return chapter, book
+
+
+@pytest.mark.asyncio
+async def test_manual_volume_cover_survives_catalogue_and_archive_page(
+    tmp_path: Path,
+):
+    settings = _library_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    seed(database)
+    _add_volume_file(settings, database, color="teal", size=(900, 1350))
+    metadata = MetadataService(settings, database, None, {}, [])  # type: ignore[arg-type]
+    upload = image_bytes((640, 360), color="purple")
+    try:
+        saved = await metadata.upload_volume_artwork("manga-1", "1", upload)
+        assert saved["selection_mode"] == "manual"
+        assert saved["artwork_source"] == "upload"
+        pinned = saved["artwork_sha256"]
+
+        async def catalogue_cover(_source: str, _url: str) -> dict[str, Any]:
+            return metadata.artwork.prepare_bytes(
+                image_bytes((800, 1200), color="green")
+            )
+
+        metadata.artwork.prepare_remote = catalogue_cover  # type: ignore[method-assign]
+        volumes = await metadata._enrich_volumes(
+            database.get_manga("manga-1"), fake_record(), force=True
+        )
+    finally:
+        await metadata.stop()
+
+    record = volumes[0]
+    assert record["data"]["artwork_source"] == "upload"
+    assert record["data"]["artwork_selection_mode"] == "manual"
+    assert record["artwork_sha256"] == pinned
+    assert record["data"]["artwork_source_width"] == 640
+    sidecar = settings.library_dir / "Example Story" / "Example Story - v001 [en].jpg"
+    assert (
+        sidecar.read_bytes()
+        == (settings.data_dir / record["artwork_path"]).read_bytes()
+    )
+
+
+@pytest.mark.asyncio
+async def test_sidecar_poster_outranks_catalogue_and_first_page(tmp_path: Path):
+    settings = _library_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    seed(database)
+    _chapter, book = _add_volume_file(settings, database, color="red", size=(900, 1350))
+    book.with_suffix(".jpg").write_bytes(image_bytes((700, 1000), color="blue"))
+    metadata = MetadataService(settings, database, None, {}, [])  # type: ignore[arg-type]
+
+    async def catalogue_cover(_source: str, _url: str) -> dict[str, Any]:
+        return metadata.artwork.prepare_bytes(image_bytes((800, 1200), color="green"))
+
+    metadata.artwork.prepare_remote = catalogue_cover  # type: ignore[method-assign]
+    try:
+        selected = await metadata._select_volume_artwork(
+            database.get_manga("manga-1"),
+            "1",
+            {
+                "source": "comicvine",
+                "cover": {"url": "https://comicvine.gamespot.com/cover.jpg"},
+            },
+            previous=None,
+            force=True,
+        )
+    finally:
+        await metadata.stop()
+
+    assert selected is not None
+    assert selected["source"] == "sidecar"
+    assert selected["selection_mode"] == "manual"
+    assert selected["source_width"] == 700
+
+
+@pytest.mark.asyncio
+async def test_published_sidecar_still_allows_a_catalogue_upgrade(tmp_path: Path):
+    settings = _library_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    seed(database)
+    _add_volume_file(settings, database, color="red", size=(900, 1350))
+    metadata = MetadataService(settings, database, None, {}, [])  # type: ignore[arg-type]
+    try:
+        first = await metadata._enrich_volumes(
+            database.get_manga("manga-1"), fake_record(), force=True
+        )
+        stored = settings.data_dir / first[0]["artwork_path"]
+        sidecar = (
+            settings.library_dir / "Example Story" / "Example Story - v001 [en].jpg"
+        )
+        sidecar.write_bytes(stored.read_bytes())
+
+        async def catalogue_cover(_source: str, _url: str) -> dict[str, Any]:
+            return metadata.artwork.prepare_bytes(
+                image_bytes((800, 1200), color="green")
+            )
+
+        metadata.artwork.prepare_remote = catalogue_cover  # type: ignore[method-assign]
+        selected = await metadata._select_volume_artwork(
+            database.get_manga("manga-1"),
+            "1",
+            {
+                "source": "comicvine",
+                "cover": {"url": "https://comicvine.gamespot.com/cover.jpg"},
+            },
+            previous=first[0],
+            force=True,
+        )
+    finally:
+        await metadata.stop()
+
+    assert selected is not None
+    assert selected["source"] == "comicvine"
+    assert selected["source_width"] == 800
+
+
+@pytest.mark.asyncio
+async def test_reassembled_volume_keeps_sidecar_instead_of_an_internal_page(
+    tmp_path: Path,
+):
+    settings = _library_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    seed(database)
+    chapter, book = _add_volume_file(
+        settings,
+        database,
+        provider="assembled",
+        color="teal",
+        size=(900, 1350),
+    )
+    metadata = MetadataService(settings, database, None, {}, [])  # type: ignore[arg-type]
+    try:
+        first = await metadata._enrich_volumes(
+            database.get_manga("manga-1"), fake_record(), force=True
+        )
+        assert first[0]["data"]["artwork_source"] == "local"
+        stored = settings.data_dir / first[0]["artwork_path"]
+        book.with_suffix(".jpg").write_bytes(stored.read_bytes())
+        pinned = first[0]["artwork_sha256"]
+        _add_volume_file(
+            settings,
+            database,
+            provider="assembled",
+            color="black",
+            size=(1800, 800),
+            chapter_id=chapter["id"],
+        )
+        second = await metadata._enrich_volumes(
+            database.get_manga("manga-1"), fake_record(), force=True
+        )
+    finally:
+        await metadata.stop()
+
+    assert second[0]["artwork_sha256"] == pinned
+    assert second[0]["data"]["artwork_source"] == "local"
+    assert second[0]["data"]["artwork_source_width"] == 900
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_volume_cover_restores_the_archive_page(tmp_path: Path):
+    settings = _library_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    seed(database)
+    _chapter, book = _add_volume_file(
+        settings, database, color="teal", size=(900, 1350)
+    )
+    book.with_suffix(".jpg").write_bytes(image_bytes((700, 1000), color="blue"))
+    metadata = MetadataService(settings, database, None, {}, [])  # type: ignore[arg-type]
+    try:
+        adopted = await metadata._enrich_volumes(
+            database.get_manga("manga-1"), fake_record(), force=True
+        )
+        assert adopted[0]["data"]["artwork_source"] == "sidecar"
+        cleared = await metadata.clear_volume_artwork("manga-1", "1")
+        assert cleared["selection_mode"] == "automatic"
+        assert cleared["artwork_source"] == "local"
+        assert cleared["metadata"]["data"]["artwork_source_width"] == 900
+        refreshed = await metadata._enrich_volumes(
+            database.get_manga("manga-1"), fake_record(), force=True
+        )
+    finally:
+        await metadata.stop()
+
+    assert refreshed[0]["data"]["artwork_source"] == "local"
+    assert refreshed[0]["data"]["artwork_selection_mode"] == "automatic"
+    poster = book.with_suffix(".jpg").read_bytes()
+    assert poster == (settings.data_dir / refreshed[0]["artwork_path"]).read_bytes()
+
+
 @pytest.mark.asyncio
 async def test_automatic_noop_does_not_hide_previous_bulk_result(tmp_path: Path):
     settings = Settings(data_dir=tmp_path, library_dir=tmp_path / "library")

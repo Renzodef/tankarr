@@ -238,6 +238,115 @@ def test_artwork_upload_is_normalized_selected_and_served(tmp_path: Path):
     assert database.get_series_artwork_preference(manga_id) == candidate_id
 
 
+def test_volume_artwork_upload_and_delete_follow_the_series_checks(tmp_path: Path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        library_dir=tmp_path / "library",
+        monitor_enabled=False,
+        metadata_enabled=False,
+        komga_link_enabled=False,
+    )
+    provision_library_identity(settings)
+    app = create_app(settings)
+    database = app.state.database
+    manga_id = "volume-artwork"
+    database.upsert_manga(
+        {
+            "id": manga_id,
+            "provider": "local",
+            "title": "Volume Artwork",
+            "description": "",
+            "authors": [],
+            "original_language": "ja",
+            "status": "completed",
+            "available_languages": ["en"],
+        },
+        "en",
+        "none",
+    )
+    database.upsert_chapters(
+        manga_id,
+        [
+            {
+                "id": "volume-4",
+                "volume": "4",
+                "chapter": None,
+                "title": "",
+                "language": "en",
+                "provider": "local",
+                "groups": [],
+                "source_url": "https://example.test/volume-4",
+            }
+        ],
+    )
+    upload = png_bytes((640, 360), "purple")
+
+    with TestClient(app) as client:
+        missing = client.post(
+            f"/api/manga/{manga_id}/volumes/9/artwork-upload",
+            content=upload,
+            headers={"Content-Type": "image/png"},
+        )
+        assert missing.status_code == 404
+        for bad in ("nope", "1.2.3", "4.", "." + "1" * 16, "1" * 17):
+            refused = client.post(
+                f"/api/manga/{manga_id}/volumes/{bad}/artwork-upload",
+                content=upload,
+                headers={"Content-Type": "image/png"},
+            )
+            assert refused.status_code == 400, bad
+            removed = client.delete(
+                f"/api/manga/{manga_id}/volumes/{bad}/artwork-upload"
+            )
+            assert removed.status_code == 400, bad
+
+        rejected = client.post(
+            f"/api/manga/{manga_id}/volumes/4/artwork-upload",
+            content=b"not-an-image",
+            headers={"Content-Type": "text/plain"},
+        )
+        assert rejected.status_code == 415
+
+        oversized = client.post(
+            f"/api/manga/{manga_id}/volumes/04/artwork-upload",
+            content=b"x",
+            headers={
+                "Content-Type": "image/png",
+                "Content-Length": str(21 * 1024 * 1024),
+            },
+        )
+        assert oversized.status_code == 413
+
+        invalid = client.post(
+            f"/api/manga/{manga_id}/volumes/4/artwork-upload",
+            content=b"not-an-image",
+            headers={"Content-Type": "image/png"},
+        )
+        assert invalid.status_code == 400
+
+        response = client.post(
+            f"/api/manga/{manga_id}/volumes/04/artwork-upload",
+            content=upload,
+            headers={"Content-Type": "image/png"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["volume_key"] == "4"
+        assert body["selection_mode"] == "manual"
+        assert body["artwork_source"] == "upload"
+        image = client.get(body["artwork_url"])
+        assert image.status_code == 200
+        assert image.headers["content-type"].startswith("image/jpeg")
+        with Image.open(BytesIO(image.content)) as normalized:
+            assert normalized.size == (1000, 1500)
+
+        removed = client.delete(f"/api/manga/{manga_id}/volumes/4/artwork-upload")
+        assert removed.status_code == 200
+        assert removed.json()["selection_mode"] == "automatic"
+        assert removed.json()["artwork_source"] is None
+        assert client.get(body["artwork_url"]).status_code == 404
+
+
 def test_artwork_hash_resolver_is_shared_by_library_series_and_volumes(
     tmp_path: Path,
 ):

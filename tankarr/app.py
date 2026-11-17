@@ -385,6 +385,68 @@ def _tell_both_counts(
     decorated["chapter_total_count"] = chapters_total or None
 
 
+def require_volume_number(volume: str) -> str:
+    """Accept a short integer or decimal before any canonical-label parse."""
+
+    text = str(volume or "").strip()
+    if len(text) > 16 or not _ascii_decimal(text):
+        raise HTTPException(
+            status_code=400,
+            detail="Volume must be a number of at most 16 characters",
+        )
+    return text
+
+
+def _ascii_decimal(value: str) -> bool:
+    if not value:
+        return False
+    whole, dot, fraction = value.partition(".")
+    if not whole.isascii() or not whole.isdigit():
+        return False
+    if not dot:
+        return True
+    return (
+        bool(fraction)
+        and "." not in fraction
+        and fraction.isascii()
+        and fraction.isdigit()
+    )
+
+
+async def read_artwork_upload(request: Request) -> bytes:
+    """Read one cover upload using the series cover limits."""
+
+    content_type = (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    )
+    if content_type and not (
+        content_type.startswith("image/") or content_type == "application/octet-stream"
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail="Upload a JPEG, PNG, WebP, GIF, or AVIF image",
+        )
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_ARTWORK_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Cover image exceeds the 20 MiB safety limit",
+                )
+        except ValueError:
+            pass
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > MAX_ARTWORK_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Cover image exceeds the 20 MiB safety limit",
+            )
+        content.extend(chunk)
+    return bytes(content)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     settings.ensure_directories()
@@ -2900,37 +2962,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/manga/{manga_id}/artwork-upload")
     async def upload_artwork(manga_id: str, request: Request):
-        content_type = (
-            request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        )
-        if content_type and not (
-            content_type.startswith("image/")
-            or content_type == "application/octet-stream"
-        ):
-            raise HTTPException(
-                status_code=415,
-                detail="Upload a JPEG, PNG, WebP, GIF, or AVIF image",
-            )
-        content_length = request.headers.get("content-length")
-        if content_length:
-            try:
-                if int(content_length) > MAX_ARTWORK_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail="Cover image exceeds the 20 MiB safety limit",
-                    )
-            except ValueError:
-                pass
-        content = bytearray()
-        async for chunk in request.stream():
-            if len(content) + len(chunk) > MAX_ARTWORK_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail="Cover image exceeds the 20 MiB safety limit",
-                )
-            content.extend(chunk)
+        content = await read_artwork_upload(request)
         try:
-            return await metadata.upload_series_artwork(manga_id, bytes(content))
+            return await metadata.upload_series_artwork(manga_id, content)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Manga not found") from exc
         except ValueError as exc:
@@ -2939,6 +2973,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=502,
                 detail=f"Artwork upload failed ({type(exc).__name__})",
+            ) from exc
+
+    @app.post("/api/manga/{manga_id}/volumes/{volume}/artwork-upload")
+    async def upload_volume_artwork(manga_id: str, volume: str, request: Request):
+        volume = require_volume_number(volume)
+        content = await read_artwork_upload(request)
+        try:
+            return await metadata.upload_volume_artwork(manga_id, volume, content)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Volume not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Artwork upload failed ({type(exc).__name__})",
+            ) from exc
+
+    @app.delete("/api/manga/{manga_id}/volumes/{volume}/artwork-upload")
+    async def delete_volume_artwork(manga_id: str, volume: str):
+        volume = require_volume_number(volume)
+        try:
+            return await metadata.clear_volume_artwork(manga_id, volume)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Volume not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Artwork removal failed ({type(exc).__name__})",
             ) from exc
 
     @app.get(

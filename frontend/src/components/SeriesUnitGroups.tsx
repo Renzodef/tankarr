@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Icon, StatusPill } from "../components";
+import { Cover, Icon, StatusPill } from "../components";
 import type { ReaderLink, SeriesBookGroup, SeriesUnitChapter, SeriesUnits, VolumeMonitorState } from "../types";
 import { msg, t, tn } from "../i18n";
 
@@ -18,6 +18,8 @@ export type GroupActions = {
   onSearchBook: (book: SeriesBookGroup) => void;
   onDeleteBookFiles: (book: SeriesBookGroup) => void;
   onRetireDuplicates: (book: SeriesBookGroup) => void;
+  onChooseBookCover?: (book: SeriesBookGroup) => void;
+  bookCoverUrl?: (book: SeriesBookGroup) => string | null;
   renderChapterRows: (chapters: SeriesUnitChapter[], book: SeriesBookGroup | null) => ReactNode;
 };
 
@@ -83,6 +85,7 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
     || book.files.some((file) => file.id === bookmark.chapter_id)
     || book.chapters.some((chapter) => chapter.releases.some((release) => release.id === bookmark.chapter_id))
   );
+  const coverUrl = actions.bookCoverUrl?.(book) ?? null;
   const bookDetails = book.pages ? tn(book.pages, "{count} page", "{count} pages") : t("On disk");
   const description = book.owned
     ? bookDetails
@@ -99,7 +102,10 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
       {canExpand && !book.owned
         ? <button type="button" className="volume-toggle" aria-expanded={!collapsed} aria-label={collapsed ? t("Expand book {volume}", { volume: book.volume }) : t("Collapse book {volume}", { volume: book.volume })} onClick={() => setCollapsedOverride(!collapsed)}><Icon name={collapsed ? "chevronRight" : "chevronDown"} /></button>
         : <span className="volume-toggle volume-toggle-empty" />}
-      <h3 className="book-row-title">{t("Book")} {book.volume}</h3>
+      <h3 className="book-row-title">
+        {coverUrl ? <Cover url={coverUrl} title={t("Book {volume}", { volume: book.volume })} className="volume-cover" /> : null}
+        {t("Book")} {book.volume}
+      </h3>
       <div className="book-row-mid">
         <StatusPill kind={book.ignored ? "muted" : PLAN_KIND[plan]}>{book.ignored ? t("Ignored") : t(PLAN_LABEL[plan])}</StatusPill>
         {containsBookmark ? <a className="bookmark-location" href={bookmark.url} target="_blank" rel="noreferrer">
@@ -120,6 +126,7 @@ function BookRow({ book, chapters, filter, order, ...actions }: GroupActions & {
                 <option value="automatic">{t("Automatic")}</option><option value="monitored">{t("Monitored")}</option><option value="ignored">{t("Ignored")}</option>
               </select>
             </label>
+            {actions.onChooseBookCover ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={t("Choose cover for book {volume}", { volume: book.volume })} onClick={() => actions.onChooseBookCover?.(book)}><Icon name="image" size={14} /> {t("Choose cover…")}</button> : null}
             {book.owned && canExpand ? <button type="button" className="row-menu-item" aria-expanded={!collapsed} aria-label={collapsed ? t("Show separate chapter releases for book {volume}", { volume: book.volume }) : t("Hide separate chapter releases for book {volume}", { volume: book.volume })} onClick={() => setCollapsedOverride(!collapsed)}>{collapsed ? t("Show separate chapter releases") : t("Hide separate chapter releases")}</button> : null}
             {plan === "assemble" ? <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={t("Automatically search book {volume}", { volume: book.volume })} onClick={() => actions.onAutomaticSearchBook(book)}><Icon name="search" size={14} /> {t("Search the book file")}</button> : null}
             <button type="button" className="row-menu-item" disabled={actions.busy} aria-label={t("Interactive search for book {volume}", { volume: book.volume })} onClick={() => actions.onSearchBook(book)}><Icon name="user" size={14} /> {t("Interactive search")}</button>

@@ -247,7 +247,19 @@ export type VolumeMetadata = {
     artwork_source_height?: number | null;
     artwork_normalized_width?: number | null;
     artwork_normalized_height?: number | null;
+    artwork_selection_mode?: "automatic" | "manual" | null;
   };
+};
+
+export type VolumeArtworkUpdate = {
+  volume_key: string;
+  selection_mode: "manual" | "automatic";
+  artwork_source: string | null;
+  artwork_url: string | null;
+  artwork_sha256: string | null;
+  metadata: VolumeMetadata | null;
+  library: { updated?: number; errors?: { error?: string }[]; book_covers_written?: number };
+  komga: ArtworkSelectionUpdate["komga"];
 };
 
 export type MetadataSourceStatus = {
