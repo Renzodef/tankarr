@@ -5,6 +5,7 @@ import { LoadError } from "../components/LoadError";
 import ChapterRecoveryDialog from "../components/ChapterRecoveryDialog";
 import ChapterMapEditor from "../components/ChapterMapEditor";
 import SeriesUnitGroups from "../components/SeriesUnitGroups";
+import VolumeCoverDialog from "../components/VolumeCoverDialog";
 import SeriesAuditDialog from "../components/SeriesAuditDialog";
 import TranslationPanel from "../components/TranslationPanel";
 import SeriesSourcePicker from "../components/SeriesSourcePicker";
@@ -80,6 +81,24 @@ type FileDeletionTarget =
 
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "downloading", "packaging", "importing"]);
 const PENDING_ARTWORK_UPLOAD = "__pending-artwork-upload__";
+
+function sameVolumeKey(left: string, right: string): boolean {
+  if (left === right) return true;
+  const first = Number(left);
+  const second = Number(right);
+  return Number.isFinite(first) && Number.isFinite(second) && first === second;
+}
+
+function volumeArtwork(manga: Manga, volume: string) {
+  return manga.volume_metadata?.find((item) => sameVolumeKey(item.volume_key, volume));
+}
+
+function volumeCoverIsManual(manga: Manga, volume: string): boolean {
+  const data = volumeArtwork(manga, volume)?.data;
+  return data?.artwork_selection_mode === "manual"
+    || data?.artwork_source === "upload"
+    || data?.artwork_source === "sidecar";
+}
 const MAX_ARTWORK_UPLOAD_BYTES = 20 * 1024 * 1024;
 const SUPPORTED_ARTWORK_UPLOAD_TYPES = new Set([
   "image/jpeg",
@@ -189,6 +208,8 @@ export default function SeriesPage({ id }: { id: string }) {
   const [showAudit, setShowAudit] = useState(false);
   const [showMetadataSources, setShowMetadataSources] = useState(false);
   const [showArtworkChooser, setShowArtworkChooser] = useState(false);
+  const [volumeCover, setVolumeCover] = useState<SeriesBookGroup | null>(null);
+  const [volumeCoverSaving, setVolumeCoverSaving] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [searchMissingRunning, setSearchMissingRunning] = useState(false);
@@ -914,6 +935,8 @@ export default function SeriesPage({ id }: { id: string }) {
           setFileDeletion({ kind: "volume", volume: book.volume, language: manga.preferred_language, chapters });
         }}
         onRetireDuplicates={(book) => void previewDuplicateRetirement(book)}
+        onChooseBookCover={setVolumeCover}
+        bookCoverUrl={(book) => volumeArtwork(manga, book.volume)?.artwork_url ?? null}
         renderChapterRows={(chapters, book) => chapters.map((chapter) => {
           const best = chapter.releases.length ? preferredRelease(chapter.releases, manga.preferred_source_key) : undefined;
           const downloaded = chapter.releases.find((release) => release.id === chapter.open_release_id)
@@ -988,6 +1011,52 @@ export default function SeriesPage({ id }: { id: string }) {
             setShowMetadataSources(false);
             setShowEdit(true);
             await load(true);
+          }}
+        />
+      ) : null}
+      {volumeCover ? (
+        <VolumeCoverDialog
+          volume={volumeCover.volume}
+          coverUrl={volumeArtwork(manga, volumeCover.volume)?.artwork_url ?? null}
+          manual={volumeCoverIsManual(manga, volumeCover.volume)}
+          saving={volumeCoverSaving}
+          onClose={() => setVolumeCover(null)}
+          onReject={(message) => notify("error", message)}
+          onUpload={(file) => {
+            const book = volumeCover;
+            setVolumeCoverSaving(true);
+            void api.uploadVolumeArtwork(manga.id, book.volume, file)
+              .then((result) => {
+                const komgaErrors = result.komga?.errors?.length ?? 0;
+                notify(
+                  komgaErrors ? "info" : "success",
+                  komgaErrors
+                    ? t("Custom volume cover uploaded and normalized to 1000×1500; Komga will retry synchronization.")
+                    : t("Custom volume cover uploaded and normalized to 1000×1500 and mirrored to the library and Komga."),
+                );
+                setVolumeCover(null);
+                return load(true);
+              })
+              .catch((caught: unknown) => notify("error", String(caught)))
+              .finally(() => setVolumeCoverSaving(false));
+          }}
+          onRemove={() => {
+            const book = volumeCover;
+            setVolumeCoverSaving(true);
+            void api.removeVolumeArtwork(manga.id, book.volume)
+              .then((result) => {
+                const komgaErrors = result.komga?.errors?.length ?? 0;
+                notify(
+                  komgaErrors ? "info" : "success",
+                  komgaErrors
+                    ? t("Custom volume cover removed; Komga will retry synchronization.")
+                    : t("Custom volume cover removed. The catalogue or archive page is used again."),
+                );
+                setVolumeCover(null);
+                return load(true);
+              })
+              .catch((caught: unknown) => notify("error", String(caught)))
+              .finally(() => setVolumeCoverSaving(false));
           }}
         />
       ) : null}

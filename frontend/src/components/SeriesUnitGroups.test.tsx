@@ -304,3 +304,12 @@ it("keeps owned volume rows consistent with and without indexed chapter releases
   expect(screen.queryByText("Chapter 1")).toBeNull();
   expect(within(screen.getByRole("region", { name: "Book 2" })).queryByRole("button", { name: /separate chapter releases/ })).toBeNull();
 });
+
+it("offers a volume cover choice and shows the current poster", () => {
+  const owned = book("4", [], { owned: true, status: "owned", open_release_id: "owned-book" });
+  const choose = vi.fn();
+  render(<SeriesUnitGroups data={data([owned])} ongoing={false} busy={false} readerLabel="Tankarr" readerUrl={() => undefined} onSetBookMonitoring={vi.fn()} onAutomaticSearchBook={vi.fn()} onSearchBook={vi.fn()} onDeleteBookFiles={vi.fn()} onRetireDuplicates={vi.fn()} onSetBoundaries={vi.fn()} onChooseBookCover={choose} bookCoverUrl={() => "/api/metadata/artwork/example/volumes/4?v=abc"} renderChapterRows={() => null} />);
+  expect(screen.getByRole("img", { name: "Book 4" }).getAttribute("src")).toContain("/volumes/4");
+  fireEvent.click(screen.getByRole("button", { name: "Choose cover for book 4" }));
+  expect(choose).toHaveBeenCalledOnce();
+});

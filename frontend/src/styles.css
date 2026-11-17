@@ -4778,7 +4778,7 @@ select.input option {
 
 .book-row-line {
   display: grid;
-  grid-template-columns: 28px 76px minmax(0, 1fr) auto;
+  grid-template-columns: 28px auto minmax(0, 1fr) auto;
   gap: 0 10px;
   align-items: center;
   min-height: 40px;
@@ -4795,6 +4795,9 @@ select.input option {
 }
 
 .book-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   font-size: 14px;
   font-weight: 700;
@@ -4901,7 +4904,7 @@ select.input option {
 
 @media (max-width: 620px) {
   .book-row-line {
-    grid-template-columns: 22px 60px minmax(0, 1fr) auto;
+    grid-template-columns: 22px auto minmax(0, 1fr) auto;
     gap: 0 6px;
     padding: 0 2px;
   }

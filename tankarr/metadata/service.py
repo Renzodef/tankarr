@@ -7,6 +7,7 @@ import math
 import os
 import re
 import tempfile
+import uuid
 import warnings
 import zipfile
 from collections.abc import Awaitable, Callable
@@ -26,7 +27,7 @@ from tankarr import USER_AGENT
 from tankarr.archive import IMAGE_SUFFIXES
 from tankarr.artwork_urls import series_artwork_url, volume_artwork_url
 from tankarr.catalogue_consensus import AGREED, corroborate
-from tankarr.chapter_map import entries_from_releases
+from tankarr.chapter_map import canonical_label, entries_from_releases
 from tankarr.completeness import assess_chapter_completeness
 from tankarr.config import Settings
 from tankarr.database import Database, utc_now
@@ -66,6 +67,9 @@ TITLE_SELECTION_VERSION = 5
 IDENTITY_QUERY_MAX_CHARS = 64
 MAX_ARTWORK_BYTES = 20 * 1024 * 1024
 MAX_LOCAL_ARTWORK_BYTES = 64 * 1024 * 1024
+# Posters Tankarr writes beside a book, plus the image suffixes an operator
+# may drop there with the same base name. `.jpg` is the published form.
+VOLUME_SIDECAR_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".tbn")
 # Komga's default multipart ceiling is roughly 1 MiB. Leave enough room for
 # headers and boundary framing instead of relying on an exact server setting.
 MAX_STORED_ARTWORK_BYTES = 900_000
@@ -2699,10 +2703,26 @@ class MetadataService:
         *,
         previous: dict[str, Any] | None,
         force: bool,
+        respect_manual: bool = True,
+        ignore_sidecar: bool = False,
     ) -> dict[str, Any] | None:
         cached = await asyncio.to_thread(
             self._cached_artwork, manga["id"], f"volume-{volume}", previous
         )
+        files = (
+            {"sidecar": None, "reassembled": False}
+            if ignore_sidecar
+            else await asyncio.to_thread(self._volume_cover_files, manga, volume)
+        )
+        sidecar = files.get("sidecar")
+        if isinstance(sidecar, dict) and not self._same_artwork_hash(sidecar, cached):
+            adopted = await self._adopt_volume_sidecar(manga, volume, sidecar)
+            if adopted is not None:
+                return self._with_displaced_automatic(adopted, cached)
+        # A chosen cover is kept the way a series cover pin is kept: a later
+        # catalogue image or archive page must not replace it.
+        if respect_manual and self._is_manual_artwork(cached):
+            return cached
         candidates: list[dict[str, Any]] = []
         cover = (matched or {}).get("cover") or {}
         url = str(cover.get("url") or "")
@@ -2714,9 +2734,14 @@ class MetadataService:
                     "identifier": url,
                 }
             )
-        local = await asyncio.to_thread(
-            self._local_volume_cover_candidate, manga, volume
-        )
+        # A book rebuilt from chapters starts on a story page. When a poster
+        # already sits beside that CBZ, keep it instead of that page.
+        skip_archive_page = bool(files.get("reassembled") and sidecar is not None)
+        local = None
+        if not skip_archive_page:
+            local = await asyncio.to_thread(
+                self._local_volume_cover_candidate, manga, volume
+            )
         if local is not None:
             candidates.append(local)
         signature = self._artwork_candidate_signature(candidates)
@@ -2755,6 +2780,8 @@ class MetadataService:
             except Exception:  # noqa: BLE001 - retain other candidate sources
                 continue
         if selected is None:
+            if not respect_manual and self._is_manual_artwork(cached):
+                return None
             return cached
         stored = await asyncio.to_thread(
             self.artwork.store_prepared,
@@ -2931,40 +2958,8 @@ class MetadataService:
     def _local_volume_cover_candidate(
         self, manga: dict[str, Any], volume: str
     ) -> dict[str, Any] | None:
-        candidates = [
-            chapter
-            for chapter in self.database.list_all_chapters(manga["id"])
-            if str(chapter.get("volume") or "") == volume
-            and chapter.get("chapter") in (None, "")
-            and chapter.get("downloaded")
-            and chapter.get("library_path")
-        ]
-        candidates.sort(
-            key=lambda chapter: (
-                str(chapter.get("language") or "")
-                != str(manga.get("preferred_language") or ""),
-                str(chapter["id"]),
-            )
-        )
-        try:
-            root = self.settings.library_dir.resolve(strict=True)
-        except (FileNotFoundError, OSError):
-            return None
-        for chapter in candidates:
+        for chapter, path in self._volume_books(manga, volume):
             try:
-                recorded = Path(str(chapter["library_path"]))
-                path = (
-                    recorded.resolve(strict=True)
-                    if recorded.is_absolute()
-                    else (root / recorded).resolve(strict=True)
-                )
-                if (
-                    root not in path.parents
-                    or path.is_symlink()
-                    or not path.is_file()
-                    or path.suffix.casefold() != ".cbz"
-                ):
-                    continue
                 with zipfile.ZipFile(path) as archive:
                     images = sorted(
                         (
@@ -2988,6 +2983,449 @@ class MetadataService:
             except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
                 continue
         return None
+
+    def _volume_books(
+        self, manga: dict[str, Any], volume: str
+    ) -> list[tuple[dict[str, Any], Path]]:
+        """Downloaded volume archives for one book, preferred language first."""
+
+        candidates = [
+            chapter
+            for chapter in self.database.list_all_chapters(manga["id"])
+            if str(chapter.get("volume") or "") == volume
+            and chapter.get("chapter") in (None, "")
+            and chapter.get("downloaded")
+            and chapter.get("library_path")
+        ]
+        candidates.sort(
+            key=lambda chapter: (
+                str(chapter.get("language") or "")
+                != str(manga.get("preferred_language") or ""),
+                str(chapter["id"]),
+            )
+        )
+        try:
+            root = self.settings.library_dir.resolve(strict=True)
+        except (FileNotFoundError, OSError):
+            return []
+        books: list[tuple[dict[str, Any], Path]] = []
+        for chapter in candidates:
+            path = self._confined_volume_archive(chapter, root)
+            if path is not None:
+                books.append((chapter, path))
+        return books
+
+    @staticmethod
+    def _confined_volume_archive(chapter: dict[str, Any], root: Path) -> Path | None:
+        try:
+            recorded = Path(str(chapter["library_path"]))
+            path = (
+                recorded.resolve(strict=True)
+                if recorded.is_absolute()
+                else (root / recorded).resolve(strict=True)
+            )
+        except (OSError, ValueError):
+            return None
+        if (
+            root not in path.parents
+            or path.is_symlink()
+            or not path.is_file()
+            or path.suffix.casefold() != ".cbz"
+        ):
+            return None
+        return path
+
+    def _volume_cover_files(self, manga: dict[str, Any], volume: str) -> dict[str, Any]:
+        books = self._volume_books(manga, volume)
+        sidecar = None
+        try:
+            root = self.settings.library_dir.resolve(strict=True)
+        except (FileNotFoundError, OSError):
+            root = None
+        if root is not None:
+            for _chapter, path in books:
+                sidecar = self._read_volume_sidecar(path, root)
+                if sidecar is not None:
+                    break
+        reassembled = any(
+            str(chapter.get("provider") or "") == "assembled"
+            or chapter.get("assembled_from")
+            for chapter, _path in books
+        )
+        return {"sidecar": sidecar, "reassembled": reassembled}
+
+    def _read_volume_sidecar(self, archive: Path, root: Path) -> dict[str, Any] | None:
+        """A poster with the book's base name, preferring the `.jpg` Tankarr writes."""
+
+        for suffix in VOLUME_SIDECAR_SUFFIXES:
+            if suffix == ".tbn":
+                continue
+            sidecar = archive.with_suffix(suffix)
+            try:
+                if not sidecar.is_file() or sidecar.is_symlink():
+                    continue
+                resolved = sidecar.resolve(strict=True)
+                if (
+                    root not in resolved.parents
+                    or resolved.is_symlink()
+                    or not resolved.is_file()
+                ):
+                    continue
+                size = resolved.stat().st_size
+                if size <= 0 or size > MAX_LOCAL_ARTWORK_BYTES:
+                    continue
+                content = resolved.read_bytes()
+            except (OSError, ValueError):
+                continue
+            digest = hashlib.sha256(content).hexdigest()
+            return {
+                "source": "sidecar",
+                "content": content,
+                "identifier": f"sidecar:{archive.name}:{digest[:16]}",
+                "sha256": digest,
+            }
+        return None
+
+    async def _adopt_volume_sidecar(
+        self, manga: dict[str, Any], volume: str, sidecar: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        try:
+            prepared = await asyncio.to_thread(
+                self.artwork.prepare_bytes,
+                bytes(sidecar["content"]),
+                trusted_local=True,
+            )
+            stored = await asyncio.to_thread(
+                self.artwork.store_prepared,
+                manga["id"],
+                f"volume-{volume}",
+                prepared,
+            )
+        except Exception:  # noqa: BLE001 - a bad poster must not block other covers
+            return None
+        return {
+            **stored,
+            "source": "sidecar",
+            "source_url": str(sidecar["identifier"]),
+            "score": 0,
+            "source_priority": 0,
+            "candidate_signature": self._artwork_candidate_signature([sidecar]),
+            "candidates_evaluated": 1,
+            "selection_mode": "manual",
+            "selection_version": ARTWORK_SELECTION_VERSION,
+        }
+
+    @staticmethod
+    def _is_manual_artwork(artwork: dict[str, Any] | None) -> bool:
+        if not artwork:
+            return False
+        if str(artwork.get("selection_mode") or "") == "manual":
+            return True
+        return str(artwork.get("source") or "") in {"upload", "sidecar"}
+
+    @staticmethod
+    def _same_artwork_hash(
+        sidecar: dict[str, Any], artwork: dict[str, Any] | None
+    ) -> bool:
+        if not artwork:
+            return False
+        return str(sidecar.get("sha256") or "") == str(artwork.get("sha256") or "")
+
+    @staticmethod
+    def _with_displaced_automatic(
+        artwork: dict[str, Any], cached: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Remember the catalogue cover a manual choice replaced, so removal can restore it."""
+
+        if artwork.get("automatic_source_url") or not cached:
+            return artwork
+        if MetadataService._is_manual_artwork(cached):
+            source = str(cached.get("automatic_source") or "")
+            source_url = str(cached.get("automatic_source_url") or "")
+        else:
+            source = str(cached.get("source") or "")
+            source_url = str(cached.get("source_url") or "")
+        if not source_url.startswith("https://"):
+            return artwork
+        return {
+            **artwork,
+            "automatic_source": source or "catalogue",
+            "automatic_source_url": source_url,
+        }
+
+    def _resolve_volume_key(self, manga_id: str, volume: str) -> str:
+        raw = str(volume or "").strip()
+        if (
+            not raw
+            or len(raw) > 64
+            or any(mark in raw for mark in ("/", "\\", "\x00"))
+            or raw in {".", ".."}
+        ):
+            raise KeyError(volume)
+        known: list[str] = [
+            str(record["volume_key"])
+            for record in self.database.list_volume_metadata(manga_id)
+        ]
+        known.extend(
+            str(chapter.get("volume"))
+            for chapter in self.database.list_all_chapters(manga_id)
+            if chapter.get("volume") not in (None, "")
+        )
+        if raw in known:
+            return raw
+        wanted = canonical_label(raw)
+        if wanted is not None:
+            for key in known:
+                if canonical_label(key) == wanted:
+                    return key
+        raise KeyError(volume)
+
+    def _volume_metadata_record(
+        self, manga_id: str, volume_key: str
+    ) -> dict[str, Any] | None:
+        return next(
+            (
+                item
+                for item in self.database.list_volume_metadata(manga_id)
+                if item["volume_key"] == volume_key
+            ),
+            None,
+        )
+
+    def _save_volume_artwork(
+        self,
+        manga_id: str,
+        volume_key: str,
+        artwork: dict[str, Any] | None,
+        *,
+        base: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        data = dict(base or {})
+        data.setdefault("number", volume_key)
+        data.setdefault("entity_kind", "volume")
+        data.setdefault("title", f"Volume {volume_key}")
+        data["cover_url"] = (
+            volume_artwork_url(manga_id, volume_key, artwork.get("sha256"))
+            if artwork
+            else None
+        )
+        self._apply_artwork_metadata(data, artwork)
+        return self.database.save_volume_metadata(
+            manga_id,
+            volume_key,
+            data,
+            artwork_path=str(artwork["path"]) if artwork else None,
+            artwork_sha256=str(artwork["sha256"]) if artwork else None,
+            artwork_media_type=str(artwork["media_type"]) if artwork else None,
+        )
+
+    def _volume_artwork_result(
+        self,
+        volume_key: str,
+        saved: dict[str, Any] | None,
+        library: dict[str, Any],
+        komga: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        data = (saved or {}).get("data") or {}
+        return {
+            "volume_key": volume_key,
+            "selection_mode": str(data.get("artwork_selection_mode") or "automatic"),
+            "artwork_source": data.get("artwork_source"),
+            "artwork_url": data.get("cover_url"),
+            "artwork_sha256": (saved or {}).get("artwork_sha256"),
+            "metadata": saved,
+            "library": library,
+            "komga": komga,
+        }
+
+    async def upload_volume_artwork(
+        self, manga_id: str, volume: str, content: bytes
+    ) -> dict[str, Any]:
+        """Normalize and pin one cover for a single volume."""
+
+        async with self._series_lock(manga_id):
+            manga = self.database.get_manga(manga_id)
+            key = self._resolve_volume_key(manga_id, volume)
+            previous = self._volume_metadata_record(manga_id, key)
+            cached = await asyncio.to_thread(
+                self._cached_artwork, manga_id, f"volume-{key}", previous
+            )
+            prepared = await asyncio.to_thread(self.artwork.prepare_bytes, content)
+            stored = await asyncio.to_thread(
+                self.artwork.store_prepared,
+                manga_id,
+                f"volume-{key}",
+                prepared,
+            )
+            artwork = self._with_displaced_automatic(
+                {
+                    **stored,
+                    "source": "upload",
+                    "source_url": "user-upload",
+                    "score": 0,
+                    "source_priority": 0,
+                    "candidates_evaluated": 1,
+                    "selection_mode": "manual",
+                    "selection_version": ARTWORK_SELECTION_VERSION,
+                },
+                cached,
+            )
+            saved = self._save_volume_artwork(
+                manga_id,
+                key,
+                artwork,
+                base=(previous or {}).get("data"),
+            )
+            await asyncio.to_thread(self._sync_volume_sidecars, manga, key, artwork)
+            library, komga = await self._publish_reader_artwork(manga_id)
+            return self._volume_artwork_result(key, saved, library, komga)
+
+    async def clear_volume_artwork(self, manga_id: str, volume: str) -> dict[str, Any]:
+        """Drop a pinned volume cover and restore the catalogue or archive page."""
+
+        async with self._series_lock(manga_id):
+            manga = self.database.get_manga(manga_id)
+            key = self._resolve_volume_key(manga_id, volume)
+            previous = self._volume_metadata_record(manga_id, key)
+            cached = await asyncio.to_thread(
+                self._cached_artwork, manga_id, f"volume-{key}", previous
+            )
+            files = await asyncio.to_thread(self._volume_cover_files, manga, key)
+            sidecar = files.get("sidecar")
+            custom = self._is_manual_artwork(cached) or (
+                isinstance(sidecar, dict)
+                and not self._same_artwork_hash(sidecar, cached)
+            )
+            if not custom:
+                return self._volume_artwork_result(
+                    key,
+                    previous,
+                    {"reader_independent": True, "updated": 0, "errors": []},
+                    None,
+                )
+            data = (previous or {}).get("data") or {}
+            matched = None
+            automatic_url = str(
+                (cached or {}).get("automatic_source_url")
+                or data.get("artwork_automatic_source_url")
+                or ""
+            )
+            if automatic_url.startswith("https://"):
+                matched = {
+                    "source": str(
+                        (cached or {}).get("automatic_source")
+                        or data.get("artwork_automatic_source")
+                        or "catalogue"
+                    ),
+                    "cover": {"url": automatic_url},
+                }
+            artwork = await self._select_volume_artwork(
+                manga,
+                key,
+                matched,
+                previous=previous,
+                force=True,
+                respect_manual=False,
+                ignore_sidecar=True,
+            )
+            saved = self._save_volume_artwork(
+                manga_id,
+                key,
+                artwork,
+                base=data,
+            )
+            await asyncio.to_thread(self._sync_volume_sidecars, manga, key, artwork)
+            library, komga = await self._publish_reader_artwork(manga_id)
+            return self._volume_artwork_result(key, saved, library, komga)
+
+    async def _publish_reader_artwork(
+        self, manga_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        library = (
+            await self.library_publisher(manga_id)
+            if self.library_publisher is not None
+            else {"reader_independent": True, "updated": 0, "errors": []}
+        )
+        komga = (
+            await self.sync_to_komga(manga_id, force=True)
+            if self.komga is not None
+            else None
+        )
+        return library, komga
+
+    def _sync_volume_sidecars(
+        self,
+        manga: dict[str, Any],
+        volume: str,
+        artwork: dict[str, Any] | None,
+    ) -> None:
+        """Publish the selected poster beside each volume CBZ, or remove a rejected one."""
+
+        source = self._stored_artwork_file(artwork)
+        for _chapter, archive in self._volume_books(manga, volume):
+            try:
+                self._replace_volume_sidecar(archive, source)
+            except (OSError, ValueError):
+                continue
+
+    def _stored_artwork_file(self, artwork: dict[str, Any] | None) -> Path | None:
+        if not artwork or not artwork.get("path"):
+            return None
+        path = (self.settings.data_dir / str(artwork["path"])).resolve()
+        root = self.settings.data_dir.resolve()
+        if (
+            root not in path.parents
+            or path.is_symlink()
+            or not path.is_file()
+            or path.suffix.casefold() != ".jpg"
+        ):
+            return None
+        return path
+
+    def _replace_volume_sidecar(self, archive: Path, source: Path | None) -> None:
+        destination = archive.with_suffix(".jpg")
+        if destination.is_symlink() or (
+            destination.exists() and not destination.is_file()
+        ):
+            raise ValueError(f"Unsafe volume sidecar: {destination.name}")
+        if source is None:
+            self._delete_volume_sidecars(archive)
+            return
+        content = source.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        if (
+            destination.is_file()
+            and hashlib.sha256(destination.read_bytes()).hexdigest() == digest
+        ):
+            self._delete_alternate_volume_sidecars(destination)
+            return
+        partial = destination.with_name(
+            f".{destination.name}.artwork-{uuid.uuid4().hex}.partial"
+        )
+        try:
+            partial.write_bytes(content)
+            os.replace(partial, destination)
+        finally:
+            partial.unlink(missing_ok=True)
+        self._delete_alternate_volume_sidecars(destination)
+
+    @staticmethod
+    def _delete_volume_sidecars(archive: Path) -> None:
+        for suffix in VOLUME_SIDECAR_SUFFIXES:
+            candidate = archive.with_suffix(suffix)
+            if candidate.is_file() and not candidate.is_symlink():
+                candidate.unlink()
+
+    @staticmethod
+    def _delete_alternate_volume_sidecars(destination: Path) -> None:
+        for suffix in VOLUME_SIDECAR_SUFFIXES:
+            alternate = destination.with_suffix(suffix)
+            if (
+                alternate != destination
+                and alternate.is_file()
+                and not alternate.is_symlink()
+            ):
+                alternate.unlink()
 
     @staticmethod
     def _natural_artwork_key(value: str) -> tuple[tuple[int, object], ...]:
@@ -4334,6 +4772,16 @@ class MetadataService:
             if artwork
             else None
         )
+        target["artwork_automatic_source"] = (
+            str(artwork["automatic_source"])
+            if artwork and artwork.get("automatic_source")
+            else None
+        )
+        target["artwork_automatic_source_url"] = (
+            str(artwork["automatic_source_url"])
+            if artwork and artwork.get("automatic_source_url")
+            else None
+        )
 
     def status(self, coverage: dict[str, Any] | None = None) -> dict[str, Any]:
         monitor_active = bool(self.task is not None and not self.task.done())
@@ -4410,6 +4858,8 @@ class MetadataService:
             "candidate_id",
             "automatic_candidate_id",
             "selection_mode",
+            "automatic_source",
+            "automatic_source_url",
         ):
             persisted = data.get(f"artwork_{field}")
             if persisted is not None and field not in stored:

@@ -7,6 +7,7 @@ import type {
   LibraryOrphans,
   ArtworkSelection,
   ArtworkSelectionUpdate,
+  VolumeArtworkUpdate,
   BackupInfo,
   AuthStatus,
   PublicationStatusOverride,
@@ -484,6 +485,20 @@ export const api = {
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file,
       },
+    ),
+  uploadVolumeArtwork: (id: string, volume: string, file: File) =>
+    request<VolumeArtworkUpdate>(
+      `/api/manga/${encodeURIComponent(id)}/volumes/${encodeURIComponent(volume)}/artwork-upload`,
+      {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      },
+    ),
+  removeVolumeArtwork: (id: string, volume: string) =>
+    request<VolumeArtworkUpdate>(
+      `/api/manga/${encodeURIComponent(id)}/volumes/${encodeURIComponent(volume)}/artwork-upload`,
+      { method: "DELETE" },
     ),
   metadataStatus: () => request<MetadataStatus>("/api/metadata/status"),
   refreshAllMetadata: (force = true) =>
