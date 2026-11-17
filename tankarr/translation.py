@@ -16,7 +16,6 @@ import httpx
 from tankarr.archive import package_cbz_validated, sha256, validate_cbz
 from tankarr.http import async_client
 from tankarr.importer import LibraryImporter
-from tankarr.languages import SUPPORTED_LANGUAGE_CODES
 from tankarr.local_translation import LocalTranslationError, translate_archive
 from tankarr.providers.base import ProviderRequestError
 from tankarr.service import local_page_content_sha256
@@ -116,19 +115,34 @@ class TranslationManager:
                 logger.warning("Translation source discovery temporarily unavailable")
         queued += await self._queue_sources(manga_id, languages, limit=10 - queued)
         if self.acquisition is not None:
-            queued += await self.acquisition.hunt(manga_id, languages)
+            discovery = set(self.settings.translation_discovery_language_codes)
+            queued += await self.acquisition.hunt(
+                manga_id, [code for code in languages if code in discovery]
+            )
         return queued
 
     async def _source_languages_after_preferred(
         self, manga: dict, capable: list[str]
     ) -> list[str]:
+        discovery = set(self.settings.translation_discovery_language_codes)
+        preferred = str(manga.get("preferred_language") or "").casefold()
+        wide = [code for code in capable if code in discovery and code != preferred]
         configured = await self._configured_source_languages()
         if configured is None:
             # The source catalogue could not be listed. Keep walking every
             # capable language, a few per pass, instead of stopping at the
             # library language.
-            return self.store.discovery_batch(str(manga["id"]), capable)
-        return source_languages_to_search(manga, configured, capable=capable)
+            return self.store.discovery_batch(str(manga["id"]), wide)
+        direct = [
+            code
+            for code in source_languages_to_search(manga, configured, capable=capable)
+            if code in discovery
+        ]
+        # Languages without an enabled source are still searched while
+        # translation is on, a few per pass, so a series that only exists in
+        # another language is found without installing more extensions.
+        rest = [code for code in wide if code not in direct]
+        return direct + self.store.discovery_batch(str(manga["id"]), rest)
 
     async def _configured_source_languages(self) -> list[str] | None:
         """Languages of sources the operator has already enabled.
@@ -155,7 +169,9 @@ class TranslationManager:
         saw_catalog = False
         for catalog in catalogs:
             try:
-                listed = await catalog(tuple(SUPPORTED_LANGUAGE_CODES))
+                listed = await catalog(
+                    tuple(self.settings.translation_discovery_language_codes)
+                )
             except Exception as error:  # noqa: BLE001 - one provider must not hide the others
                 logger.warning(
                     "Configured source languages unavailable (%s)",

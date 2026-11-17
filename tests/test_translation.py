@@ -141,6 +141,32 @@ def test_configured_sources_are_searched_the_library_profile_is_not():
     )
 
 
+@pytest.mark.asyncio
+async def test_translation_discovers_languages_without_an_enabled_source(
+    translation, monkeypatch
+):
+    manager, _database, _service, _source = translation
+    manager.settings.search_languages = "en,it"
+    work = {"id": "manga-1", "preferred_language": "en", "original_language": "zh"}
+    capable = fallback_languages(work)
+    # Suwayomi only has English and Italian sources; no extension is added.
+    monkeypatch.setattr(
+        manager, "_configured_source_languages", AsyncMock(return_value=["en", "it"])
+    )
+    manager.settings.translation_enabled = False
+    assert await manager._source_languages_after_preferred(work, capable) == ["it"]
+
+    manager.settings.translation_enabled = True
+    seen = set()
+    for _ in range(len(capable)):
+        batch = await manager._source_languages_after_preferred(work, capable)
+        # Configured languages every pass, then a bounded batch of the rest.
+        assert batch[0] == "it" and len(batch) == 4 and "en" not in batch
+        seen.update(batch)
+    assert seen == set(capable)
+    assert "zh" in seen
+
+
 def test_discovery_is_bounded_fair_and_survives_restart(translation):
     from tankarr.translation_store import TranslationStore
 
@@ -464,14 +490,14 @@ async def test_preferred_gap_searches_every_configured_source_language(translati
     assert await manager.queue_missing("manga-1") == 1
     asked = provider.source_catalog.await_args.args[0]
     assert "ja" in asked and "zh" in asked and "it" in asked
-    assert [
+    asked_languages = [
         call.kwargs["language"]
         for call in manager.release_sources.discover_and_refresh.await_args_list
-    ] == [
-        "ja",
-        "it",
-        "zh",
     ]
+    # Configured source languages first, then a bounded batch of the others.
+    assert asked_languages[:3] == ["ja", "it", "zh"]
+    assert len(asked_languages) == 6
+    assert not {"en", "ja", "it", "zh"} & set(asked_languages[3:])
     job = manager.store.list()[0]
     assert job["source"]["language"] == "zh"
     assert job["target_language"] == "en"
@@ -482,7 +508,7 @@ async def test_preferred_gap_searches_every_configured_source_language(translati
 
 
 @pytest.mark.asyncio
-async def test_english_sources_do_not_invent_a_foreign_catalogue_sweep(translation):
+async def test_english_sources_sweep_other_languages_in_bounded_batches(translation):
     manager, _database, _service, _source = translation
     manager.settings.search_languages = "en"
     manager._missing = lambda _id: [{"chapter": "2", "volume": "1", "expected": True}]
@@ -492,7 +518,12 @@ async def test_english_sources_do_not_invent_a_foreign_catalogue_sweep(translati
     )
     manager.release_sources.providers = {"suwayomi": provider}
     assert await manager.queue_missing("manga-1") == 0
-    manager.release_sources.discover_and_refresh.assert_not_awaited()
+    calls = manager.release_sources.discover_and_refresh.await_args_list
+    # Translation is on: other languages are searched a few per pass, as
+    # translation inputs, without monitoring them or installing extensions.
+    assert len(calls) == 3
+    assert all(call.kwargs["monitor_new"] is False for call in calls)
+    assert "en" not in {call.kwargs["language"] for call in calls}
     assert manager.store.list() == []
 
 
