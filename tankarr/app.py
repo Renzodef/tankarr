@@ -385,6 +385,34 @@ def _tell_both_counts(
     decorated["chapter_total_count"] = chapters_total or None
 
 
+def require_volume_number(volume: str) -> str:
+    """Accept a short integer or decimal before any canonical-label parse."""
+
+    text = str(volume or "").strip()
+    if len(text) > 16 or not _ascii_decimal(text):
+        raise HTTPException(
+            status_code=400,
+            detail="Volume must be a number of at most 16 characters",
+        )
+    return text
+
+
+def _ascii_decimal(value: str) -> bool:
+    if not value:
+        return False
+    whole, dot, fraction = value.partition(".")
+    if not whole.isascii() or not whole.isdigit():
+        return False
+    if not dot:
+        return True
+    return (
+        bool(fraction)
+        and "." not in fraction
+        and fraction.isascii()
+        and fraction.isdigit()
+    )
+
+
 async def read_artwork_upload(request: Request) -> bytes:
     """Read one cover upload using the series cover limits."""
 
@@ -2949,6 +2977,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/manga/{manga_id}/volumes/{volume}/artwork-upload")
     async def upload_volume_artwork(manga_id: str, volume: str, request: Request):
+        volume = require_volume_number(volume)
         content = await read_artwork_upload(request)
         try:
             return await metadata.upload_volume_artwork(manga_id, volume, content)
@@ -2964,6 +2993,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/api/manga/{manga_id}/volumes/{volume}/artwork-upload")
     async def delete_volume_artwork(manga_id: str, volume: str):
+        volume = require_volume_number(volume)
         try:
             return await metadata.clear_volume_artwork(manga_id, volume)
         except KeyError as exc:

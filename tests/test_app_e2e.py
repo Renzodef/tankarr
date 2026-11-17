@@ -288,6 +288,17 @@ def test_volume_artwork_upload_and_delete_follow_the_series_checks(tmp_path: Pat
             headers={"Content-Type": "image/png"},
         )
         assert missing.status_code == 404
+        for bad in ("nope", "1.2.3", "4.", "." + "1" * 16, "1" * 17):
+            refused = client.post(
+                f"/api/manga/{manga_id}/volumes/{bad}/artwork-upload",
+                content=upload,
+                headers={"Content-Type": "image/png"},
+            )
+            assert refused.status_code == 400, bad
+            removed = client.delete(
+                f"/api/manga/{manga_id}/volumes/{bad}/artwork-upload"
+            )
+            assert removed.status_code == 400, bad
 
         rejected = client.post(
             f"/api/manga/{manga_id}/volumes/4/artwork-upload",

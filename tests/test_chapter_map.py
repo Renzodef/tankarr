@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from tankarr.chapter_map import (
     MapEntry,
+    canonical_label,
     chapters_by_volume,
     coverage_for_chapter,
     effective_entries,
@@ -12,6 +15,26 @@ from tankarr.chapter_map import (
     expand_numbers,
     integer_chapter_total,
 )
+
+
+def test_canonical_label_strips_zeros_without_a_backtracking_pattern():
+    assert canonical_label("004") == "4"
+    assert canonical_label("  012 ") == "12"
+    assert canonical_label("00") == "0"
+    assert canonical_label("0") == "0"
+    assert canonical_label("00.50") == "0.5"
+    assert canonical_label("4.0") == "4"
+    assert canonical_label("4.10") == "4.1"
+    assert canonical_label("12.5") == "12.5"
+    assert canonical_label(None) is None
+    assert canonical_label("") is None
+    assert canonical_label("4.") is None
+    assert canonical_label(".5") is None
+    assert canonical_label("1.2.3") is None
+    assert canonical_label("nope") is None
+    started = time.perf_counter()
+    assert canonical_label("0" * 8000 + "x") is None
+    assert time.perf_counter() - started < 0.05
 
 
 def test_expand_numbers_handles_ranges_decimals_and_decorations():

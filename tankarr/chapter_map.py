@@ -24,7 +24,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 RANGE_PATTERN = re.compile(r"^\s*0*(\d+(?:\.\d+)?)\s*[-–~]\s*0*(\d+(?:\.\d+)?)\s*$")
-NUMBER_PATTERN = re.compile(r"^\s*0*(\d+(?:\.\d+)?)\s*$")
 # Quality/edition suffixes groups append to numbers ("73 LQ", "73-75 HQ",
 # "101-102 (end)", "12 v2"). They never change which chapters are covered.
 DECORATION_PATTERN = re.compile(
@@ -70,13 +69,27 @@ def edition_entries(
     return [entry for entry in entries if entry.source in {"operator", "ocr"}]
 
 
+def _plain_decimal(value: str) -> bool:
+    """One integer, or one integer and a fractional part.
+
+    Leading zeros are ordinary digits here. Stripping them with a ``0*``
+    prefix in front of ``\\d+`` overlaps on zero and backtracks polynomially.
+    """
+
+    if not value:
+        return False
+    whole, dot, fraction = value.partition(".")
+    if dot and (not fraction or "." in fraction or not fraction.isdigit()):
+        return False
+    return bool(whole) and whole.isdigit()
+
+
 def canonical_label(value: object) -> str | None:
     raw = str(value if value is not None else "").strip()
-    match = NUMBER_PATTERN.fullmatch(raw)
-    if not match:
+    if not _plain_decimal(raw):
         return None
     try:
-        number = Decimal(match.group(1))
+        number = Decimal(raw)
     except InvalidOperation:
         return None
     text = format(number, "f")
