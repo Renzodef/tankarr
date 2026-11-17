@@ -992,6 +992,198 @@ def join_broken_words(language):
     return restore
 
 
+# 2026-11-17 series glossary (Renzo t1155): proper names stay identical across pages and volumes.
+# A glossary is optional and keyed by the ComicInfo <Series> of the source archive; without one
+# nothing changes (prompts, checkpoint identity and behaviour stay as before).
+GLOSSARY_DIR = Path(
+    os.environ.get("TANKARR_GLOSSARY_DIR") or Path(__file__).resolve().parent / "glossaries"
+)
+GLOSSARY_NOTE = ""
+
+
+def glossary_slug(value):
+    value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+
+
+def series_glossary(source):
+    """The glossary of the archive's series, or None. Never raises: a bad file means no glossary."""
+    import xml.etree.ElementTree as ElementTree
+
+    try:
+        with zipfile.ZipFile(source) as archive:
+            names = {Path(n).name.casefold(): n for n in archive.namelist()}
+            if "comicinfo.xml" not in names:
+                return None
+            info = archive.getinfo(names["comicinfo.xml"])
+            if info.file_size > 256 * 1024:
+                return None
+            root = ElementTree.fromstring(archive.read(info))
+        series = (root.findtext("Series") or "").strip()
+        slug = glossary_slug(series)
+        if not slug:
+            return None
+        path = GLOSSARY_DIR / f"{slug}.json"
+        if not path.is_file() or path.stat().st_size > 256 * 1024:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        terms = [
+            t
+            for t in data.get("terms", [])
+            if isinstance(t, dict) and str(t.get("source") or "").strip() and str(t.get("target") or "").strip()
+        ]
+        if not terms:
+            return None
+        data["terms"] = terms
+        data["_digest"] = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        return data
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, ElementTree.ParseError):
+        return None
+
+
+def glossary_note(glossary):
+    if not glossary:
+        return ""
+    lines = [
+        "",
+        "## Series glossary (mandatory)",
+        "Render these names and terms exactly as given, every time they appear, in every page. "
+        "Never replace a name with a real person, a celebrity or an unrelated English word, and never "
+        "invent a new spelling. A name not listed here is transliterated once from its reading and then kept identical.",
+    ]
+    for term in glossary["terms"]:
+        line = f"- {term['source']} -> {term['target']}"
+        if term.get("note"):
+            line += f" ({term['note']})"
+        lines.append(line)
+    for note in glossary.get("notes", []):
+        lines.append(f"- {note}")
+    return "\n".join(lines).replace("{", "{{").replace("}", "}}")
+
+
+def normalise_variants(text, glossary):
+    """Put back the glossary spelling of names the OCR is known to misread (listed per series)."""
+    if not glossary or not isinstance(text, str):
+        return text
+    for term in glossary["terms"]:
+        for variant in term.get("variants", []):
+            if isinstance(variant, str) and variant:
+                text = text.replace(variant, term["source"])
+    return text
+
+
+def install_glossary(glossary):
+    """Patch the DeepSeek adapter's system prompt and the prompt assembly; returns the function that undoes it."""
+    global GLOSSARY_NOTE
+    if not glossary:
+        return lambda: None
+    GLOSSARY_NOTE = glossary_note(glossary)
+    try:
+        from manga_translator.translators.common_gpt import CommonGPTTranslator
+        from manga_translator.translators.deepseek import DeepseekTranslator
+    except ImportError:
+        return lambda: None
+    template = DeepseekTranslator.__dict__.get("_CHAT_SYSTEM_TEMPLATE")
+    effective = DeepseekTranslator._CHAT_SYSTEM_TEMPLATE
+    DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = effective + GLOSSARY_NOTE
+    original = CommonGPTTranslator._assemble_prompts
+
+    def assemble(self, from_lang, to_lang, queries):
+        return original(self, from_lang, to_lang, [normalise_variants(q, glossary) for q in queries])
+
+    CommonGPTTranslator._assemble_prompts = assemble
+
+    def restore():
+        global GLOSSARY_NOTE
+        GLOSSARY_NOTE = ""
+        CommonGPTTranslator._assemble_prompts = original
+        if template is None:
+            with suppress(AttributeError):
+                del DeepseekTranslator._CHAT_SYSTEM_TEMPLATE
+        else:
+            DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = template
+
+    return restore
+
+
+# 2026-11-17 (Miles trial, Renzo): MIT joins the columns of a vertical Japanese balloon with no
+# separator, so 「オートバイ／ノワさんに」 reached the model as one word and came back as
+# "Mr. Ootobaino". A Japanese book gets a note on columns, honorifics, loanwords and sound
+# effects, and the model sees an ideographic space where a column of the balloon ends.
+JAPANESE_NOTE = (
+    "\n\n## Japanese source\n"
+    "- An ideographic space (\u3000) marks where a column of the vertical balloon ends next to a "
+    "katakana word. Read the balloon as one sentence; the break only tells two words apart: never "
+    "fuse the words on both sides of it into one name, and never write the space in the English.\n"
+    "- さん, くん, ちゃん, 様, 先輩, 先生, 殿 after a name are honorifics, not part of the name: "
+    "ノワさん is Nowa-san (Mr. or Ms. only when the series glossary says so). Names are "
+    "transliterated once in Hepburn and then kept identical.\n"
+    "- An ordinary katakana loanword is translated, not taken for a name "
+    "(オートバイ = motorbike, ブレーキ = brakes, バス = bus).\n"
+    "- Sound effects in kana (ドスン, バタタ, ブバーン, ギャ, ザッ) are short English onomatopoeia "
+    "(THUD, RATTATAT, VROOM, SKREE, SHFF), never a transliteration or an explanation."
+)
+JAPANESE_ACTIVE = False
+COLUMN_TEXT = {}
+KATAKANA = re.compile(r"[\u30a1-\u30fa\uff66-\uff9f]")
+
+
+def japanese_columns(regions):
+    """Remember, for this page, the text of each vertical Japanese region with its column breaks."""
+    COLUMN_TEXT.clear()
+    if not JAPANESE_ACTIVE:
+        return
+    for region in regions or []:
+        texts = [str(t).strip() for t in (getattr(region, "texts", None) or []) if str(t).strip()]
+        text = str(getattr(region, "text", "") or "")
+        if len(texts) > 1 and text == "".join(texts):
+            # Only a break next to katakana is shown: there two words can fuse into a
+            # false name (オートバイ|ノワ). Between kana or kanji a break is often inside
+            # a phrase (素直じゃ|ねーか) and showing it misled the model.
+            joined = texts[0]
+            for previous, current in zip(texts, texts[1:]):
+                katakana = KATAKANA.match(previous[-1]) or KATAKANA.match(current[0])
+                joined += ("\u3000" if katakana else "") + current
+            if joined != text:
+                COLUMN_TEXT[text] = joined
+
+
+def install_japanese_prompt(language):
+    """Add the Japanese note to the system prompt and show column breaks; returns the function that undoes it."""
+    global JAPANESE_ACTIVE
+    if str(language or "").split("-")[0].casefold() != "ja":
+        return lambda: None
+    try:
+        from manga_translator.translators.common_gpt import CommonGPTTranslator
+        from manga_translator.translators.deepseek import DeepseekTranslator
+    except ImportError:
+        return lambda: None
+    JAPANESE_ACTIVE = True
+    template = DeepseekTranslator.__dict__.get("_CHAT_SYSTEM_TEMPLATE")
+    DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = DeepseekTranslator._CHAT_SYSTEM_TEMPLATE + JAPANESE_NOTE
+    original = CommonGPTTranslator._assemble_prompts
+
+    def assemble(self, from_lang, to_lang, queries):
+        return original(self, from_lang, to_lang, [COLUMN_TEXT.get(q, q) for q in queries])
+
+    CommonGPTTranslator._assemble_prompts = assemble
+
+    def restore():
+        global JAPANESE_ACTIVE
+        JAPANESE_ACTIVE = False
+        COLUMN_TEXT.clear()
+        CommonGPTTranslator._assemble_prompts = original
+        if template is None:
+            try:
+                del DeepseekTranslator._CHAT_SYSTEM_TEMPLATE
+            except AttributeError:
+                pass
+        else:
+            DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = template
+
+    return restore
+
+
 # A test sets an httpx transport here; None is the network.
 PROVIDER_TRANSPORT = None
 LANGUAGE_NAMES = {
@@ -1044,7 +1236,7 @@ async def translate_lost(request, texts):
         f"Otherwise, if the line is not speech in {language}, even allowing for OCR mistakes (an invented or made-up language, random "
         "letters, or only the end or the start of a broken word), answer exactly: NOT SPEECH. "
         f"Real {language}, however short or misspelled, is translated."
-    )
+    ) + GLOSSARY_NOTE.replace("{{", "{").replace("}}", "}") + (JAPANESE_NOTE if JAPANESE_ACTIVE else "")
     reasoning = (
         {"thinking": {"type": "disabled"}}
         if "deepseek" in str(ai["base_url"]).lower()
@@ -2252,9 +2444,39 @@ def transient_error(error):
                 "NetworkError",
                 "ConnectionError",
                 "APIConnectionError",
+                # 2026-11-17: a vision server killed mid-request (OOM, restart)
+                # drops the connection without a response.
+                "TransportError",
+                "ProtocolError",
+                "RemoteProtocolError",
             }:
                 return True
         error = error.__cause__ or error.__context__
+    return False
+
+
+def vision_reachable(request):
+    """False when the job's local vision server does not answer now (killed, restarting, refused).
+
+    2026-11-17: a Qwen restart mid-page surfaced as a content failure (exit 1, terminal) and the
+    job was lost; an unreachable vision server is a temporary condition (exit 75, resumable)."""
+    vision = request.get("vision") if isinstance(request, dict) else None
+    if not isinstance(vision, dict) or not vision.get("base_url"):
+        return True
+    import httpx
+
+    url = str(vision["base_url"]).rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {vision['api_key']}"} if vision.get("api_key") else {}
+    for _ in range(3):
+        try:
+            response = httpx.get(url, headers=headers, timeout=httpx.Timeout(10, connect=5))
+            if response.status_code < 500:
+                return True
+        except Exception:  # noqa: BLE001 - any transport failure means not reachable
+            pass
+        import time
+
+        time.sleep(5)
     return False
 
 
@@ -2638,6 +2860,10 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
     engine_config.setdefault("upscale", {"upscale_ratio": None})
     engine_config.setdefault("detector", {"detection_size": 1024})
     identity = checkpoint_identity(request, engine_config)
+    glossary = series_glossary(source)
+    if glossary:
+        # A glossary changes the English: pages made without it are not reused.
+        identity = hashlib.sha256((identity + ":glossary:" + glossary["_digest"]).encode()).hexdigest()
     parsed = Config(**engine_config)
     # The Python constructor requires some CLI defaults (notably kernel_size).
     # Read them from the installed engine, then apply our explicit GPU choice.
@@ -2665,6 +2891,7 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
                     raise SuspectGeometry(
                         "Vision provider returned no usable balloon geometry"
                     ) from None
+            japanese_columns(ctx.text_regions)
             return await super()._run_text_translation(config, ctx)
 
         async def _run_text_rendering(self, config, ctx):
@@ -2697,6 +2924,8 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
     trace = ProviderTrace(request["ai"].get("base_url"))
     restore_traffic = trace.install()
     restore_prompts = join_broken_words(request.get("source_language"))
+    restore_glossary = install_glossary(glossary)
+    restore_japanese = install_japanese_prompt(request.get("source_language"))
     try:
         with (
             zipfile.ZipFile(source) as archive,
@@ -3215,6 +3444,8 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
             result.writestr("translation.json", json.dumps(receipt))
         partial.replace(output)
     finally:
+        restore_japanese()
+        restore_glossary()
         restore_prompts()
         restore_traffic()
         partial.unlink(missing_ok=True)
@@ -3270,7 +3501,7 @@ def main():
         print(f"Translation failed: {error}", file=sys.stderr)
         raise SystemExit(75) from None
     except Exception as error:  # noqa: BLE001 - do not print SDK bodies or credentials
-        temporary = transient_error(error)
+        temporary = transient_error(error) or not vision_reachable(request)
         write_failure_receipt(
             args.output,
             "provider_interrupted" if temporary else "validation_failed",
