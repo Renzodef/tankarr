@@ -340,6 +340,24 @@ def supported_balloon_boxes(boxes, regions, width, height):
     return supported
 
 
+def mask_coverage(bounds, mask, rect):
+    left, top, right, bottom = bounds
+    x1, y1, x2, y2 = rect
+    area = (x2 - x1) * (y2 - y1)
+    crop_left, crop_right = max(left, x1), min(right, x2)
+    crop_top, crop_bottom = max(top, y1), min(bottom, y2)
+    if area <= 0 or crop_left >= crop_right or crop_top >= crop_bottom:
+        return 0
+    return (
+        float(
+            mask[
+                crop_top - top : crop_bottom - top, crop_left - left : crop_right - left
+            ].sum()
+        )
+        / area
+    )
+
+
 def merge_balloon_fragments(shapes, boxes, regions=()):
     """Combine compatible color fragments belonging to one vision balloon."""
     import cv2
@@ -428,25 +446,12 @@ def merge_balloon_fragments(shapes, boxes, regions=()):
         # Fragmented contours cannot win merely by having a smaller area.
         complete = []
         for shape in group:
-            (sx, sy, sr, sb), candidate, _ = shape
+            bounds, candidate, _ = shape
             if not text_rects or candidate.sum() < dominant[1].sum() * 0.65:
                 continue
-            coverage = []
-            for rx1, ry1, rx2, ry2 in text_rects:
-                tx1, ty1, tx2, ty2 = (
-                    max(sx, rx1),
-                    max(sy, ry1),
-                    min(sr, rx2),
-                    min(sb, ry2),
-                )
-                area = (rx2 - rx1) * (ry2 - ry1)
-                coverage.append(
-                    float(candidate[ty1 - sy : ty2 - sy, tx1 - sx : tx2 - sx].sum())
-                    / area
-                    if area > 0 and tx2 > tx1 and ty2 > ty1
-                    else 0
-                )
-            if min(coverage) >= 0.85:
+            if all(
+                mask_coverage(bounds, candidate, rect) >= 0.85 for rect in text_rects
+            ):
                 complete.append(shape)
         if complete:
             merged.append(min(complete, key=lambda shape: int(shape[1].sum())))
@@ -458,18 +463,25 @@ def merge_balloon_fragments(shapes, boxes, regions=()):
         mask = np.zeros((bottom - y, right - x), dtype=np.uint8)
         for (sx, sy, sr, sb), fragment, _ in group:
             mask[sy - y : sb - y, sx - x : sr - x] |= fragment
-        points = cv2.findNonZero(mask)
-        if points is None:
-            continue
         # Printed letters can split the flat background. Preserve irregular
         # outlines when closing gaps already reconnects the components.
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
         outlines, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if len(outlines) == 1:
             cv2.drawContours(mask, outlines, -1, 1, cv2.FILLED)
-        else:
-            cv2.fillConvexPoly(mask, cv2.convexHull(points), 1)
-        merged.append(((x, y, right, bottom), mask, dominant[2]))
+            merged.append(((x, y, right, bottom), mask, dominant[2]))
+            continue
+        # One vision box may span multiple captions or unrelated artwork.
+        # Use only the detached components that independently cover source text.
+        for outline in outlines:
+            cx, cy, width, height = cv2.boundingRect(outline)
+            component = np.zeros((height, width), dtype=np.uint8)
+            cv2.drawContours(component, [outline - [cx, cy]], 0, 1, cv2.FILLED)
+            bounds = (x + cx, y + cy, x + cx + width, y + cy + height)
+            if any(
+                mask_coverage(bounds, component, rect) >= 0.7 for rect in text_rects
+            ):
+                merged.append((bounds, component, dominant[2]))
     return merged
 
 

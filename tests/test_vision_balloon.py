@@ -171,6 +171,38 @@ def test_empty_candidates_have_no_guided_layout():
     assert vision.merge_balloon_fragments([], [(0, 0, 10, 10)]) == []
 
 
+@pytest.mark.asyncio
+async def test_broad_guidance_keeps_two_detached_captions_separate():
+    source = np.full((380, 420, 3), [39, 72, 93], dtype=np.uint8)
+    source[55:225, 35:140] = [249, 250, 251]
+    source[55:225, 275:380] = [249, 250, 251]
+    regions = [
+        SimpleNamespace(
+            xyxy=[55, 75, 115, 205], center=[85, 140], translation="Left caption."
+        ),
+        SimpleNamespace(
+            xyxy=[295, 75, 355, 205], center=[325, 140], translation="Right caption."
+        ),
+    ]
+    for left, top, right, bottom in (region.xyxy for region in regions):
+        source[top:bottom:12, left:right:6] = [15, 15, 15]
+    context = SimpleNamespace(
+        img_rgb=source,
+        img_inpainted=source.copy(),
+        vision_boxes={(28, 48, 387, 232): ""},
+        text_regions=regions,
+    )
+
+    async def fallback(_config, _context):
+        pytest.fail("Both captions have independent lettering areas")
+
+    result = await vision.render_guided(fallback, None, context)
+
+    assert np.array_equal(result[:, 140:275], source[:, 140:275])
+    assert not np.array_equal(result[55:225, 35:140], source[55:225, 35:140])
+    assert not np.array_equal(result[55:225, 275:380], source[55:225, 275:380])
+
+
 def test_panel_geometry_is_replaced_by_separate_ocr_guidance():
     regions = [
         SimpleNamespace(xyxy=[30, 30, 60, 160]),
