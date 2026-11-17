@@ -87,7 +87,9 @@ async def analyze_page(ctx, vision, source_language):
 
     original = Image.fromarray(ctx.img_rgb)
     page = original.copy()
-    page.thumbnail((1100, 1100))
+    # 2026-11-17: MLX Qwen has no --image-min-tokens; 1440 px gives ~1300 image
+    # tokens (>= 1024 needed for grounding) on a 980x1426 page.
+    page.thumbnail((1440, 1440))
     compressed = io.BytesIO()
     page.save(compressed, format="JPEG", quality=90)
     image = "data:image/jpeg;base64," + base64.b64encode(compressed.getvalue()).decode()
@@ -180,6 +182,35 @@ async def analyze_page(ctx, vision, source_language):
             used.add(box)
 
 
+def fit_strip(text, length, thickness):
+    """Lines of text read along a strip `length` px long and `thickness` px wide."""
+    from PIL import ImageFont
+
+    words = text.split()
+    for size in range(min(26, thickness - 2), 9, -1):
+        try:
+            font = ImageFont.truetype("DejaVuSans.ttf", size)
+        except OSError:
+            font = ImageFont.load_default(size=size)
+        rows, line = [], ""
+        for word in words:
+            candidate = (line + " " + word).strip()
+            if font.getlength(candidate) <= length:
+                line = candidate
+                continue
+            if not line:
+                rows = None
+                break
+            rows.append(line)
+            line = word
+        if rows is None:
+            continue
+        rows.append(line)
+        if len(rows) * (size + 3) <= thickness:
+            return font, rows, size
+    return None
+
+
 def fit_mask(text, mask):
     """Wrap each line against the safe interior of an irregular balloon."""
     import numpy as np
@@ -189,7 +220,10 @@ def fit_mask(text, mask):
     words = re.sub(r"([—–])(?=\S)", r"\1 ", text).split()
     if not words:
         return None
-    for size in range(min(32, height), 10, -1):
+    # 2026-11-17: short lines (sound effects, interjections) may go down to 8 px
+    # rather than leave the balloon to a renderer that splits "Shhk!!" in two.
+    smallest = 8 if len(text) <= 16 else 11
+    for size in range(min(32, height), smallest - 1, -1):
         try:
             font = ImageFont.truetype("DejaVuSans.ttf", size)
         except OSError:
@@ -222,7 +256,7 @@ def fit_mask(text, mask):
                         punctuated = re.fullmatch(
                             r"([^\w\s]*)([^\W\d_]+)([^\w\s]*)", pending[0]
                         )
-                        if not line and size == 11 and punctuated:
+                        if not line and size == smallest and punctuated:
                             prefix, word, suffix = punctuated.groups()
                             for cut in range(len(word) - 3, 2, -1):
                                 fragment = prefix + word[:cut] + "-"
@@ -581,6 +615,23 @@ async def render_guided(fallback, config, ctx):
         if not text:
             continue
         w, h = right - x, bottom - y
+        # 2026-11-17: a colour shape is a balloon only if it is the background the
+        # text sits on. Grouping uses bounding boxes, so an artwork patch whose box
+        # surrounds a white balloon was taken for it (p20: dark block). Require the
+        # shape mask to cover the text and its colour to be the colour under it.
+        covered, total, close = 0, 0, 0
+        for region in group:
+            rx1, ry1, rx2, ry2 = map(int, region.xyxy)
+            total += max(0, rx2 - rx1) * max(0, ry2 - ry1)
+            rx1, ry1 = max(rx1, x), max(ry1, y)
+            rx2, ry2 = min(rx2, right), min(ry2, bottom)
+            if rx2 > rx1 and ry2 > ry1:
+                inside = mask[ry1 - y : ry2 - y, rx1 - x : rx2 - x] != 0
+                covered += int(inside.sum())
+                pixels = source[ry1:ry2, rx1:rx2][inside].astype(float)
+                close += int((np.max(np.abs(pixels - color.astype(float)), axis=1) <= 40).sum())
+        if not total or covered < 0.5 * total or close < 0.3 * covered:
+            continue
         interior = cv2.erode(mask, np.ones((9, 9), np.uint8))
         layout = fit_mask(text, interior)
         if layout is None:
@@ -590,6 +641,20 @@ async def render_guided(fallback, config, ctx):
         assigned.update(map(id, group))
 
     ctx.text_regions = [region for region in regions if id(region) not in assigned]
+    # 2026-11-17: a narrow vertical caption strip (p10 left edge) cannot hold
+    # horizontal English at a readable size; MIT shrank it to a few pixels.
+    # Such strips get the English rotated along the strip instead.
+    strips = []
+    for region in list(ctx.text_regions):
+        x1, y1, x2, y2 = map(int, region.xyxy)
+        w, h = x2 - x1, y2 - y1
+        text = str(region.translation).strip()
+        # Short strips (< 200 px) stay with MIT: they still fit a few words.
+        if text and 0 < w <= 80 and h >= max(4 * w, 200):
+            layout = fit_strip(text, h - 8, w - 2)
+            if layout is not None:
+                strips.append((x1, y1, x2, y2, layout))
+                ctx.text_regions.remove(region)
     inpainted = ctx.img_inpainted
     try:
         if placements:
@@ -614,8 +679,49 @@ async def render_guided(fallback, config, ctx):
     finally:
         ctx.text_regions = regions
         ctx.img_inpainted = inpainted
+    text_mask = getattr(ctx, "mask", None)
+    if text_mask is not None:
+        text_mask = np.asarray(text_mask)
+        if text_mask.ndim == 3:
+            text_mask = text_mask[..., 0]
+        if text_mask.shape[:2] != (height, width):
+            text_mask = None
     for x, y, right, bottom, erase, color, *_ in placements:
         base[y:bottom, x:right][erase != 0] = color
+        if text_mask is not None:
+            # 2026-11-17: glyphs touching the balloon edge (bold names, "!!") break
+            # its colour contour and survived the contour erase; MIT's inpainting
+            # left grey there. Paint MIT's text mask with the balloon colour, 2 px
+            # inside the balloon's bounds so its outline is never touched.
+            # Limited to the convex hull of the balloon (a notch cut by a glyph is
+            # filled, artwork beyond the outline is not).
+            points = cv2.findNonZero((erase != 0).astype(np.uint8))
+            if points is not None:
+                hull = np.zeros_like(erase, dtype=np.uint8)
+                cv2.fillConvexPoly(hull, cv2.convexHull(points), 1)
+                hull = cv2.erode(hull, np.ones((3, 3), np.uint8))
+                inner = (text_mask[y:bottom, x:right] > 127) & (hull != 0)
+                base[y:bottom, x:right][inner] = color
+    for x1, y1, x2, y2, (font, rows, size) in strips:
+        box = base[y1:y2, x1:x2]
+        if text_mask is not None:
+            ink = text_mask[y1:y2, x1:x2] > 127
+            paper = box[~ink] if (~ink).any() else box.reshape(-1, 3)
+            background = np.median(paper, axis=0).astype(np.uint8)
+            box[ink] = background
+        else:
+            background = np.median(box.reshape(-1, 3), axis=0).astype(np.uint8)
+        dark = sum(map(int, background)) < 320
+        strip = Image.new("RGBA", (y2 - y1, x2 - x1), (0, 0, 0, 0))
+        pen = ImageDraw.Draw(strip)
+        top = ((x2 - x1) - len(rows) * (size + 3)) // 2
+        for index, line in enumerate(rows):
+            pen.text(((y2 - y1) / 2, top + index * (size + 3)), line, anchor="mt", font=font,
+                     fill="#fff8e8" if dark else "#151515")
+        rotated = strip.rotate(-90, expand=True)
+        patch = Image.fromarray(np.ascontiguousarray(base[y1:y2, x1:x2]))
+        patch.paste(rotated, (0, 0), rotated)
+        base[y1:y2, x1:x2] = np.asarray(patch)
     canvas = Image.fromarray(base)
     draw = ImageDraw.Draw(canvas)
     for x, y, _, _, _, color, (font, rows) in placements:
