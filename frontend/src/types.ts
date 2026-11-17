@@ -1628,7 +1628,10 @@ export type SeriesAuditFile = {
   anomalies: { code: string; label: string }[]; can_retire: boolean; can_reject_source: boolean;
 };
 export type SeriesAuditSource = { provider: string; provider_manga_id: string; source_name: string | null; language: string; file_ids: string[]; can_reject: boolean };
-export type SeriesAuditReport = { manga_id: string; revision: string; files: SeriesAuditFile[]; sources: SeriesAuditSource[] };
+export type SeriesAuditReport = {
+  manga_id: string; revision: string; files: SeriesAuditFile[]; sources: SeriesAuditSource[];
+  catalogue_cleanup?: { last_chapter: string | null; chapter_count: number; release_count: number };
+};
 export type SeriesAuditSourceKey = Pick<SeriesAuditSource, "provider" | "provider_manga_id">;
 export type SeriesAuditPreview = {
   manga_id: string; action: "retire" | "reject_source"; chapter_ids: string[]; source: SeriesAuditSourceKey | null;

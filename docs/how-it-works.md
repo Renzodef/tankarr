@@ -564,6 +564,13 @@ an unexpected page layout, or comes from the wrong source. It is a
 troubleshooting tool for one series, not a routine step after every download.
 Open the series page and select **Audit files** from its actions.
 
+For a finished series managed as volumes, owning every book with a complete
+confirmed chapter map establishes the end of that edition. Unowned source
+offers beyond that boundary stay out of the library list. Audit files reports
+their count. Owned chapters, active downloads and official offers stay visible.
+The audit also flags loose chapters whose current page comparison matches
+every page against a volume already in the library.
+
 The list shows the downloaded files of the series. Each entry shows its book or
 chapter number, source, language, page count, recorded quality verdict and any
 detected anomalies, with previews of the first and last page that load as you

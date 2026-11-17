@@ -26,6 +26,8 @@ from tankarr.source_numbering import is_unpublished, numbered_prologue
 from tankarr.source_ranking import (
     beyond_chapter_limit,
     completed_chapter_limit,
+    is_official_release,
+    official_hosts,
 )
 from tankarr.unit_strategy import strategy_record, strategy_unit_reason
 
@@ -740,6 +742,55 @@ def _outside_mapped_span(label: str, span: tuple[int, int] | None) -> bool:
     # Before the first mapped book is a gap (a partial map), except a "0"
     # nobody's book starts with; after the last mapped book is an extra.
     return int(value) > span[1] or (int(value) == 0 and span[0] >= 1)
+
+
+def _closed_volume_frontier(
+    exact_map: dict[str, set[str]], expected_books: int, owned: set[str]
+) -> Decimal | None:
+    if not 0 < expected_books <= MAX_CANONICAL_SEQUENCE:
+        return None
+    volumes = [str(number) for number in range(1, expected_books + 1)]
+    if set(volumes) != set(exact_map) or not set(volumes) <= owned:
+        return None
+    previous = None
+    whole = set()
+    for volume in volumes:
+        parsed = [_decimal(label) for label in exact_map[volume]]
+        if not parsed or any(number is None for number in parsed):
+            return None
+        numbers = sorted(number for number in parsed if number is not None)
+        if previous is not None and numbers[0] <= previous:
+            return None
+        whole.update(int(number) for number in numbers)
+        previous = numbers[-1]
+    # A map with a skipped story number does not prove that the edition
+    # contains the complete sequence. A split label can supply its integer.
+    first, last = min(whole), max(whole)
+    if first in {0, 1} and len(whole) == last - first + 1:
+        return previous
+    return None
+
+
+def _outside_edition_chapters(
+    releases: Iterable[dict[str, Any]], frontier: Decimal, hosts: frozenset[str]
+) -> dict[str, int]:
+    offered: dict[str, int] = defaultdict(int)
+    protected: set[str] = set()
+    for release in releases:
+        number = _decimal(release.get("chapter"))
+        if number is None or number <= frontier or is_volume_release(release):
+            continue
+        label = canonical_number(number)
+        if (
+            release.get("downloaded")
+            or release.get("queue_status")
+            or is_official_release(release)
+            or (hosts and is_official_release(release, hosts))
+        ):
+            protected.add(label)
+        else:
+            offered[label] += 1
+    return {label: count for label, count in offered.items() if label not in protected}
 
 
 def build_chapter_index(
@@ -1607,6 +1658,22 @@ def build_chapter_index(
     # Completed works retain the catalogue's final boundary. Running works
     # have no publisher ceiling, so all available source chapters count.
     applied_frontier: Decimal | None = None
+    outside_edition = {}
+    edition_frontier = None
+    if not chapters_unit and work_ended and not continuing and expected_volume_total:
+        edition_frontier = _closed_volume_frontier(
+            exact_map, expected_volume_total, covering_volumes
+        )
+        if edition_frontier is not None:
+            outside_edition = _outside_edition_chapters(
+                all_releases,
+                edition_frontier,
+                official_hosts(
+                    metadata.get("official_links"),
+                    language=manga.get("preferred_language"),
+                ),
+            )
+            slots = [slot for slot in slots if slot["chapter"] not in outside_edition]
     if chapters_unit and not volume_sequence_mode:
         frontier = completed_chapter_limit(
             metadata=metadata,
@@ -1834,12 +1901,19 @@ def build_chapter_index(
             read_chapter_count = len(counted_labels)
     return {
         "read_chapter_count": read_chapter_count,
+        "edition_chapter_limit": canonical_number(edition_frontier),
+        "out_of_edition_chapters": outside_edition,
         # Downstream views also read raw releases and book assignments. Keep
         # the exclusions so those paths cannot recreate a filtered slot.
         "excluded_chapter_labels": [
-            slot["chapter"]
-            for slot in slots
-            if slot["chapter"] is not None and slot["special"] and not slot["expected"]
+            *outside_edition,
+            *(
+                slot["chapter"]
+                for slot in slots
+                if slot["chapter"] is not None
+                and slot["special"]
+                and not slot["expected"]
+            ),
         ],
         "slots": [
             slot for slot in slots if not (slot["special"] and not slot["expected"])
