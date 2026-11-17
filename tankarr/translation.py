@@ -252,8 +252,10 @@ class TranslationManager:
         while True:
             try:
                 await self.tick()
-            except Exception:  # noqa: BLE001 - an optional integration must not stop monitoring
-                logger.warning("Translation queue temporarily unavailable")
+            except Exception as exc:  # noqa: BLE001 - an optional integration must not stop monitoring
+                logger.warning(
+                    "Translation queue temporarily unavailable (%s)", type(exc).__name__
+                )
             await asyncio.sleep(15)
 
     async def tick(self):
@@ -304,7 +306,18 @@ class TranslationManager:
         first_pass = True
         try:
             while True:
-                self.service.assert_mutations_allowed()
+                # A passing guard (library organization, recovery check) or a
+                # busy database must not cancel hooks that already own remote
+                # work: they keep running and only new admissions wait.
+                try:
+                    self.service.assert_mutations_allowed()
+                    admit = True
+                except Exception as exc:  # noqa: BLE001 - transient by design; retried next wake-up
+                    admit = False
+                    logger.warning(
+                        "Translation hooks keep running; new attempts wait (%s)",
+                        type(exc).__name__,
+                    )
                 if (
                     not self.configured()
                     or self.settings.restored_safe_mode
@@ -312,13 +325,16 @@ class TranslationManager:
                 ):
                     return
                 current = {(job["id"], job["attempts"]) for job in active}
-                for task, key in pending.items():
-                    if key not in current:
-                        task.cancel()
+                if admit:
+                    for task, key in pending.items():
+                        if key not in current:
+                            task.cancel()
                 running_ids = {key[0] for key in pending.values()}
                 now = time.monotonic()
-                capacity = max(
-                    0, self.settings.translation_hook_concurrency - len(pending)
+                capacity = (
+                    max(0, self.settings.translation_hook_concurrency - len(pending))
+                    if admit
+                    else 0
                 )
                 for job in active:
                     key = (job["id"], job["attempts"])
@@ -351,10 +367,22 @@ class TranslationManager:
                     finished.add(pending.pop(task))
                     with suppress(asyncio.CancelledError):
                         await task
-                active = self.store.list(active=True)
+                try:
+                    active = self.store.list(active=True)
+                except Exception as exc:  # noqa: BLE001 - keep the last known queue until the store answers
+                    logger.warning(
+                        "Translation queue listing deferred (%s)", type(exc).__name__
+                    )
+                    continue
                 remaining = {(job["id"], job["attempts"]) for job in active}
                 if finished - remaining and self.acquisition is not None:
-                    await self.acquisition.finish_sources()
+                    try:
+                        await self.acquisition.finish_sources()
+                    except Exception as exc:  # noqa: BLE001 - retried by the next tick
+                        logger.warning(
+                            "Translated source completion deferred (%s)",
+                            type(exc).__name__,
+                        )
                 active.sort(
                     key=lambda job: (
                         (job["id"], job["attempts"]) in self._hook_retry_after,
