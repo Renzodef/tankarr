@@ -406,3 +406,30 @@ def test_apply_volume_format_is_independent_of_translation(tmp_path: Path):
     assert database.get_manga("rasputin")["series_unit_override"] == "volumes"
     assert database.get_chapter("gap-40")["monitored"] is True
     assert database.get_chapter("zh-1")["release_unit"] == "volume"
+
+
+def test_running_series_stays_on_chapters_even_with_every_book_offered():
+    releases = [
+        {
+            "id": f"en-v{n}",
+            "title": f"Volume {n}",
+            "chapter": None,
+            "volume": str(n),
+            "release_unit": "volume",
+            "language": "en",
+            "provider": "suwayomi",
+            "downloaded": False,
+        }
+        for n in range(1, 7)
+    ]
+    running = {**METADATA, "status": "ongoing"}
+    decision = _decide(
+        releases,
+        manga=_manga(status="ongoing"),
+        metadata=running,
+        translation_enabled=False,
+    )
+
+    assert decision.action == "stay"
+    assert decision.unit == "chapters"
+    assert decision.reason == "a series that has not finished is followed in chapters"
