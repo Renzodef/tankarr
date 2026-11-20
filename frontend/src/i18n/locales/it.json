@@ -1863,5 +1863,9 @@
   "Empty folders: {empty}. Folders to review: {review}.": "Cartelle vuote: {empty}. Cartelle da verificare: {review}.",
   "Remove listed empty folders": "Rimuovi le cartelle vuote elencate",
   "Check these folders for loose files, nested books or storage errors.": "Controlla se queste cartelle contengono file sfusi, libri in sottocartelle o errori di accesso.",
-  "Empty folders removed: {removed}. Skipped: {skipped}.": "Cartelle vuote rimosse: {removed}. Saltate: {skipped}."
+  "Empty folders removed: {removed}. Skipped: {skipped}.": "Cartelle vuote rimosse: {removed}. Saltate: {skipped}.",
+  "Series metadata to fix": "Metadati della serie da sistemare",
+  "No metadata source is linked: add a MangaBaka or MangaUpdates entry in Metadata sources.": "Nessuna fonte di metadati collegata: aggiungi una scheda MangaBaka o MangaUpdates in Fonti dei metadati.",
+  "Creator names do not open an author page yet.": "I nomi degli autori non aprono ancora una pagina autore.",
+  "The title looks like {detected}, but the series is kept in {language}: rename it.": "Il titolo sembra in {detected}, ma la serie è in {language}: rinominala."
 }

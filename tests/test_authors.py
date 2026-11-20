@@ -306,3 +306,65 @@ def test_bulk_reads_match_the_per_series_queries(tmp_path: Path):
     assert set(links) == {"series-1", "series-2"}
     for manga_id in links:
         assert links[manga_id] == database.list_manga_authors(manga_id)
+
+
+def local_series(
+    database: Database, manga_id: str, title: str, authors: list[str]
+) -> None:
+    database.upsert_manga(
+        {
+            "id": manga_id,
+            "provider": "local",
+            "title": title,
+            "description": "",
+            "authors": authors,
+            "status": "completed",
+            "original_language": "zh",
+            "available_languages": ["en"],
+        },
+        "en",
+        "none",
+    )
+
+
+def test_local_series_get_author_pages_listing_their_library_works(tmp_path: Path):
+    authors, database, _source = registry(tmp_path)
+    local_series(database, "local-a", "Super Shen", ["Hui King Sum", "Lee Chung Hing"])
+    local_series(database, "local-b", "The King of Football", ["Hui King Sum"])
+
+    assert authors.sync_library() == {"checked": 2, "linked": 3}
+
+    assert {link["name"] for link in database.list_manga_authors("local-a")} == {
+        "Hui King Sum",
+        "Lee Chung Hing",
+    }
+    shared = [
+        item
+        for item in database.list_authors()
+        if item["display_name"] == "Hui King Sum"
+    ]
+    assert len(shared) == 1
+    page = authors.page(shared[0]["id"])
+    assert page is not None
+    assert sorted(work["title"] for work in page["works"]) == [
+        "Super Shen",
+        "The King of Football",
+    ]
+    assert all(work["in_library"] for work in page["works"])
+    assert {work["library_manga_id"] for work in page["works"]} == {
+        "local-a",
+        "local-b",
+    }
+    assert page["library_manga_count"] == 2
+
+    revision = database.library_revision()
+    assert authors.sync_library() == {"checked": 2, "linked": 0}
+    assert database.library_revision() == revision
+
+
+def test_local_series_without_creator_names_get_no_author(tmp_path: Path):
+    authors, database, _source = registry(tmp_path)
+    local_series(database, "local-anonymous", "Anthology", ["Various"])
+
+    assert authors.sync_library() == {"checked": 0, "linked": 0}
+    assert database.list_authors() == []

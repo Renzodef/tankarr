@@ -1643,6 +1643,11 @@ export type SeriesAuditSource = { provider: string; provider_manga_id: string; s
 export type SeriesAuditReport = {
   manga_id: string; revision: string; files: SeriesAuditFile[]; sources: SeriesAuditSource[];
   catalogue_cleanup?: { last_chapter: string | null; chapter_count: number; release_count: number };
+  metadata_findings?: SeriesMetadataFinding[];
+};
+export type SeriesMetadataFinding = {
+  code: "no_external_metadata" | "authors_not_linked" | "title_language_mismatch" | string;
+  label: string; detected_language?: string; series_language?: string;
 };
 export type SeriesAuditSourceKey = Pick<SeriesAuditSource, "provider" | "provider_manga_id">;
 export type SeriesAuditPreview = {

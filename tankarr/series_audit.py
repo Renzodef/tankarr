@@ -27,6 +27,7 @@ from tankarr.artwork_thumbnails import ARTWORK_THUMBNAIL_VERSION, ArtworkThumbna
 from tankarr.chapter_map import canonical_label
 from tankarr.chapter_mapping import build_chapter_index
 from tankarr.database import Database
+from tankarr.metadata_audit import series_metadata_findings
 
 MAX_ENTRIES = 10_000
 MAX_DIRECTORY_BYTES = 8 * 1024**2
@@ -190,6 +191,12 @@ class SeriesAudit:
                 if chapter_map
                 else {}
             )
+            metadata_findings = series_metadata_findings(
+                manga,
+                self.database.list_manga_authors(manga_id),
+                has_external_metadata=manga_id
+                in self.database.series_with_external_metadata_ids(),
+            )
             catalogue_cleanup = {
                 "last_chapter": index.get("edition_chapter_limit"),
                 "chapter_count": len(index.get("out_of_edition_chapters", {})),
@@ -214,6 +221,7 @@ class SeriesAudit:
                 "fingerprints": fingerprints,
                 "catalogue_cleanup": catalogue_cleanup,
                 "alignment": alignment,
+                "metadata_findings": metadata_findings,
             }
         )
         return {
@@ -225,6 +233,7 @@ class SeriesAudit:
             "revision": revision,
             "catalogue_cleanup": catalogue_cleanup,
             "alignment": alignment,
+            "metadata_findings": metadata_findings,
         }
 
     def _report(self, snapshot: dict) -> dict:
@@ -417,6 +426,7 @@ class SeriesAudit:
             "manga_id": manga["id"],
             "revision": snapshot["revision"],
             "catalogue_cleanup": snapshot["catalogue_cleanup"],
+            "metadata_findings": snapshot.get("metadata_findings", []),
             "files": files,
             "sources": sources,
         }

@@ -5445,6 +5445,44 @@ class Database:
             for row in rows
         ]
 
+    def library_manga_for_author(self, author_id: str) -> list[dict[str, Any]]:
+        """Library series linked to one author, as ``list_manga`` rows."""
+
+        with self.connect() as connection:
+            ids = [
+                str(row["manga_id"])
+                for row in connection.execute(
+                    "SELECT manga_id FROM manga_author WHERE author_id=?",
+                    (author_id,),
+                ).fetchall()
+            ]
+        if not ids:
+            return []
+        return self.list_manga(ids, with_logical_counts=False)
+
+    def series_with_external_metadata_ids(self) -> set[str]:
+        """Series matched to at least one external metadata source.
+
+        Same definition as ``metadata_overview``'s
+        ``series_with_external_metadata`` count.
+        """
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT manga_id
+                FROM metadata_source_record
+                WHERE entity_key = ''
+                  AND entity_type IN ('series', 'work', 'edition')
+                  AND source != 'local'
+                UNION
+                SELECT manga_id FROM metadata_provider_correlation
+                UNION
+                SELECT manga_id FROM metadata_manual_correlation
+                """
+            ).fetchall()
+        return {str(row["manga_id"]) for row in rows}
+
     def manga_authors_by_series(self) -> dict[str, list[dict[str, Any]]]:
         """``list_manga_authors`` for every series in one query."""
 
