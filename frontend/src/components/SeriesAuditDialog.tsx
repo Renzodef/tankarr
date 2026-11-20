@@ -2,8 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal, Spinner, StatusPill, formatBytes, humanize, languageName } from "../components";
 import { serverUrl } from "../serverUrl";
 
-import type { SeriesAuditFile, SeriesAuditSourceKey, SeriesAuditReport, SeriesAuditPreview, SeriesAuditResult } from "../types";
+import type { SeriesAuditFile, SeriesAuditSourceKey, SeriesAuditReport, SeriesAuditPreview, SeriesAuditResult, SeriesMetadataFinding } from "../types";
 import { t, tn } from "../i18n";
+
+function metadataFindingLabel(finding: SeriesMetadataFinding) {
+  if (finding.code === "no_external_metadata") return t("No metadata source is linked: add a MangaBaka or MangaUpdates entry in Metadata sources.");
+  if (finding.code === "authors_not_linked") return t("Creator names do not open an author page yet.");
+  if (finding.code === "title_language_mismatch") return t("The title looks like {detected}, but the series is kept in {language}: rename it.", { detected: languageName(finding.detected_language ?? ""), language: languageName(finding.series_language ?? "") });
+  return finding.label;
+}
 
 export type SeriesAuditClient = {
   seriesAudit: (id: string, signal?: AbortSignal) => Promise<SeriesAuditReport>;
@@ -161,6 +168,12 @@ export default function SeriesAuditDialog({ mangaId, title, client, onClose, onC
       <table className="table"><thead><tr><th>{t("File")}</th><th>{t("Source")}</th><th>{t("Language")}</th><th>{t("Pages")}</th></tr></thead><tbody>{review.files.map((file) => <tr key={file.id}><td>{fileLabel(file)}{file.title ? <div className="muted small">{file.title}</div> : null}</td><td>{sourceLabel(file)}</td><td>{languageName(file.language)}</td><td>{file.pages !== null && file.pages >= 0 ? file.pages : t("Unknown")}</td></tr>)}</tbody></table>
       <label className="checkbox-row"><input type="checkbox" checked={confirmed} disabled={Boolean(busy)} onChange={(event) => setConfirmed(event.target.checked)} />{review.action === "reject_source" ? t("I reviewed this source and its files and confirm rejection and retirement") : t("I reviewed these files and confirm moving them to the recycle bin")}</label>
     </> : report ? <>
+      {report.metadata_findings && report.metadata_findings.length > 0 ? (
+        <div className="banner banner-warn" role="status">
+          <strong>{t("Series metadata to fix")}</strong>
+          <ul className="small">{report.metadata_findings.map((finding) => <li key={finding.code}>{metadataFindingLabel(finding)}</li>)}</ul>
+        </div>
+      ) : null}
       {report.catalogue_cleanup && report.catalogue_cleanup.chapter_count > 0 ? (
         <p className="banner banner-info">{t("The edition ends at chapter {last}. Chapter numbers hidden from the library: {chapters}. Source releases kept for audit: {releases}.", {
           last: report.catalogue_cleanup.last_chapter ?? "",

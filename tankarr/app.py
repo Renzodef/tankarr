@@ -89,6 +89,7 @@ from tankarr.maintenance import MaintenanceWorker
 from tankarr.memory import release_native_heap
 from tankarr.metadata import build_metadata_sources
 from tankarr.metadata.service import MAX_ARTWORK_BYTES, MetadataService
+from tankarr.metadata_audit import library_metadata_findings
 from tankarr.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
 from tankarr.metrics import database_samples, render_metrics
 from tankarr.models import (
@@ -2892,6 +2893,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/metadata/status")
     async def metadata_status():
         return cached_metadata_status()
+
+    @app.get("/api/metadata/audit")
+    async def metadata_audit():
+        """Series whose metadata a reader would notice is incomplete."""
+
+        return await run_api_blocking(library_metadata_findings, database)
 
     @app.get("/api/manga/{manga_id}/metadata")
     async def get_manga_metadata(manga_id: str):

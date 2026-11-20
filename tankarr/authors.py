@@ -181,10 +181,44 @@ class AuthorRegistry:
         catalogue_id = str(record.get("external_id") or "").strip()
         if not catalogue_id:
             return []
-        card = catalogue_card(record)
+        return self._link_credits(
+            manga_id,
+            _credits(record),
+            catalogue_card(record),
+            reconcile=reconcile,
+        )
+
+    def register_library_series(
+        self,
+        manga_id: str,
+        names: list[str],
+        *,
+        reconcile: bool = True,
+    ) -> list[str]:
+        """Give a series without catalogue credits its own author pages.
+
+        Local and manually added series carry creator names but no MangaBaka
+        work record. Linking those names to author entities makes the names
+        clickable and gathers every library series by the same person, even
+        when no catalogue knows the work.
+        """
+
+        credits = _credits({"authors": list(names)})
+        if not credits:
+            return []
+        return self._link_credits(manga_id, credits, None, reconcile=reconcile)
+
+    def _link_credits(
+        self,
+        manga_id: str,
+        credits: list[dict[str, Any]],
+        card: dict[str, Any] | None,
+        *,
+        reconcile: bool,
+    ) -> list[str]:
         links: list[dict[str, Any]] = []
         with self._database_lock:
-            for credit in _credits(record):
+            for credit in credits:
                 name = str(credit["name"])
                 key = author_key(name)
                 candidates = self.database.find_authors_by_alias(key)
@@ -214,7 +248,8 @@ class AuthorRegistry:
                         name=canonical_person_name(alias),
                         source_url="",
                     )
-                self.database.seed_author_work(author_id, card)
+                if card is not None:
+                    self.database.seed_author_work(author_id, card)
                 links.append(
                     {
                         "author_id": author_id,
@@ -271,10 +306,17 @@ class AuthorRegistry:
                     "status": manga.get("status"),
                     "original_language": manga.get("original_language"),
                 }
+            local_names: list[str] | None = None
             if source is None:
-                continue
+                # No catalogue work: link the series' own creator names, so a
+                # local or manually added series still gets author pages.
+                local_names = [str(name) for name in manga.get("authors") or []]
+                credits = _credits({"authors": local_names})
+                if not credits:
+                    continue
+            else:
+                credits = _credits(source)
             checked += 1
-            credits = _credits(source)
             existing = existing_links.get(manga_id, [])
             expected_names = {
                 author_key(alias) for credit in credits for alias in credit["aliases"]
@@ -287,6 +329,11 @@ class AuthorRegistry:
             expected_roles = {role for credit in credits for role in credit["roles"]}
             existing_roles = {role for link in existing for role in link["roles"]}
             if expected_names == existing_names and expected_roles == existing_roles:
+                continue
+            if local_names is not None:
+                linked += len(
+                    self.register_library_series(manga_id, local_names, reconcile=False)
+                )
                 continue
             linked += len(
                 self.register_catalogue_series(manga_id, source, reconcile=False)
@@ -313,6 +360,31 @@ class AuthorRegistry:
                     "library_manga_id": existing,
                 }
             )
+        # Library series credited to this author that no catalogue lists
+        # (local or manual series) are works too: show them, already owned.
+        shown = {work["library_manga_id"] for work in works if work["in_library"]}
+        for manga in self.database.library_manga_for_author(str(author["id"])):
+            if manga["id"] in shown:
+                continue
+            works.append(
+                {
+                    "id": manga["id"],
+                    "provider": manga.get("provider") or "local",
+                    "external_id": "",
+                    "title": manga["title"],
+                    "native_title": None,
+                    "alternate_titles": [],
+                    "description": manga.get("description") or "",
+                    "cover_url": manga.get("cover_url"),
+                    "authors": list(manga.get("authors") or []),
+                    "year": manga.get("year"),
+                    "status": manga.get("status"),
+                    "original_language": manga.get("original_language"),
+                    "in_library": True,
+                    "library_manga_id": manga["id"],
+                }
+            )
+        works.sort(key=lambda item: (item.get("year") or 9999, item.get("title") or ""))
         aliases = [str(alias["name"]) for alias in author.get("aliases") or []]
         return {
             "id": str(author["id"]),
