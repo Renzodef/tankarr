@@ -1,10 +1,11 @@
 """Choose the managed format before acquisition.
 
-An explicit series choice wins. Finished works with a reliable volume edition
-follow books independently of current offers; Japanese scrolling publications
-can have such an edition too. Other webtoons remain chapters. For works without
-that settled target, the legacy source-coverage strategy can still identify a
-complete book-only edition. Translation determines eligible sources, never
+An explicit series choice wins. Works that have not finished (running, paused
+or of unknown status) are followed in chapters. Finished works with a reliable
+volume edition follow books independently of current offers; Japanese scrolling
+publications can have such an edition too. Other webtoons remain chapters. For
+finished works without that settled target, the source-coverage strategy can
+still identify a complete book-only edition. Translation determines eligible sources, never
 whether a missing volume can be declared owned.
 """
 
@@ -247,6 +248,20 @@ def decide_unit_strategy(
             chapter_expected=chapter_expected,
         )
 
+    publication = publication_summary(manga, metadata)
+    ended = publication["status"] == "ended" and not publication["paused"]
+    if not ended:
+        # A work that is still running (or paused, or of unknown status) is
+        # followed in chapters even when a full set of books is on offer;
+        # books are the target only once the work has finished.
+        return UnitStrategyDecision(
+            "stay",
+            "chapters",
+            "a series that has not finished is followed in chapters",
+            volume_expected=volume_expected,
+            chapter_expected=chapter_expected,
+        )
+
     if volumes_complete and not chapters_complete:
         where = (
             f" in {', '.join(languages)} with translation" if translation_used else ""
@@ -265,9 +280,7 @@ def decide_unit_strategy(
             chapter_expected=chapter_expected,
         )
 
-    publication = publication_summary(manga, metadata)
-    ended = publication["status"] == "ended" and not publication["paused"]
-    if ended and _covers(on_disk, volume_expected):
+    if _covers(on_disk, volume_expected):
         return UnitStrategyDecision(
             "switch",
             "volumes",
