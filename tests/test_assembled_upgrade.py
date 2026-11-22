@@ -152,6 +152,25 @@ async def test_assembly_never_replaces_an_external_book(upgrade, tmp_path):
     assert database.get_chapter("assembled-1")["provider"] == "prowlarr"
 
 
+async def test_assembly_can_fill_retired_external_volume_slot(upgrade, tmp_path):
+    database, service, _reader, canonical, _old_hash, replacement, incoming = upgrade
+    await service.publish_external_import("manga-1", replacement, *incoming)
+    canonical.unlink()
+    database.reset_chapter_file("manga-1", "assembled-1")
+
+    new_assembly = assembled()
+    new_assembly["pages"] = 1
+    prepared = archive(tmp_path, new_assembly, "rebuilt-pages")
+    result = await service.publish_external_import("manga-1", new_assembly, *prepared)
+
+    row = database.get_chapter("assembled-1")
+    assert row["provider"] == "assembled"
+    assert row["downloaded"] is True
+    assert row["assembled_from"] == new_assembly["assembled_from"]
+    assert row["library_path"] == result["path"] == str(canonical)
+    assert row["library_sha256"] == sha256(canonical) == prepared[1]
+
+
 @pytest.mark.parametrize("provider", ["assembled", "prowlarr"])
 async def test_missing_retired_assembly_does_not_block_new_contents(
     upgrade, tmp_path, provider

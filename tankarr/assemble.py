@@ -32,6 +32,7 @@ from tankarr.naming import final_library_path
 from tankarr.series_unit import is_volume_release
 from tankarr.service import (
     LOCAL_CONTENT_FINGERPRINT_VERSION,
+    ExternalImportConflict,
     LibraryUnavailable,
     RecoveryBlocked,
     TankarrService,
@@ -780,6 +781,10 @@ def register_assemble_routes(
             raise HTTPException(404, "Series not found") from exc
         except AssemblyConflict as exc:
             raise HTTPException(409, exc.detail) from exc
+        except ExternalImportConflict as exc:
+            raise HTTPException(
+                409, {"message": str(exc), "missing_chapters": []}
+            ) from exc
         except (RecoveryBlocked, LibraryUnavailable) as exc:
             raise HTTPException(503, str(exc)) from exc
         except (
