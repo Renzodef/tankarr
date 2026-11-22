@@ -27,6 +27,39 @@ from urllib.parse import urlsplit
 JOB = re.compile(r"^[a-f0-9]{32}-\d{1,6}$")
 LANGUAGE_TAG = re.compile(r"[a-z]{2,3}(?:-[a-z]{4})?(?:-(?:[a-z]{2}|[0-9]{3}))?")
 MAX_ARCHIVE_BYTES = 16 * 1024**3
+# Exit status the reference runner uses for a temporary failure (provider
+# interruption, refused page that may be retried): the attempt can resume.
+RETRY_EXIT = 75
+SECRET_PATTERNS = (
+    re.compile(r"(?i)bearer\s+\S+"),
+    re.compile(
+        r"(?i)\b(?:api[_-]?key|token|secret|password|authorization)\b\S*\s*[:=]?\s*\S+"
+    ),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"https?://\S+"),
+)
+
+
+class EngineFailed(RuntimeError):
+    """The engine exited unsuccessfully; carries only its status and a redacted line."""
+
+    def __init__(self, returncode, summary=""):
+        super().__init__(f"Engine exited with status {returncode}")
+        self.returncode = returncode
+        self.summary = summary
+
+
+def stderr_summary(data, secrets=()):
+    """Last diagnostic line of an engine, bounded and without credentials or URLs."""
+    text = bytes(data or b"")[-4096:].decode("utf-8", "replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    line = lines[-1] if lines else ""
+    for secret in secrets:
+        if isinstance(secret, str) and len(secret) >= 4:
+            line = line.replace(secret, "[redacted]")
+    for pattern in SECRET_PATTERNS:
+        line = pattern.sub("[redacted]", line)
+    return "".join(ch for ch in line if ch.isprintable())[:200]
 
 
 def digest(path):
@@ -191,13 +224,28 @@ class Processor:
     def _run(self, job_id, request):
         directory = self.directory(job_id)
         state = "failed"
+        exit_code = None
         try:
             (directory / "result.failure.json").unlink(missing_ok=True)
+            (directory / "engine-failure.json").unlink(missing_ok=True)
             write_json(directory / "status.json", {"status": "running"})
             self.execute(directory, request)
             if not (directory / "result.cbz").is_file():
                 raise ValueError("Processor produced no result")
             state = "completed"
+        except EngineFailed as failure:
+            if type(failure.returncode) is int:
+                exit_code = failure.returncode
+            with suppress(OSError):
+                # Private diagnostic beside the job: exit status and one redacted
+                # line, never exposed through HTTP.
+                write_json(
+                    directory / "engine-failure.json",
+                    {
+                        "exit_code": exit_code,
+                        "stderr_summary": str(failure.summary)[:200],
+                    },
+                )
         except Exception:  # noqa: BLE001 - engine errors and credentials never reach the HTTP response
             pass
         finally:
@@ -229,6 +277,14 @@ class Processor:
                             }
                     except (OSError, ValueError, TypeError, AttributeError):
                         pass  # An absent or malformed receipt must not hide the failure.
+                    if "failure" not in status and exit_code == RETRY_EXIT:
+                        # An engine without a receipt still asked for a retry.
+                        status["failure"] = {
+                            "code": "provider_interrupted",
+                            "retryable": True,
+                        }
+                    if exit_code is not None:
+                        status["exit_code"] = exit_code
                 write_json(directory / "status.json", status)
                 self.active.discard(job_id)
 
@@ -405,14 +461,21 @@ def main():
                 cwd=args.engine_root,
                 env=env,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 start_new_session=os.name == "posix",
             )
             processes[directory.name] = process
+        secrets = [
+            request.get(kind, {}).get("api_key")
+            for kind in ("ai", "vision")
+            if isinstance(request.get(kind), dict)
+        ]
         try:
-            process.communicate(json.dumps(request).encode(), timeout=6 * 3600)
+            _, errors = process.communicate(
+                json.dumps(request).encode(), timeout=6 * 3600
+            )
             if process.returncode:
-                raise ValueError("Engine failed")
+                raise EngineFailed(process.returncode, stderr_summary(errors, secrets))
         finally:
             stop_process(process)
             with process_lock:

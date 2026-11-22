@@ -1273,3 +1273,75 @@ async def test_hook_retries_a_free_worker_while_another_job_is_running(
     finally:
         release.set()
         await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["guard", "store"])
+async def test_transient_queue_errors_do_not_cancel_running_hooks(
+    translation, monkeypatch, failure
+):
+    from tankarr.service import RecoveryBlocked
+
+    manager, database, _service, source = translation
+    update_settings(manager.settings, database, {"translation_hook_concurrency": 2})
+    manager.settings.translation_backend = "hook"
+    long_job, short_job = (
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+        for n in range(2)
+    )
+    started, cancelled, finished = set(), set(), set()
+    release, both = asyncio.Event(), asyncio.Event()
+    broken = {"armed": False}
+
+    async def process(job):
+        started.add(job["id"])
+        if len(started) == 2:
+            both.set()
+        try:
+            if job["id"] == long_job["id"]:
+                await release.wait()
+            else:
+                await both.wait()
+                broken["armed"] = True  # The next wake-up meets a transient error.
+            finished.add(job["id"])
+            manager.store.update(
+                job["id"], expected_attempt=job["attempts"], status="completed"
+            )
+        except asyncio.CancelledError:
+            cancelled.add(job["id"])
+            raise
+
+    real_guard = manager.service.assert_mutations_allowed
+    real_list = manager.store.list
+
+    def guard(*args, **kwargs):
+        if failure == "guard" and broken["armed"] and not release.is_set():
+            raise RecoveryBlocked("library organization in progress")
+        return real_guard(*args, **kwargs)
+
+    def listing(*args, **kwargs):
+        if failure == "store" and broken["armed"]:
+            broken["armed"] = False
+            raise RuntimeError("database is locked")
+        return real_list(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "process", process)
+    monkeypatch.setattr(manager.service, "assert_mutations_allowed", guard)
+    monkeypatch.setattr(manager.store, "list", listing)
+    loop = asyncio.create_task(manager._process_hooks(real_list(active=True)))
+    try:
+        await asyncio.wait_for(both.wait(), 2)
+        for _ in range(50):
+            if short_job["id"] in finished:
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.1)
+        assert not loop.done()
+        assert long_job["id"] not in cancelled
+    finally:
+        release.set()
+        await asyncio.wait_for(loop, 20)
+    assert finished == {long_job["id"], short_job["id"]}
+    assert not cancelled
