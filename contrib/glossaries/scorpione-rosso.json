@@ -1,0 +1,93 @@
+{
+  "series": "Scorpione Rosso",
+  "original_title": "赤蠍",
+  "updated": "2026-11-17",
+  "policy": "All entries established (Renzo t1157u, 17/11/2026).",
+  "terms": [
+    {
+      "source": "赤蠍",
+      "target": "Red Scorpion",
+      "status": "established",
+      "variants": [
+        "赤蝎"
+      ]
+    },
+    {
+      "source": "韋德",
+      "target": "Wade",
+      "status": "established",
+      "variants": [
+        "章德",
+        "羣德",
+        "群德",
+        "韋徳",
+        "偉德"
+      ]
+    },
+    {
+      "source": "美娜",
+      "target": "Mina",
+      "status": "established"
+    },
+    {
+      "source": "血螳",
+      "target": "Blood Mantis",
+      "status": "established"
+    },
+    {
+      "source": "黑蜢",
+      "target": "Black Grasshopper",
+      "status": "established",
+      "note": "not Black Locust, not Black Slug"
+    },
+    {
+      "source": "寄生人",
+      "target": "Parasite",
+      "status": "established",
+      "note": "plural Parasites"
+    },
+    {
+      "source": "查爾",
+      "target": "Charles",
+      "status": "established",
+      "note": "查爾局長 = Chief Charles"
+    },
+    {
+      "source": "斑蚊",
+      "target": "Striped Mosquito",
+      "status": "established",
+      "note": "a Parasite's name, always capitalised"
+    },
+    {
+      "source": "米治",
+      "target": "Mitch",
+      "status": "established",
+      "note": "US Secretary of Defense; 米治局長 = Director Mitch",
+      "variants": [
+        "采治",
+        "米冶",
+        "釆治"
+      ]
+    },
+    {
+      "source": "畢比特",
+      "target": "Bibit",
+      "status": "established",
+      "note": "never Brad Pitt, Pitt or Beebit"
+    },
+    {
+      "source": "財叔",
+      "target": "Uncle Choi",
+      "status": "established"
+    },
+    {
+      "source": "總統",
+      "target": "the President",
+      "status": "established"
+    }
+  ],
+  "notes": [
+    "The OCR can read a dash before a name as 一 (e.g. 一美娜 is Mina, 一斑蚊 is the Striped Mosquito): never merge it into the name.",
+    "Sound effects and interjections (嚓, 嗚, 嘲, 嗬, 叻嘞...) are rendered as short English onomatopoeia (Shhk!!, Ngh..., Ugh..., Heh heh...), never as a dictionary meaning."
+  ]
+}

@@ -141,6 +141,32 @@ def test_configured_sources_are_searched_the_library_profile_is_not():
     )
 
 
+@pytest.mark.asyncio
+async def test_translation_discovers_languages_without_an_enabled_source(
+    translation, monkeypatch
+):
+    manager, _database, _service, _source = translation
+    manager.settings.search_languages = "en,it"
+    work = {"id": "manga-1", "preferred_language": "en", "original_language": "zh"}
+    capable = fallback_languages(work)
+    # Suwayomi only has English and Italian sources; no extension is added.
+    monkeypatch.setattr(
+        manager, "_configured_source_languages", AsyncMock(return_value=["en", "it"])
+    )
+    manager.settings.translation_enabled = False
+    assert await manager._source_languages_after_preferred(work, capable) == ["it"]
+
+    manager.settings.translation_enabled = True
+    seen = set()
+    for _ in range(len(capable)):
+        batch = await manager._source_languages_after_preferred(work, capable)
+        # Configured languages every pass, then a bounded batch of the rest.
+        assert batch[0] == "it" and len(batch) == 4 and "en" not in batch
+        seen.update(batch)
+    assert seen == set(capable)
+    assert "zh" in seen
+
+
 def test_discovery_is_bounded_fair_and_survives_restart(translation):
     from tankarr.translation_store import TranslationStore
 
@@ -464,14 +490,14 @@ async def test_preferred_gap_searches_every_configured_source_language(translati
     assert await manager.queue_missing("manga-1") == 1
     asked = provider.source_catalog.await_args.args[0]
     assert "ja" in asked and "zh" in asked and "it" in asked
-    assert [
+    asked_languages = [
         call.kwargs["language"]
         for call in manager.release_sources.discover_and_refresh.await_args_list
-    ] == [
-        "ja",
-        "it",
-        "zh",
     ]
+    # Configured source languages first, then a bounded batch of the others.
+    assert asked_languages[:3] == ["ja", "it", "zh"]
+    assert len(asked_languages) == 6
+    assert not {"en", "ja", "it", "zh"} & set(asked_languages[3:])
     job = manager.store.list()[0]
     assert job["source"]["language"] == "zh"
     assert job["target_language"] == "en"
@@ -482,7 +508,7 @@ async def test_preferred_gap_searches_every_configured_source_language(translati
 
 
 @pytest.mark.asyncio
-async def test_english_sources_do_not_invent_a_foreign_catalogue_sweep(translation):
+async def test_english_sources_sweep_other_languages_in_bounded_batches(translation):
     manager, _database, _service, _source = translation
     manager.settings.search_languages = "en"
     manager._missing = lambda _id: [{"chapter": "2", "volume": "1", "expected": True}]
@@ -492,7 +518,12 @@ async def test_english_sources_do_not_invent_a_foreign_catalogue_sweep(translati
     )
     manager.release_sources.providers = {"suwayomi": provider}
     assert await manager.queue_missing("manga-1") == 0
-    manager.release_sources.discover_and_refresh.assert_not_awaited()
+    calls = manager.release_sources.discover_and_refresh.await_args_list
+    # Translation is on: other languages are searched a few per pass, as
+    # translation inputs, without monitoring them or installing extensions.
+    assert len(calls) == 3
+    assert all(call.kwargs["monitor_new"] is False for call in calls)
+    assert "en" not in {call.kwargs["language"] for call in calls}
     assert manager.store.list() == []
 
 
@@ -1242,3 +1273,75 @@ async def test_hook_retries_a_free_worker_while_another_job_is_running(
     finally:
         release.set()
         await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["guard", "store"])
+async def test_transient_queue_errors_do_not_cancel_running_hooks(
+    translation, monkeypatch, failure
+):
+    from tankarr.service import RecoveryBlocked
+
+    manager, database, _service, source = translation
+    update_settings(manager.settings, database, {"translation_hook_concurrency": 2})
+    manager.settings.translation_backend = "hook"
+    long_job, short_job = (
+        manager.store.create(
+            "manga-1", {**source, "id": f"source-{n}", "chapter": str(n)}, "en"
+        )
+        for n in range(2)
+    )
+    started, cancelled, finished = set(), set(), set()
+    release, both = asyncio.Event(), asyncio.Event()
+    broken = {"armed": False}
+
+    async def process(job):
+        started.add(job["id"])
+        if len(started) == 2:
+            both.set()
+        try:
+            if job["id"] == long_job["id"]:
+                await release.wait()
+            else:
+                await both.wait()
+                broken["armed"] = True  # The next wake-up meets a transient error.
+            finished.add(job["id"])
+            manager.store.update(
+                job["id"], expected_attempt=job["attempts"], status="completed"
+            )
+        except asyncio.CancelledError:
+            cancelled.add(job["id"])
+            raise
+
+    real_guard = manager.service.assert_mutations_allowed
+    real_list = manager.store.list
+
+    def guard(*args, **kwargs):
+        if failure == "guard" and broken["armed"] and not release.is_set():
+            raise RecoveryBlocked("library organization in progress")
+        return real_guard(*args, **kwargs)
+
+    def listing(*args, **kwargs):
+        if failure == "store" and broken["armed"]:
+            broken["armed"] = False
+            raise RuntimeError("database is locked")
+        return real_list(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "process", process)
+    monkeypatch.setattr(manager.service, "assert_mutations_allowed", guard)
+    monkeypatch.setattr(manager.store, "list", listing)
+    loop = asyncio.create_task(manager._process_hooks(real_list(active=True)))
+    try:
+        await asyncio.wait_for(both.wait(), 2)
+        for _ in range(50):
+            if short_job["id"] in finished:
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.1)
+        assert not loop.done()
+        assert long_job["id"] not in cancelled
+    finally:
+        release.set()
+        await asyncio.wait_for(loop, 20)
+    assert finished == {long_job["id"], short_job["id"]}
+    assert not cancelled

@@ -17,6 +17,7 @@ from tankarr.download_sources import (
     normalize_provider_priority,
 )
 from tankarr.languages import (
+    SUPPORTED_LANGUAGE_CODES,
     normalize_language_code,
     normalize_language_list,
     parse_language_list,
@@ -838,6 +839,22 @@ class Settings(BaseSettings):
     @property
     def search_language_set(self) -> frozenset[str]:
         return frozenset(self.search_language_codes)
+
+    @property
+    def translation_discovery_language_codes(self) -> tuple[str, ...]:
+        """Languages searched for translation sources.
+
+        With translation on, a series may only exist in another language, so
+        source search, Wanted discovery, source candidates and external
+        recovery walk every supported language, library languages first.
+        Suwayomi extensions, reading languages and imports keep
+        ``search_language_codes``: this widens where Tankarr looks, not what
+        it installs or files in the library.
+        """
+        codes = self.search_language_codes
+        if not self.translation_enabled:
+            return codes
+        return (*codes, *sorted(SUPPORTED_LANGUAGE_CODES - set(codes)))
 
     @property
     def database_path(self) -> Path:

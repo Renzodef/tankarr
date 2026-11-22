@@ -75,7 +75,7 @@ from tankarr.http import async_client
 from tankarr.importer import LanguageReviewRequired, LibraryImporter
 from tankarr.internet_archive import InternetArchiveClient
 from tankarr.komga import KomgaClient
-from tankarr.languages import SUPPORTED_LANGUAGE_CODES, normalize_language_code
+from tankarr.languages import normalize_language_code
 from tankarr.library_reader import ReaderIndependentLibrary
 from tankarr.library_snapshot import changed_inputs, manga_revisions
 from tankarr.logs import (
@@ -1293,6 +1293,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         excluded = set(WEBVIEW_EXTENSIONS) | set(FLARESOLVERR_EXTENSIONS)
         try:
             async with suwayomi_runtime.retain(automatic=True):
+                # Library languages only: translation widens discovery
+                # (translation_discovery_language_codes), never extensions.
                 installed = await suwayomi_runtime.install_catalogue(
                     settings.search_language_codes, exclude=excluded
                 )
@@ -3705,7 +3707,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return languages
             try:
                 async with asyncio.timeout(15):
-                    listed = await catalog(tuple(SUPPORTED_LANGUAGE_CODES))
+                    listed = await catalog(
+                        tuple(settings.translation_discovery_language_codes)
+                    )
             except Exception:  # noqa: BLE001 - the series language search still runs
                 return languages
             for item in listed:

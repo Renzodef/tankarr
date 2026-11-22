@@ -16,7 +16,6 @@ import httpx
 from tankarr.archive import package_cbz_validated, sha256, validate_cbz
 from tankarr.http import async_client
 from tankarr.importer import LibraryImporter
-from tankarr.languages import SUPPORTED_LANGUAGE_CODES
 from tankarr.local_translation import LocalTranslationError, translate_archive
 from tankarr.providers.base import ProviderRequestError
 from tankarr.service import local_page_content_sha256
@@ -116,19 +115,34 @@ class TranslationManager:
                 logger.warning("Translation source discovery temporarily unavailable")
         queued += await self._queue_sources(manga_id, languages, limit=10 - queued)
         if self.acquisition is not None:
-            queued += await self.acquisition.hunt(manga_id, languages)
+            discovery = set(self.settings.translation_discovery_language_codes)
+            queued += await self.acquisition.hunt(
+                manga_id, [code for code in languages if code in discovery]
+            )
         return queued
 
     async def _source_languages_after_preferred(
         self, manga: dict, capable: list[str]
     ) -> list[str]:
+        discovery = set(self.settings.translation_discovery_language_codes)
+        preferred = str(manga.get("preferred_language") or "").casefold()
+        wide = [code for code in capable if code in discovery and code != preferred]
         configured = await self._configured_source_languages()
         if configured is None:
             # The source catalogue could not be listed. Keep walking every
             # capable language, a few per pass, instead of stopping at the
             # library language.
-            return self.store.discovery_batch(str(manga["id"]), capable)
-        return source_languages_to_search(manga, configured, capable=capable)
+            return self.store.discovery_batch(str(manga["id"]), wide)
+        direct = [
+            code
+            for code in source_languages_to_search(manga, configured, capable=capable)
+            if code in discovery
+        ]
+        # Languages without an enabled source are still searched while
+        # translation is on, a few per pass, so a series that only exists in
+        # another language is found without installing more extensions.
+        rest = [code for code in wide if code not in direct]
+        return direct + self.store.discovery_batch(str(manga["id"]), rest)
 
     async def _configured_source_languages(self) -> list[str] | None:
         """Languages of sources the operator has already enabled.
@@ -155,7 +169,9 @@ class TranslationManager:
         saw_catalog = False
         for catalog in catalogs:
             try:
-                listed = await catalog(tuple(SUPPORTED_LANGUAGE_CODES))
+                listed = await catalog(
+                    tuple(self.settings.translation_discovery_language_codes)
+                )
             except Exception as error:  # noqa: BLE001 - one provider must not hide the others
                 logger.warning(
                     "Configured source languages unavailable (%s)",
@@ -252,8 +268,10 @@ class TranslationManager:
         while True:
             try:
                 await self.tick()
-            except Exception:  # noqa: BLE001 - an optional integration must not stop monitoring
-                logger.warning("Translation queue temporarily unavailable")
+            except Exception as exc:  # noqa: BLE001 - an optional integration must not stop monitoring
+                logger.warning(
+                    "Translation queue temporarily unavailable (%s)", type(exc).__name__
+                )
             await asyncio.sleep(15)
 
     async def tick(self):
@@ -304,7 +322,18 @@ class TranslationManager:
         first_pass = True
         try:
             while True:
-                self.service.assert_mutations_allowed()
+                # A passing guard (library organization, recovery check) or a
+                # busy database must not cancel hooks that already own remote
+                # work: they keep running and only new admissions wait.
+                try:
+                    self.service.assert_mutations_allowed()
+                    admit = True
+                except Exception as exc:  # noqa: BLE001 - transient by design; retried next wake-up
+                    admit = False
+                    logger.warning(
+                        "Translation hooks keep running; new attempts wait (%s)",
+                        type(exc).__name__,
+                    )
                 if (
                     not self.configured()
                     or self.settings.restored_safe_mode
@@ -312,13 +341,16 @@ class TranslationManager:
                 ):
                     return
                 current = {(job["id"], job["attempts"]) for job in active}
-                for task, key in pending.items():
-                    if key not in current:
-                        task.cancel()
+                if admit:
+                    for task, key in pending.items():
+                        if key not in current:
+                            task.cancel()
                 running_ids = {key[0] for key in pending.values()}
                 now = time.monotonic()
-                capacity = max(
-                    0, self.settings.translation_hook_concurrency - len(pending)
+                capacity = (
+                    max(0, self.settings.translation_hook_concurrency - len(pending))
+                    if admit
+                    else 0
                 )
                 for job in active:
                     key = (job["id"], job["attempts"])
@@ -351,10 +383,22 @@ class TranslationManager:
                     finished.add(pending.pop(task))
                     with suppress(asyncio.CancelledError):
                         await task
-                active = self.store.list(active=True)
+                try:
+                    active = self.store.list(active=True)
+                except Exception as exc:  # noqa: BLE001 - keep the last known queue until the store answers
+                    logger.warning(
+                        "Translation queue listing deferred (%s)", type(exc).__name__
+                    )
+                    continue
                 remaining = {(job["id"], job["attempts"]) for job in active}
                 if finished - remaining and self.acquisition is not None:
-                    await self.acquisition.finish_sources()
+                    try:
+                        await self.acquisition.finish_sources()
+                    except Exception as exc:  # noqa: BLE001 - retried by the next tick
+                        logger.warning(
+                            "Translated source completion deferred (%s)",
+                            type(exc).__name__,
+                        )
                 active.sort(
                     key=lambda job: (
                         (job["id"], job["attempts"]) in self._hook_retry_after,

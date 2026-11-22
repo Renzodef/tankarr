@@ -136,3 +136,100 @@ def test_processor_exposes_only_validated_failure_fields(tmp_path, receipt):
         assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-0" not in processor.active
     finally:
         processor.executor.shutdown(wait=True)
+
+
+JOB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-0"
+
+
+def run_failed_engine(tmp_path, returncode, summary, receipt=None):
+    module = load("translation_processor")
+
+    def execute(directory, request):
+        if receipt is not None:
+            (directory / "result.failure.json").write_text(json.dumps(receipt))
+        raise module.EngineFailed(returncode, summary)
+
+    processor = module.Processor(tmp_path, execute)
+    directory = processor.directory(JOB)
+    directory.mkdir()
+    processor.active.add(JOB)
+    try:
+        processor._run(JOB, {"ai": {"api_key": "fixture-secret"}})
+        return processor.status(JOB), directory
+    finally:
+        processor.executor.shutdown(wait=True)
+
+
+def test_retry_exit_without_receipt_is_retryable(tmp_path):
+    status, directory = run_failed_engine(
+        tmp_path, 75, "Temporary provider interruption"
+    )
+    assert status == {
+        "status": "failed",
+        "failure": {"code": "provider_interrupted", "retryable": True},
+        "exit_code": 75,
+    }
+    diagnostic = directory / "engine-failure.json"
+    assert json.loads(diagnostic.read_text()) == {
+        "exit_code": 75,
+        "stderr_summary": "Temporary provider interruption",
+    }
+    assert stat.S_IMODE(diagnostic.stat().st_mode) == 0o600
+
+
+def test_permanent_exit_stays_failed_without_retry_hint(tmp_path):
+    status, _ = run_failed_engine(tmp_path, 1, "Translation or validation failed")
+    assert status == {"status": "failed", "exit_code": 1}
+
+
+def test_runner_receipt_wins_over_exit_status(tmp_path):
+    status, _ = run_failed_engine(
+        tmp_path, 75, "x", {"code": "page_review_required", "retryable": False}
+    )
+    assert status["failure"] == {"code": "page_review_required", "retryable": False}
+    assert status["exit_code"] == 75
+
+
+def test_stale_engine_diagnostic_is_removed_on_success(tmp_path):
+    module = load("translation_processor")
+
+    def execute(directory, request):
+        (directory / "result.cbz").write_bytes(b"fixture-result")
+
+    processor = module.Processor(tmp_path, execute)
+    directory = processor.directory(JOB)
+    directory.mkdir()
+    (directory / "engine-failure.json").write_text('{"exit_code": 75}')
+    processor.active.add(JOB)
+    try:
+        processor._run(JOB, {})
+        assert processor.status(JOB) == {"status": "completed"}
+        assert not (directory / "engine-failure.json").exists()
+    finally:
+        processor.executor.shutdown(wait=True)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Provider unavailable: Bearer fixture-secret refused",
+        "Provider unavailable: api_key=fixture-secret",
+        "Provider unavailable: sk-fixturesecret123 refused",
+        "Provider unavailable: https://user:fixture-secret@example.invalid/v1",
+        "Provider unavailable: literal fixture-secret",
+    ],
+)
+def test_stderr_summary_redacts_credentials(line):
+    module = load("translation_processor")
+    summary = module.stderr_summary(
+        ("noise\n" + line + "\n").encode(), ["fixture-secret"]
+    )
+    assert summary.startswith("Provider unavailable:")
+    assert "fixture-secret" not in summary and "fixturesecret" not in summary
+    assert len(summary) <= 200
+
+
+def test_stderr_summary_is_bounded():
+    module = load("translation_processor")
+    assert module.stderr_summary(b"x" * 10000) == "x" * 200
+    assert module.stderr_summary(b"") == ""
