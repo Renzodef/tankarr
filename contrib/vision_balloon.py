@@ -5,13 +5,13 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 from collections import defaultdict
 from difflib import SequenceMatcher
 from functools import lru_cache
 
 import httpx
-import os
 
 THUMBNAIL = int(os.environ.get("TANKARR_VISION_THUMBNAIL", "1440"))
 
@@ -205,7 +205,9 @@ SFX_PROMPT = (
     "Return only a JSON array of objects with bbox_2d ([x1,y1,x2,y2] normalized to 0..1000, tight "
     "around the letters) and text (the kana). Return [] if there are none."
 )
-SFX_TEXT = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9fー〜～ッっ!！?？…・゛゜]{1,10}")
+SFX_TEXT = re.compile(
+    r"[\u3040-\u30ff\u4e00-\u9fff\uff66-\uff9fー〜～ッっ!！?？…・゛゜]{1,10}"
+)
 
 
 async def find_sound_effects(ctx, vision, image, headers, timeout):
@@ -271,7 +273,11 @@ async def find_sound_effects(ctx, vision, image, headers, timeout):
 def sfx_font(size):
     from PIL import ImageFont
 
-    for name in ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf", "fonts/Arial-Unicode-Regular.ttf"):
+    for name in (
+        "DejaVuSans-Bold.ttf",
+        "DejaVuSans.ttf",
+        "fonts/Arial-Unicode-Regular.ttf",
+    ):
         try:
             return ImageFont.truetype(name, size)
         except OSError:
@@ -286,7 +292,11 @@ def draw_sound_effects(canvas, effects):
     draw = ImageDraw.Draw(canvas)
     for region in effects:
         text = str(getattr(region, "translation", "") or "").strip().strip("\"'")
-        if not text or not re.search(r"[A-Za-z]", text) or re.search(r"[\u3040-\u30ff]", text):
+        if (
+            not text
+            or not re.search(r"[A-Za-z]", text)
+            or re.search(r"[\u3040-\u30ff]", text)
+        ):
             continue
         text = text.upper()
         x1, y1, x2, y2 = map(int, region.xyxy)
@@ -297,8 +307,15 @@ def draw_sound_effects(canvas, effects):
             size -= 2
             font = sfx_font(size)
         stroke = max(2, size // 8)
-        draw.text(((x1 + x2) / 2, (y1 + y2) / 2), text, anchor="mm", font=font,
-                  fill="#ffffff", stroke_width=stroke, stroke_fill="#111111")
+        draw.text(
+            ((x1 + x2) / 2, (y1 + y2) / 2),
+            text,
+            anchor="mm",
+            font=font,
+            fill="#ffffff",
+            stroke_width=stroke,
+            stroke_fill="#111111",
+        )
 
 
 def fit_strip(text, length, thickness):
@@ -677,12 +694,17 @@ def foreign_ink(source, bounds, mask, group, text_mask=None, color=None):
     for region in group:
         rx1, ry1, rx2, ry2 = map(int, region.xyxy)
         lettering[
-            max(0, ry1 - y - 8) : max(0, ry2 - y + 8), max(0, rx1 - x - 8) : max(0, rx2 - x + 8)
+            max(0, ry1 - y - 8) : max(0, ry2 - y + 8),
+            max(0, rx1 - x - 8) : max(0, rx2 - x + 8),
         ] = True
     if text_mask is not None:
-        lettering |= cv2.dilate(
-            (text_mask[y:bottom, x:right] > 127).astype(np.uint8), np.ones((9, 9), np.uint8)
-        ) != 0
+        lettering |= (
+            cv2.dilate(
+                (text_mask[y:bottom, x:right] > 127).astype(np.uint8),
+                np.ones((9, 9), np.uint8),
+            )
+            != 0
+        )
     return float((dark & inside & ~lettering).sum()) / total
 
 
@@ -693,9 +715,13 @@ async def render_guided(fallback, config, ctx):
 
     effects = [r for r in ctx.text_regions if getattr(r, "tankarr_sfx", False)]
     if effects:
-        ctx.text_regions = [r for r in ctx.text_regions if not getattr(r, "tankarr_sfx", False)]
+        ctx.text_regions = [
+            r for r in ctx.text_regions if not getattr(r, "tankarr_sfx", False)
+        ]
         try:
-            canvas = Image.fromarray(np.ascontiguousarray(await render_guided(fallback, config, ctx)))
+            canvas = Image.fromarray(
+                np.ascontiguousarray(await render_guided(fallback, config, ctx))
+            )
         finally:
             ctx.text_regions = ctx.text_regions + effects
         draw_sound_effects(canvas, effects)
@@ -812,7 +838,9 @@ async def render_guided(fallback, config, ctx):
                 inside = mask[ry1 - y : ry2 - y, rx1 - x : rx2 - x] != 0
                 covered += int(inside.sum())
                 pixels = source[ry1:ry2, rx1:rx2][inside].astype(float)
-                close += int((np.max(np.abs(pixels - color.astype(float)), axis=1) <= 40).sum())
+                close += int(
+                    (np.max(np.abs(pixels - color.astype(float)), axis=1) <= 40).sum()
+                )
         if not total or covered < 0.5 * total or close < 0.3 * covered:
             continue
         # 2026-11-17 (Miles p13/p21/p39): on black-and-white pages a balloon whose
@@ -820,7 +848,10 @@ async def render_guided(fallback, config, ctx):
         # panel, and filling it erased faces and whole panels. A balloon holds no
         # ink but its own lettering: refuse the shape (MIT inpaints and letters
         # the region instead) when line art other than the text is inside it.
-        if foreign_ink(source, (x, y, right, bottom), mask, group, text_mask, color) > FOREIGN_INK_LIMIT:
+        if (
+            foreign_ink(source, (x, y, right, bottom), mask, group, text_mask, color)
+            > FOREIGN_INK_LIMIT
+        ):
             continue
         interior = cv2.erode(mask, np.ones((9, 9), np.uint8))
         layout = fit_mask(text, interior)
@@ -899,8 +930,13 @@ async def render_guided(fallback, config, ctx):
         pen = ImageDraw.Draw(strip)
         top = ((x2 - x1) - len(rows) * (size + 3)) // 2
         for index, line in enumerate(rows):
-            pen.text(((y2 - y1) / 2, top + index * (size + 3)), line, anchor="mt", font=font,
-                     fill="#fff8e8" if dark else "#151515")
+            pen.text(
+                ((y2 - y1) / 2, top + index * (size + 3)),
+                line,
+                anchor="mt",
+                font=font,
+                fill="#fff8e8" if dark else "#151515",
+            )
         rotated = strip.rotate(-90, expand=True)
         patch = Image.fromarray(np.ascontiguousarray(base[y1:y2, x1:x2]))
         patch.paste(rotated, (0, 0), rotated)

@@ -19,7 +19,9 @@ def load(name):
 
 def archive(path, series):
     with zipfile.ZipFile(path, "w") as target:
-        target.writestr("ComicInfo.xml", f"<ComicInfo><Series>{series}</Series></ComicInfo>")
+        target.writestr(
+            "ComicInfo.xml", f"<ComicInfo><Series>{series}</Series></ComicInfo>"
+        )
         target.writestr("001.png", b"")
     return path
 
@@ -30,7 +32,9 @@ def test_series_glossary_is_found_by_comicinfo_series(tmp_path, monkeypatch):
     folder.mkdir()
     slug = module.glossary_slug("Scorpione Rosso")
     (folder / f"{slug}.json").write_text(
-        json.dumps({"terms": [{"source": "韋德", "target": "Wade", "variants": ["章德"]}]}),
+        json.dumps(
+            {"terms": [{"source": "韋德", "target": "Wade", "variants": ["章德"]}]}
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(module, "GLOSSARY_DIR", folder)
@@ -60,42 +64,65 @@ def test_long_narrow_strip_is_laid_out_along_the_strip():
 
 
 def test_shape_with_artwork_inside_is_not_taken_for_a_balloon():
-    import numpy as np
     from types import SimpleNamespace
+
+    import numpy as np
 
     module = load("vision_balloon")
     page = np.full((300, 300, 3), 255, np.uint8)
     mask = np.ones((300, 300), np.uint8)
     region = SimpleNamespace(xyxy=[120, 40, 160, 120])
     page[60:100, 130:150] = 0  # the lettering
-    assert module.foreign_ink(page, (0, 0, 300, 300), mask, [region]) < module.FOREIGN_INK_LIMIT
+    assert (
+        module.foreign_ink(page, (0, 0, 300, 300), mask, [region])
+        < module.FOREIGN_INK_LIMIT
+    )
     for row in range(150, 290, 6):  # a face drawn in the same white area
         page[row : row + 2, 40:260] = 0
-    assert module.foreign_ink(page, (0, 0, 300, 300), mask, [region]) > module.FOREIGN_INK_LIMIT
+    assert (
+        module.foreign_ink(page, (0, 0, 300, 300), mask, [region])
+        > module.FOREIGN_INK_LIMIT
+    )
     caption = np.full((100, 100, 3), (30, 40, 120), np.uint8)
     caption[40:60, 20:80] = 255  # white text on a dark caption is its own lettering
     lettering = SimpleNamespace(xyxy=[20, 40, 80, 60])
-    assert module.foreign_ink(caption, (0, 0, 100, 100), np.ones((100, 100), np.uint8), [lettering]) == 0
+    assert (
+        module.foreign_ink(
+            caption, (0, 0, 100, 100), np.ones((100, 100), np.uint8), [lettering]
+        )
+        == 0
+    )
 
 
 def test_japanese_columns_are_shown_to_the_model_with_their_breaks():
     from types import SimpleNamespace
 
     module = load("translate_archive")
-    region = SimpleNamespace(texts=["たのんだ", "オートバイ", "ノワさんに"], text="たのんだオートバイノワさんに")
+    region = SimpleNamespace(
+        texts=["たのんだ", "オートバイ", "ノワさんに"],
+        text="たのんだオートバイノワさんに",
+    )
     restore = module.install_japanese_prompt("ja")
     try:
-        from manga_translator.translators.common_gpt import CommonGPTTranslator  # noqa: F401
+        from manga_translator.translators.common_gpt import (
+            CommonGPTTranslator,  # noqa: F401
+        )
     except ImportError:
         restore()
         module.JAPANESE_ACTIVE = True
         module.japanese_columns([region])
-        assert module.COLUMN_TEXT[region.text] == "たのんだ\u3000オートバイ\u3000ノワさんに"
+        assert (
+            module.COLUMN_TEXT[region.text]
+            == "たのんだ\u3000オートバイ\u3000ノワさんに"
+        )
         module.JAPANESE_ACTIVE = False
         return
     try:
         module.japanese_columns([region])
-        assert module.COLUMN_TEXT[region.text] == "たのんだ\u3000オートバイ\u3000ノワさんに"
+        assert (
+            module.COLUMN_TEXT[region.text]
+            == "たのんだ\u3000オートバイ\u3000ノワさんに"
+        )
         assert "Japanese source" in module.JAPANESE_NOTE
         phrase = SimpleNamespace(texts=["素直じゃ", "ねーか"], text="素直じゃねーか")
         module.japanese_columns([phrase])
@@ -107,8 +134,9 @@ def test_japanese_columns_are_shown_to_the_model_with_their_breaks():
 
 
 def test_sound_effects_are_lettered_in_english_over_the_artwork():
-    import numpy as np
     from types import SimpleNamespace
+
+    import numpy as np
     from PIL import Image
 
     module = load("vision_balloon")

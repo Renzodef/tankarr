@@ -998,13 +998,18 @@ def join_broken_words(language):
 # A glossary is optional and keyed by the ComicInfo <Series> of the source archive; without one
 # nothing changes (prompts, checkpoint identity and behaviour stay as before).
 GLOSSARY_DIR = Path(
-    os.environ.get("TANKARR_GLOSSARY_DIR") or Path(__file__).resolve().parent / "glossaries"
+    os.environ.get("TANKARR_GLOSSARY_DIR")
+    or Path(__file__).resolve().parent / "glossaries"
 )
 GLOSSARY_NOTE = ""
 
 
 def glossary_slug(value):
-    value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode()
+    value = (
+        unicodedata.normalize("NFKD", str(value or ""))
+        .encode("ascii", "ignore")
+        .decode()
+    )
     return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
 
 
@@ -1032,14 +1037,25 @@ def series_glossary(source):
         terms = [
             t
             for t in data.get("terms", [])
-            if isinstance(t, dict) and str(t.get("source") or "").strip() and str(t.get("target") or "").strip()
+            if isinstance(t, dict)
+            and str(t.get("source") or "").strip()
+            and str(t.get("target") or "").strip()
         ]
         if not terms:
             return None
         data["terms"] = terms
-        data["_digest"] = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        data["_digest"] = hashlib.sha256(
+            json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
         return data
-    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, ElementTree.ParseError):
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        zipfile.BadZipFile,
+        ElementTree.ParseError,
+    ):
         return None
 
 
@@ -1091,7 +1107,9 @@ def install_glossary(glossary):
     original = CommonGPTTranslator._assemble_prompts
 
     def assemble(self, from_lang, to_lang, queries):
-        return original(self, from_lang, to_lang, [normalise_variants(q, glossary) for q in queries])
+        return original(
+            self, from_lang, to_lang, [normalise_variants(q, glossary) for q in queries]
+        )
 
     CommonGPTTranslator._assemble_prompts = assemble
 
@@ -1136,7 +1154,11 @@ def japanese_columns(regions):
     if not JAPANESE_ACTIVE:
         return
     for region in regions or []:
-        texts = [str(t).strip() for t in (getattr(region, "texts", None) or []) if str(t).strip()]
+        texts = [
+            str(t).strip()
+            for t in (getattr(region, "texts", None) or [])
+            if str(t).strip()
+        ]
         text = str(getattr(region, "text", "") or "")
         if len(texts) > 1 and text == "".join(texts):
             # Only a break next to katakana is shown: there two words can fuse into a
@@ -1162,11 +1184,15 @@ def install_japanese_prompt(language):
         return lambda: None
     JAPANESE_ACTIVE = True
     template = DeepseekTranslator.__dict__.get("_CHAT_SYSTEM_TEMPLATE")
-    DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = DeepseekTranslator._CHAT_SYSTEM_TEMPLATE + JAPANESE_NOTE
+    DeepseekTranslator._CHAT_SYSTEM_TEMPLATE = (
+        DeepseekTranslator._CHAT_SYSTEM_TEMPLATE + JAPANESE_NOTE
+    )
     original = CommonGPTTranslator._assemble_prompts
 
     def assemble(self, from_lang, to_lang, queries):
-        return original(self, from_lang, to_lang, [COLUMN_TEXT.get(q, q) for q in queries])
+        return original(
+            self, from_lang, to_lang, [COLUMN_TEXT.get(q, q) for q in queries]
+        )
 
     CommonGPTTranslator._assemble_prompts = assemble
 
@@ -1228,15 +1254,19 @@ async def translate_lost(request, texts):
         "the original language",
     )
     system = (
-        f"You translate one line of dialogue from a comic book from {language} into English. Answer with the English of that "
-        "line and nothing else: no notes, no quotation marks, no numbers. Translate a short or unfinished line too (an "
-        "interjection, a trailing ellipsis). Keep proper names and text already in English unchanged, including "
-        "credits, labels and abbreviation keys within a book in another language. Do not classify readable English "
-        "as NOT SPEECH merely because it differs from the book's source language. "
-        f"Otherwise, if the line is not speech in {language}, even allowing for OCR mistakes (an invented or made-up language, random "
-        "letters, or only the end or the start of a broken word), answer exactly: NOT SPEECH. "
-        f"Real {language}, however short or misspelled, is translated."
-    ) + GLOSSARY_NOTE.replace("{{", "{").replace("}}", "}") + (JAPANESE_NOTE if JAPANESE_ACTIVE else "")
+        (
+            f"You translate one line of dialogue from a comic book from {language} into English. Answer with the English of that "
+            "line and nothing else: no notes, no quotation marks, no numbers. Translate a short or unfinished line too (an "
+            "interjection, a trailing ellipsis). Keep proper names and text already in English unchanged, including "
+            "credits, labels and abbreviation keys within a book in another language. Do not classify readable English "
+            "as NOT SPEECH merely because it differs from the book's source language. "
+            f"Otherwise, if the line is not speech in {language}, even allowing for OCR mistakes (an invented or made-up language, random "
+            "letters, or only the end or the start of a broken word), answer exactly: NOT SPEECH. "
+            f"Real {language}, however short or misspelled, is translated."
+        )
+        + GLOSSARY_NOTE.replace("{{", "{").replace("}}", "}")
+        + (JAPANESE_NOTE if JAPANESE_ACTIVE else "")
+    )
     reasoning = (
         {"thinking": {"type": "disabled"}}
         if "deepseek" in str(ai["base_url"]).lower()
@@ -2466,10 +2496,16 @@ def vision_reachable(request):
     import httpx
 
     url = str(vision["base_url"]).rstrip("/") + "/models"
-    headers = {"Authorization": f"Bearer {vision['api_key']}"} if vision.get("api_key") else {}
+    headers = (
+        {"Authorization": f"Bearer {vision['api_key']}"}
+        if vision.get("api_key")
+        else {}
+    )
     for _ in range(3):
         try:
-            response = httpx.get(url, headers=headers, timeout=httpx.Timeout(10, connect=5))
+            response = httpx.get(
+                url, headers=headers, timeout=httpx.Timeout(10, connect=5)
+            )
             if response.status_code < 500:
                 return True
         except Exception:  # noqa: BLE001 - any transport failure means not reachable
@@ -2908,7 +2944,9 @@ async def _translate_pages(source, output, request, target, gpu, config, checkpo
     glossary = series_glossary(source)
     if glossary:
         # A glossary changes the English: pages made without it are not reused.
-        identity = hashlib.sha256((identity + ":glossary:" + glossary["_digest"]).encode()).hexdigest()
+        identity = hashlib.sha256(
+            (identity + ":glossary:" + glossary["_digest"]).encode()
+        ).hexdigest()
     parsed = Config(**engine_config)
     # The Python constructor requires some CLI defaults (notably kernel_size).
     # Read them from the installed engine, then apply our explicit GPU choice.
