@@ -60,16 +60,39 @@ def _cbz(path, pages):
 
 def test_scan_archive_reports_page_numbers(tmp_path):
     path = tmp_path / "volume.cbz"
-    _cbz(path, [_artwork(), _with_strip(_artwork()), _artwork(), _with_strip(_artwork())])
+    _cbz(
+        path, [_artwork(), _with_strip(_artwork()), _artwork(), _with_strip(_artwork())]
+    )
     assert scan_archive(path) == [2, 4]
 
 
 def test_store_and_findings_group_by_series(tmp_path):
     store = StripScanStore(tmp_path / "strips.json")
     files = [
-        {"id": "a", "manga_id": "s1", "volume": "1", "chapter": None, "release_unit": "volume", "library_sha256": "h1"},
-        {"id": "b", "manga_id": "s1", "volume": "2", "chapter": None, "release_unit": "volume", "library_sha256": "h2"},
-        {"id": "c", "manga_id": "s2", "volume": None, "chapter": "7", "release_unit": "chapter", "library_sha256": "h3"},
+        {
+            "id": "a",
+            "manga_id": "s1",
+            "volume": "1",
+            "chapter": None,
+            "release_unit": "volume",
+            "library_sha256": "h1",
+        },
+        {
+            "id": "b",
+            "manga_id": "s1",
+            "volume": "2",
+            "chapter": None,
+            "release_unit": "volume",
+            "library_sha256": "h2",
+        },
+        {
+            "id": "c",
+            "manga_id": "s2",
+            "volume": None,
+            "chapter": "7",
+            "release_unit": "chapter",
+            "library_sha256": "h3",
+        },
     ]
     assert next_unscanned(files, store)["id"] == "a"
     store.put("h1", [3, 9])
@@ -98,8 +121,11 @@ def test_series_findings_report_strip_volumes():
             "volumes": volumes,
         }
     ]
-    assert series_metadata_findings(
-        {"title": "Billy the Kid", "authors": [], "preferred_language": "en"},
-        [],
-        has_external_metadata=True,
-    ) == []
+    assert (
+        series_metadata_findings(
+            {"title": "Billy the Kid", "authors": [], "preferred_language": "en"},
+            [],
+            has_external_metadata=True,
+        )
+        == []
+    )

@@ -117,7 +117,9 @@ class SeriesAudit:
         )
         self._render_lock = asyncio.Lock()
         # Filled by the background page scan in the app; same file as its store.
-        self.strip_store = StripScanStore(self.cache_root.parent / "translation-strips.json")
+        self.strip_store = StripScanStore(
+            self.cache_root.parent / "translation-strips.json"
+        )
         self._key = secrets.token_bytes(32)
 
     def _file(self, release: dict, root: Path) -> tuple[Path, dict, str]:

@@ -19,8 +19,9 @@ import tempfile
 import threading
 import time
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
@@ -32,7 +33,10 @@ STORE_VERSION = 1
 
 
 def _natural(value: str) -> list[Any]:
-    return [int(part) if part.isdigit() else part.casefold() for part in re.split(r"(\d+)", value)]
+    return [
+        int(part) if part.isdigit() else part.casefold()
+        for part in re.split(r"(\d+)", value)
+    ]
 
 
 def strip_row(image: Image.Image) -> int | None:
@@ -45,10 +49,13 @@ def strip_row(image: Image.Image) -> int | None:
 
     gray = image.convert("L")
     if gray.width > SCAN_WIDTH:
-        gray = gray.resize((SCAN_WIDTH, max(1, round(gray.height * SCAN_WIDTH / gray.width))))
+        gray = gray.resize(
+            (SCAN_WIDTH, max(1, round(gray.height * SCAN_WIDTH / gray.width)))
+        )
     width, height = gray.size
     if width < 50 or height < 100:
         return None
+
     def row_histogram(row: int) -> list[int]:
         return gray.crop((0, row, width, row + 1)).histogram()
 
@@ -107,7 +114,9 @@ class StripScanStore:
         if self._data is None:
             try:
                 raw = json.loads(self.path.read_text())
-                self._data = raw.get("files", {}) if raw.get("version") == STORE_VERSION else {}
+                self._data = (
+                    raw.get("files", {}) if raw.get("version") == STORE_VERSION else {}
+                )
             except (OSError, ValueError):
                 self._data = {}
         return self._data
@@ -121,14 +130,19 @@ class StripScanStore:
             data = self._load()
             data[sha256] = {"pages": pages, "checked_at": time.time()}
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            handle, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".strips-")
+            handle, temporary = tempfile.mkstemp(
+                dir=self.path.parent, prefix=".strips-"
+            )
             with os.fdopen(handle, "w") as output:
                 json.dump({"version": STORE_VERSION, "files": data}, output)
             os.replace(temporary, self.path)
 
     def pages_by_sha(self) -> dict[str, list[int]]:
         with self._lock:
-            return {sha: list(entry.get("pages") or []) for sha, entry in self._load().items()}
+            return {
+                sha: list(entry.get("pages") or [])
+                for sha, entry in self._load().items()
+            }
 
 
 def library_files(database: Any) -> list[dict[str, Any]]:
@@ -147,14 +161,18 @@ def library_files(database: Any) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def next_unscanned(files: Iterable[dict[str, Any]], store: StripScanStore) -> dict[str, Any] | None:
+def next_unscanned(
+    files: Iterable[dict[str, Any]], store: StripScanStore
+) -> dict[str, Any] | None:
     for release in files:
         if store.get(release["library_sha256"]) is None:
             return release
     return None
 
 
-def strip_findings_by_series(files: Iterable[dict[str, Any]], store: StripScanStore) -> dict[str, list[dict[str, Any]]]:
+def strip_findings_by_series(
+    files: Iterable[dict[str, Any]], store: StripScanStore
+) -> dict[str, list[dict[str, Any]]]:
     """Files with strip pages, grouped by series."""
 
     pages = store.pages_by_sha()
@@ -165,8 +183,12 @@ def strip_findings_by_series(files: Iterable[dict[str, Any]], store: StripScanSt
             result.setdefault(str(release["manga_id"]), []).append(
                 {
                     "chapter_id": str(release["id"]),
-                    "unit": "volume" if release.get("release_unit") == "volume" else "chapter",
-                    "number": release.get("volume") if release.get("release_unit") == "volume" else release.get("chapter"),
+                    "unit": "volume"
+                    if release.get("release_unit") == "volume"
+                    else "chapter",
+                    "number": release.get("volume")
+                    if release.get("release_unit") == "volume"
+                    else release.get("chapter"),
                     "pages": found,
                 }
             )

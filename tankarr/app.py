@@ -90,13 +90,6 @@ from tankarr.memory import release_native_heap
 from tankarr.metadata import build_metadata_sources
 from tankarr.metadata.service import MAX_ARTWORK_BYTES, MetadataService
 from tankarr.metadata_audit import library_metadata_findings
-from tankarr.translation_strip_audit import (
-    StripScanStore,
-    library_files,
-    next_unscanned,
-    scan_archive,
-    store_path,
-)
 from tankarr.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
 from tankarr.metrics import database_samples, render_metrics
 from tankarr.models import (
@@ -198,6 +191,13 @@ from tankarr.suwayomi_runtime import (
 from tankarr.tasks import ScheduledTask, TaskBusy, TaskNotRunnable, TaskRegistry
 from tankarr.torrents import ORPHAN_SWEEP_INTERVAL_SECONDS, TorrentManager
 from tankarr.translation_policy import source_mapping_language
+from tankarr.translation_strip_audit import (
+    StripScanStore,
+    library_files,
+    next_unscanned,
+    scan_archive,
+    store_path,
+)
 from tankarr.updates import UpdateChecker
 from tankarr.url_base import UrlBaseMiddleware
 from tankarr.verified_books import register_verified_book_routes
@@ -2939,9 +2939,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def metadata_audit():
         """Series whose metadata a reader would notice is incomplete."""
 
-        return await run_api_blocking(
-            library_metadata_findings, database, strip_store
-        )
+        return await run_api_blocking(library_metadata_findings, database, strip_store)
 
     @app.get("/api/manga/{manga_id}/metadata")
     async def get_manga_metadata(manga_id: str):
