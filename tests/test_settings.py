@@ -147,6 +147,23 @@ def test_fresh_install_enables_only_english_search_by_default():
     assert settings.search_language_codes == ("en",)
 
 
+def test_translation_widens_discovery_languages_not_library_languages():
+    from tankarr.languages import SUPPORTED_LANGUAGE_CODES
+
+    settings = Settings(search_languages="en,it", translation_enabled=False)
+    assert settings.translation_discovery_language_codes == ("en", "it")
+
+    settings = Settings(search_languages="en,it", translation_enabled=True)
+    discovery = settings.translation_discovery_language_codes
+    # Library languages first, then every other supported language once.
+    assert discovery[:2] == ("en", "it")
+    assert set(discovery) == SUPPORTED_LANGUAGE_CODES
+    assert len(discovery) == len(SUPPORTED_LANGUAGE_CODES)
+    # Suwayomi extensions, reading languages and imports keep the library set.
+    assert settings.search_language_codes == ("en", "it")
+    assert settings.search_language_set == frozenset({"en", "it"})
+
+
 def test_connection_preview_uses_unsaved_values_without_mutating_settings(
     tmp_path: Path,
 ):
