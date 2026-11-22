@@ -191,6 +191,13 @@ from tankarr.suwayomi_runtime import (
 from tankarr.tasks import ScheduledTask, TaskBusy, TaskNotRunnable, TaskRegistry
 from tankarr.torrents import ORPHAN_SWEEP_INTERVAL_SECONDS, TorrentManager
 from tankarr.translation_policy import source_mapping_language
+from tankarr.translation_strip_audit import (
+    StripScanStore,
+    library_files,
+    next_unscanned,
+    scan_archive,
+    store_path,
+)
 from tankarr.updates import UpdateChecker
 from tankarr.url_base import UrlBaseMiddleware
 from tankarr.verified_books import register_verified_book_routes
@@ -2019,6 +2026,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logger.exception("Unable to process pending series cleanup")
             await asyncio.sleep(5)
 
+    strip_store = StripScanStore(store_path(settings.data_dir))
+
+    async def translation_strip_loop() -> None:
+        """Read every library page once for leftover translation strips, gently."""
+
+        await asyncio.sleep(900)  # let startup settle
+        while True:
+            try:
+                files = await asyncio.to_thread(library_files, database)
+                release = next_unscanned(files, strip_store)
+                if release is None:
+                    await asyncio.sleep(3600)
+                    continue
+                root = await asyncio.to_thread(service._library_root)
+                path = await asyncio.to_thread(
+                    service._recorded_library_path, str(release["library_path"]), root
+                )
+                try:
+                    pages = await asyncio.to_thread(scan_archive, path)
+                except (OSError, ValueError, zipfile.BadZipFile):
+                    pages = []
+                await asyncio.to_thread(
+                    strip_store.put, release["library_sha256"], pages
+                )
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - retry later; the library may be offline
+                logger.warning("Translation strip scan paused", exc_info=True)
+                await asyncio.sleep(600)
+
     async def library_maintenance_loop() -> None:
         alignment_failures = 0
         next_alignment_at = 0.0
@@ -2220,6 +2258,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 [
                     initialization_task,
                     asyncio.create_task(library_maintenance_loop()),
+                    asyncio.create_task(
+                        translation_strip_loop(), name="tankarr-translation-strips"
+                    ),
                     asyncio.create_task(
                         series_deletion_loop(), name="tankarr-series-cleanup"
                     ),
@@ -2898,7 +2939,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def metadata_audit():
         """Series whose metadata a reader would notice is incomplete."""
 
-        return await run_api_blocking(library_metadata_findings, database)
+        return await run_api_blocking(library_metadata_findings, database, strip_store)
 
     @app.get("/api/manga/{manga_id}/metadata")
     async def get_manga_metadata(manga_id: str):

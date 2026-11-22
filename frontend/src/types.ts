@@ -1648,6 +1648,7 @@ export type SeriesAuditReport = {
 export type SeriesMetadataFinding = {
   code: "no_external_metadata" | "authors_not_linked" | "title_language_mismatch" | string;
   label: string; detected_language?: string; series_language?: string;
+  volumes?: { chapter_id: string; unit: "volume" | "chapter"; number: string | null; pages: number[] }[];
 };
 export type SeriesAuditSourceKey = Pick<SeriesAuditSource, "provider" | "provider_manga_id">;
 export type SeriesAuditPreview = {
