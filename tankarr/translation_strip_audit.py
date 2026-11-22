@@ -27,9 +27,13 @@ from PIL import Image, UnidentifiedImageError
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"}
 SCAN_WIDTH = 600
+# Height over width of a typical single manga page, used when a volume has too few plain pages.
+DEFAULT_PAGE_ASPECT = 1.42
+SHAPE_TOLERANCE = 0.08
 MAX_PAGES = 2000
 MAX_PAGE_BYTES = 64 * 1024 * 1024
-STORE_VERSION = 1
+# Version 2: the page-shape test; results of the first detector are discarded.
+STORE_VERSION = 2
 
 
 def _natural(value: str) -> list[Any]:
@@ -39,12 +43,13 @@ def _natural(value: str) -> list[Any]:
     ]
 
 
-def strip_row(image: Image.Image) -> int | None:
-    """Row where a translation strip starts, or None.
+def candidate_rows(image: Image.Image) -> tuple[int, int, list[int]]:
+    """Width, height and rows (at scan width) that look like a strip rule.
 
-    The strip is a full-width light-grey rule with white just above and below
-    it, followed by a mostly white band that holds some dark text. A panel
-    border fails the band test because artwork, not paper, follows it.
+    A rule is a full-width light-grey line with white just above and below it,
+    followed by a mostly white band that holds some dark text. A panel border
+    fails the band test because artwork, not paper, follows it. The shape of
+    the page decides later which of these rows really start a strip.
     """
 
     gray = image.convert("L")
@@ -54,7 +59,7 @@ def strip_row(image: Image.Image) -> int | None:
         )
     width, height = gray.size
     if width < 50 or height < 100:
-        return None
+        return width, height, []
 
     def row_histogram(row: int) -> list[int]:
         return gray.crop((0, row, width, row + 1)).histogram()
@@ -62,7 +67,10 @@ def strip_row(image: Image.Image) -> int | None:
     def share(histogram: list[int], low: int, high: int) -> float:
         return sum(histogram[low:high]) / max(1, sum(histogram))
 
+    rows = []
     for row in range(int(height * 0.35), height - max(10, int(height * 0.08))):
+        if rows and row - rows[-1] < 4:
+            continue
         if share(row_histogram(row), 101, 245) < 0.8:
             continue
         if share(row_histogram(row - 2), 241, 256) < 0.95:
@@ -71,8 +79,52 @@ def strip_row(image: Image.Image) -> int | None:
             continue
         band = gray.crop((0, row + 3, width, height)).histogram()
         if share(band, 236, 256) >= 0.85 and 0.002 <= share(band, 0, 100) <= 0.15:
+            rows.append(row)
+    return width, height, rows
+
+
+def _fits(row: int, width: int, height: int, page_aspect: float) -> bool:
+    """The band is appended below a whole page or two-page spread.
+
+    So the part above the rule has the shape of the volume's pages, or half of
+    it for a spread, within a few percent. A white bottom margin, a page
+    number, a text afterword or a mid-page panel border has a different shape.
+    """
+
+    above = row / width
+    return height / row >= 1.1 and any(
+        abs(above / shape - 1) <= SHAPE_TOLERANCE
+        for shape in (page_aspect, page_aspect / 2)
+    )
+
+
+def strip_row(
+    image: Image.Image, page_aspect: float = DEFAULT_PAGE_ASPECT
+) -> int | None:
+    """Row where a translation strip starts, or None."""
+
+    width, height, rows = candidate_rows(image)
+    for row in rows:
+        if _fits(row, width, height, page_aspect):
             return row
     return None
+
+
+def volume_page_aspect(plain_shapes: list[float], rule_shapes: list[float]) -> float:
+    """Shape of the volume's original pages.
+
+    When many pages carry a rule at the same height, that height is the
+    strip's signature and gives the original page shape, even if every page
+    has a strip. Otherwise the plain pages give it, or a typical manga page.
+    """
+
+    if len(rule_shapes) >= 5:
+        ordered = sorted(rule_shapes)
+        middle = ordered[len(ordered) // 2]
+        close = sum(1 for shape in ordered if abs(shape / middle - 1) <= 0.03)
+        if close / len(ordered) >= 0.6 and 1.25 <= middle <= 1.6:
+            return middle
+    return typical_page_aspect(plain_shapes)
 
 
 def scan_archive(path: Path) -> list[int]:
@@ -89,17 +141,38 @@ def scan_archive(path: Path) -> list[int]:
                 raise ValueError("Archive contains unsafe paths")
             pages.append(item)
         pages.sort(key=lambda item: _natural(item.filename))
-        for number, item in enumerate(pages[:MAX_PAGES], 1):
-            if item.file_size > MAX_PAGE_BYTES or item.flag_bits & 1:
-                continue
+        pages = [
+            item
+            for item in pages[:MAX_PAGES]
+            if item.file_size <= MAX_PAGE_BYTES and not item.flag_bits & 1
+        ]
+        measured = []
+        for number, item in enumerate(pages, 1):
             try:
                 with Image.open(io.BytesIO(archive.read(item))) as image:
                     image.draft("L", (SCAN_WIDTH, SCAN_WIDTH * 4))
-                    if strip_row(image) is not None:
-                        found.append(number)
+                    measured.append((number, *candidate_rows(image)))
             except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
                 continue
+    plain = [height / width for _, width, height, rows in measured if not rows]
+    ruled = [rows[0] / width for _, width, _, rows in measured if rows]
+    page_aspect = volume_page_aspect(plain, ruled)
+    for number, width, height, rows in measured:
+        if any(_fits(row, width, height, page_aspect) for row in rows):
+            found.append(number)
     return found
+
+
+def typical_page_aspect(shapes: list[float]) -> float:
+    """Median shape of the plain single pages, or a typical manga page.
+
+    Pages taller than 1.7 are left out: those are the ones a strip lengthened.
+    """
+
+    plain = sorted(shape for shape in shapes if 1.0 <= shape <= 1.7)
+    if len(plain) < 5:
+        return DEFAULT_PAGE_ASPECT
+    return plain[len(plain) // 2]
 
 
 class StripScanStore:

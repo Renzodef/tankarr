@@ -129,3 +129,46 @@ def test_series_findings_report_strip_volumes():
         )
         == []
     )
+
+
+def _page_with_bottom_margin():
+    # A normal page: artwork, a full-width panel edge, then a white margin
+    # holding only a page number. It is not taller than a page.
+    image = Image.new("L", (900, 1300), 255)
+    draw = ImageDraw.Draw(image)
+    for y in range(0, 1080, 30):
+        draw.line((0, y, 900, y + 120), fill=40, width=6)
+    draw.rectangle((0, 1083, 900, 1100), fill=255)
+    draw.line((0, 1105, 900, 1105), fill=200, width=1)
+    draw.rectangle((430, 1200, 470, 1215), fill=20)
+    return image
+
+
+def _spread_with_strip():
+    spread = Image.new("L", (1800, 1300), 255)
+    draw = ImageDraw.Draw(spread)
+    for y in range(0, 1300, 40):
+        draw.line((0, y, 1800, y + 200), fill=40, width=6)
+    return _with_strip(spread)
+
+
+def test_page_shape_rejects_margins_and_keeps_spreads():
+    assert strip_row(_page_with_bottom_margin()) is None
+    assert strip_row(_spread_with_strip()) is not None
+
+
+def test_volume_where_every_page_has_a_strip(tmp_path):
+    from tankarr.translation_strip_audit import volume_page_aspect
+
+    # Every page lengthened by a strip of a different height: the rule height
+    # repeats, so it still gives the original page shape.
+    assert abs(volume_page_aspect([], [1.44] * 6 + [1.45]) - 1.44) < 0.02
+    # A few ruled pages do not define the shape; plain pages do.
+    assert volume_page_aspect([1.5] * 6, [0.8]) == 1.5
+    pages = []
+    for extra in (300, 500, 700, 400, 600, 350):
+        page = _with_strip(_artwork())
+        pages.append(page.crop((0, 0, page.width, 1300 + extra)))
+    path = tmp_path / "all.cbz"
+    _cbz(path, pages)
+    assert scan_archive(path) == [1, 2, 3, 4, 5, 6]
