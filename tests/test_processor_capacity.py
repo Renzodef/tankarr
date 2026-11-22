@@ -437,7 +437,7 @@ def test_processor_cli_divides_threads_and_overrides_inherited_library_limits(
         launches.append((command, options))
         return SimpleNamespace(
             returncode=0,
-            communicate=lambda *_args, **_kwargs: None,
+            communicate=lambda *_args, **_kwargs: (None, b""),
             poll=lambda: 0,
         )
 
