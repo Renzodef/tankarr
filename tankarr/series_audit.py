@@ -28,6 +28,11 @@ from tankarr.chapter_map import canonical_label
 from tankarr.chapter_mapping import build_chapter_index
 from tankarr.database import Database
 from tankarr.metadata_audit import series_metadata_findings
+from tankarr.translation_strip_audit import (
+    StripScanStore,
+    library_files,
+    strip_findings_by_series,
+)
 
 MAX_ENTRIES = 10_000
 MAX_DIRECTORY_BYTES = 8 * 1024**2
@@ -111,6 +116,8 @@ class SeriesAudit:
             self.cache_root / "images", render_concurrency=1
         )
         self._render_lock = asyncio.Lock()
+        # Filled by the background page scan in the app; same file as its store.
+        self.strip_store = StripScanStore(self.cache_root.parent / "translation-strips.json")
         self._key = secrets.token_bytes(32)
 
     def _file(self, release: dict, root: Path) -> tuple[Path, dict, str]:
@@ -196,6 +203,14 @@ class SeriesAudit:
                 self.database.list_manga_authors(manga_id),
                 has_external_metadata=manga_id
                 in self.database.series_with_external_metadata_ids(),
+                strip_volumes=strip_findings_by_series(
+                    [
+                        release
+                        for release in library_files(self.database)
+                        if str(release["manga_id"]) == str(manga_id)
+                    ],
+                    self.strip_store,
+                ).get(str(manga_id)),
             )
             catalogue_cleanup = {
                 "last_chapter": index.get("edition_chapter_limit"),

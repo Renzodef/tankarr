@@ -1867,5 +1867,7 @@
   "Series metadata to fix": "Metadati della serie da sistemare",
   "No metadata source is linked: add a MangaBaka or MangaUpdates entry in Metadata sources.": "Nessuna fonte di metadati collegata: aggiungi una scheda MangaBaka o MangaUpdates in Fonti dei metadati.",
   "Creator names do not open an author page yet.": "I nomi degli autori non aprono ancora una pagina autore.",
-  "The title looks like {detected}, but the series is kept in {language}: rename it.": "Il titolo sembra in {detected}, ma la serie è in {language}: rinominala."
+  "The title looks like {detected}, but the series is kept in {language}: rename it.": "Il titolo sembra in {detected}, ma la serie è in {language}: rinominala.",
+  "p.": "p.",
+  "Some pages still carry a translation strip at the bottom: {where}.": "Alcune pagine hanno ancora la striscia di traduzione in fondo: {where}."
 }

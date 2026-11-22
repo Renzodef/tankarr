@@ -12,6 +12,13 @@ import re
 import unicodedata
 from typing import Any
 
+from tankarr.translation_strip_audit import (
+    StripScanStore,
+    library_files,
+    strip_finding,
+    strip_findings_by_series,
+)
+
 # Short function words that identify a title's language. Only words that are
 # rare as English title words are listed, so an English title is not flagged
 # because of a borrowed name.
@@ -122,6 +129,7 @@ def series_metadata_findings(
     author_links: list[dict[str, Any]],
     *,
     has_external_metadata: bool,
+    strip_volumes: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     if not has_external_metadata:
@@ -151,11 +159,21 @@ def series_metadata_findings(
                 "series_language": preferred,
             }
         )
+    if strip_volumes:
+        findings.append(strip_finding(strip_volumes))
     return findings
 
 
-def library_metadata_findings(database: Any) -> dict[str, Any]:
+def library_metadata_findings(
+    database: Any, strip_store: StripScanStore | None = None
+) -> dict[str, Any]:
     """Every series with at least one metadata finding."""
+
+    strips = (
+        strip_findings_by_series(library_files(database), strip_store)
+        if strip_store is not None
+        else {}
+    )
 
     external = database.series_with_external_metadata_ids()
     links = database.manga_authors_by_series()
@@ -167,6 +185,7 @@ def library_metadata_findings(database: Any) -> dict[str, Any]:
             manga,
             links.get(manga_id, []),
             has_external_metadata=manga_id in external,
+            strip_volumes=strips.get(manga_id),
         )
         if not findings:
             continue

@@ -9,6 +9,10 @@ function metadataFindingLabel(finding: SeriesMetadataFinding) {
   if (finding.code === "no_external_metadata") return t("No metadata source is linked: add a MangaBaka or MangaUpdates entry in Metadata sources.");
   if (finding.code === "authors_not_linked") return t("Creator names do not open an author page yet.");
   if (finding.code === "title_language_mismatch") return t("The title looks like {detected}, but the series is kept in {language}: rename it.", { detected: languageName(finding.detected_language ?? ""), language: languageName(finding.series_language ?? "") });
+  if (finding.code === "translation_strip") {
+    const where = (finding.volumes ?? []).map((item) => `${item.unit === "volume" ? t("Book") : t("Chapter")} ${item.number ?? t("special")} (${t("p.")} ${item.pages.join(", ")})`).join("; ");
+    return t("Some pages still carry a translation strip at the bottom: {where}.", { where });
+  }
   return finding.label;
 }
 
