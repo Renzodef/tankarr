@@ -1103,11 +1103,9 @@ class TankarrService:
                 content_sha256,
             )
 
-        rebuilding_missing_assembly = bool(
+        rebuilding_empty_volume_slot = bool(
             existing is not None
-            and existing.get("provider")
-            == imported_chapter.get("provider")
-            == "assembled"
+            and imported_chapter.get("provider") == "assembled"
             and not existing.get("downloaded")
             and (
                 not existing.get("library_path")
@@ -1123,7 +1121,7 @@ class TankarrService:
 
         stored_content_sha256 = (
             str(existing.get("local_import_sha256") or "")
-            if existing and not rebuilding_missing_assembly
+            if existing and not rebuilding_empty_volume_slot
             else ""
         )
         if stored_content_sha256 and not self._valid_sha256(stored_content_sha256):
