@@ -537,7 +537,7 @@ class TranslationManager:
             "completed",
         }:
             return None
-        manga = self.database.get_manga(job["manga_id"])
+        manga = self.database.get_manga(job["manga_id"], include_logical_counts=False)
         if not self.enabled(manga):
             return None
         if manga["preferred_language"] != job["target_language"]:

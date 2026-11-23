@@ -122,6 +122,8 @@ async def test_worker_release_check_leaves_the_event_loop_responsive(
 
     for name in ("list_chapters", "list_queue_chapters"):
         monkeypatch.setattr(database, name, delaying(getattr(database, name)))
+    logical_counts = Mock(wraps=database._attach_logical_chapter_counts)
+    monkeypatch.setattr(database, "_attach_logical_chapter_counts", logical_counts)
     processing = asyncio.create_task(manager.process(job))
     try:
         assert await asyncio.to_thread(read_started.wait, 2)
@@ -131,6 +133,7 @@ async def test_worker_release_check_leaves_the_event_loop_responsive(
         release_read.set()
         await processing
     assert event_loop_responses == [True]
+    logical_counts.assert_not_called()
     expected = "cancelled" if cancel_during_read else "waiting_native"
     assert manager.store.get(job["id"])["status"] == expected
 
