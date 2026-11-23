@@ -521,7 +521,15 @@ class TranslationManager:
                     continue
                 path.unlink(missing_ok=True)
 
-    def _current(self, job: dict) -> dict | None:
+    async def _current_async(self, job: dict) -> dict | None:
+        # A series can have thousands of releases. Read the queue projection
+        # off the serving loop, then verify the attempt before updating it.
+        releases = await asyncio.to_thread(
+            self.database.list_queue_chapters, job["manga_id"], job["target_language"]
+        )
+        return self._current(job, releases=releases)
+
+    def _current(self, job: dict, *, releases: list[dict] | None = None) -> dict | None:
         current = self.store.get(job["id"])
         if current["attempts"] != job["attempts"] or current["status"] in {
             "cancelled",
@@ -529,7 +537,7 @@ class TranslationManager:
             "completed",
         }:
             return None
-        manga = self.database.get_manga(job["manga_id"])
+        manga = self.database.get_manga(job["manga_id"], include_logical_counts=False)
         if not self.enabled(manga):
             return None
         if manga["preferred_language"] != job["target_language"]:
@@ -543,7 +551,10 @@ class TranslationManager:
                 "Managed edition changed; assign the source to the correct book again",
             )
             return None
-        releases = self.database.list_chapters(manga["id"], job["target_language"])
+        if releases is None:
+            releases = self.database.list_queue_chapters(
+                manga["id"], job["target_language"]
+            )
         for owned in releases:
             if owned.get("downloaded") and matches_slot(owned, job["slot_key"]):
                 own_result = owned["id"] == f"translated:{job['id']}"
@@ -616,13 +627,13 @@ class TranslationManager:
                 progress,
                 concurrency=self.settings.download_concurrency,
             )
-        if self._current(job) is None:
+        if await self._current_async(job) is None:
             return None
         # Reuse import limits and image geometry checks for downloaded pages too.
         checked = await asyncio.to_thread(
             self.importer._extract_pages, pages_dir, directory / "checked-input"
         )
-        if self._current(job) is None:
+        if await self._current_async(job) is None:
             return None
         if len(checked) != len(pages):
             raise ValueError("Source page count changed")
@@ -632,11 +643,11 @@ class TranslationManager:
         return source_file
 
     async def process(self, job: dict):
-        manga = self._current(job)
+        manga = await self._current_async(job)
         if manga is None:
             return
         source = await self._prepare(job, manga)
-        if source is None or self._current(job) is None:
+        if source is None or await self._current_async(job) is None:
             return
         if self.settings.translation_backend != "auto":
             await self._process_worker(job, source)
@@ -656,7 +667,7 @@ class TranslationManager:
             headers=headers, timeout=60, follow_redirects=False
         ) as client:
             response = await client.get(url)
-            if self._current(job) is None:
+            if await self._current_async(job) is None:
                 return
             if response.status_code == 404:
                 response = await client.put(
@@ -668,10 +679,10 @@ class TranslationManager:
                     },
                 )
                 response.raise_for_status()
-                if self._current(job) is None:
+                if await self._current_async(job) is None:
                     return
                 source_hash = await asyncio.to_thread(sha256, source)
-                if self._current(job) is None:
+                if await self._current_async(job) is None:
                     return
                 response = await client.post(
                     url,
@@ -685,7 +696,7 @@ class TranslationManager:
                 raise ValueError("Processor failed")
             if result.get("status") not in {"queued", "running", "completed"}:
                 raise ValueError("Invalid processor status")
-            if self._current(job) is None:
+            if await self._current_async(job) is None:
                 return
             self._update_attempt(
                 job,
@@ -704,7 +715,7 @@ class TranslationManager:
                     total = 0
                     with partial.open("wb") as handle:
                         async for chunk in stream.aiter_bytes(1024 * 1024):
-                            if self._current(job) is None:
+                            if await self._current_async(job) is None:
                                 return
                             total += len(chunk)
                             if total > self.settings.import_max_expanded_bytes:
@@ -712,7 +723,7 @@ class TranslationManager:
                                     "Translation result exceeds import limit"
                                 )
                             await asyncio.to_thread(handle.write, chunk)
-                if self._current(job) is None:
+                if await self._current_async(job) is None:
                     return
                 partial.replace(output)
             finally:
@@ -788,7 +799,7 @@ class TranslationManager:
             "result_path": str(output.absolute()),
             "checkpoint_directory": str((directory / "worker-checkpoints").resolve()),
         }
-        if self._current(job) is None:
+        if await self._current_async(job) is None:
             return
         output.unlink(missing_ok=True)
         self._update_attempt(
@@ -812,7 +823,7 @@ class TranslationManager:
             while not task.done():
                 if (
                     self.settings.restored_safe_mode
-                    or self._current(job) is None
+                    or await self._current_async(job) is None
                     or not settings_match()
                 ):
                     return
@@ -860,7 +871,7 @@ class TranslationManager:
                 # during a long provider request or Tesseract invocation.
                 if (
                     self.settings.restored_safe_mode
-                    or self._current(job) is None
+                    or await self._current_async(job) is None
                     or self.settings.translation_processor_url
                     or self.settings.translation_backend != "auto"
                     or request["ai"]
@@ -888,7 +899,7 @@ class TranslationManager:
         *,
         worker_request: dict | None = None,
     ):
-        manga = self._current(job)
+        manga = await self._current_async(job)
         if manga is None:
             return
         pages = await asyncio.to_thread(
@@ -957,7 +968,7 @@ class TranslationManager:
                 or self._worker_request(job, source_info["sha256"]) != worker_request
             ):
                 return
-            if self._current(job) is None:
+            if await self._current_async(job) is None:
                 return
             self._update_attempt(
                 job,

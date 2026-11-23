@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -96,6 +97,45 @@ def output_archive(manager, job, tmp_path, **changes):
         archive.write(page, "00001.png")
         archive.writestr("translation.json", json.dumps(receipt))
     return output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_during_read", [False, True])
+async def test_worker_release_check_leaves_the_event_loop_responsive(
+    translation, monkeypatch, cancel_during_read
+):
+    manager, database, _, source = translation
+    job = manager.store.create("manga-1", source, "en")
+    native = {**chapter("native-en", "1", language="en"), "provider": "suwayomi"}
+    database.upsert_chapters("manga-1", [native], monitor_new=False)
+    read_started = threading.Event()
+    release_read = threading.Event()
+    event_loop_responses = []
+
+    def delaying(read):
+        def wait_for_event_loop(*args):
+            read_started.set()
+            event_loop_responses.append(release_read.wait(1))
+            return read(*args)
+
+        return wait_for_event_loop
+
+    for name in ("list_chapters", "list_queue_chapters"):
+        monkeypatch.setattr(database, name, delaying(getattr(database, name)))
+    logical_counts = Mock(wraps=database._attach_logical_chapter_counts)
+    monkeypatch.setattr(database, "_attach_logical_chapter_counts", logical_counts)
+    processing = asyncio.create_task(manager.process(job))
+    try:
+        assert await asyncio.to_thread(read_started.wait, 2)
+        if cancel_during_read:
+            manager.cancel_job(job)
+    finally:
+        release_read.set()
+        await processing
+    assert event_loop_responses == [True]
+    logical_counts.assert_not_called()
+    expected = "cancelled" if cancel_during_read else "waiting_native"
+    assert manager.store.get(job["id"])["status"] == expected
 
 
 def test_source_mapping_prefers_the_series_language():
