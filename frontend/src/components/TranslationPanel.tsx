@@ -3,6 +3,9 @@ import { api } from "../api";
 import { LANGUAGES, Spinner, languageName, useApp } from "../components";
 import type { Manga } from "../types";
 import { t } from "../i18n";
+import { publicationStatus, seriesCounts } from "../seriesStatus";
+
+type TranslationJob = Awaited<ReturnType<typeof api.translations>>["jobs"][number];
 
 export default function TranslationPanel({ manga }: { manga: Manga }) {
   const { notify } = useApp();
@@ -29,6 +32,27 @@ export default function TranslationPanel({ manga }: { manga: Manga }) {
     catch (failure) { notify("error", failure instanceof Error ? failure.message : t("Translation action failed")); }
     finally { setBusy(false); }
   }
+  const counts = seriesCounts(manga);
+  const complete = publicationStatus(manga).key === "ended"
+    && counts.expected_count !== null && counts.expected_count > 0
+    && counts.downloaded_count >= counts.expected_count
+    && (counts.raw_missing_count ?? counts.missing_count) === 0
+    && !counts.count_conflict;
+  const currentJobs: TranslationJob[] = [];
+  const history: TranslationJob[] = [];
+  for (const job of data?.jobs ?? []) {
+    if (job.status === "completed" || job.status === "cancelled" || (job.status === "failed" && complete)) {
+      history.push(job);
+    } else {
+      currentJobs.push(job);
+    }
+  }
+  function jobsTable(jobs: TranslationJob[]) {
+    return <div className="table-scroll"><table className="table"><thead><tr><th>{t("Book / chapter")}</th><th>{t("Languages")}</th><th>{t("Status")}</th><th>{t("Actions")}</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}>
+      <td>{job.slot_key.replace(":", " ")}</td><td>{job.source.language} → {job.target_language}</td><td>{job.status}<div className="muted small">{job.message}</div></td>
+      <td>{["failed", "cancelled"].includes(job.status) ? <button className="btn btn-ghost" disabled={busy || !data?.enabled} onClick={() => void run(() => api.retryTranslation(job.id))}>{t("Retry")}</button> : job.status !== "completed" ? <button className="btn btn-ghost" disabled={busy} onClick={() => void run(() => api.cancelTranslation(job.id))}>{t("Cancel")}</button> : null}</td>
+    </tr>)}</tbody></table></div>;
+  }
   return <section className="panel" aria-label={t("Translation fallback")}>
     <div className="panel-header"><h2>{t("Translation fallback")}</h2>{busy ? <Spinner /> : null}</div>
     <p className="muted small">{t("Missing books and chapters can be translated into {language}. Machine translations retain their source and model in the archive metadata.", { language: languageName(manga.preferred_language) })}</p>
@@ -49,9 +73,10 @@ export default function TranslationPanel({ manga }: { manga: Manga }) {
       <div className="form-row"><label htmlFor="translation-number">{unit === "volume" ? t("Book number in this edition") : t("Chapter number in this edition")}</label><input id="translation-number" className="input" type="text" pattern="[0-9]+([.][0-9]+)?" required value={number} onChange={(event) => setNumber(event.target.value)} /></div>
       <button className="btn" disabled={busy || !data?.enabled || !file}>{t("Queue translation")}</button>
     </form> : null}
-    {data?.jobs.length ? <div className="table-scroll"><table className="table"><thead><tr><th>{t("Book / chapter")}</th><th>{t("Languages")}</th><th>{t("Status")}</th><th>{t("Actions")}</th></tr></thead><tbody>{data.jobs.map((job) => <tr key={job.id}>
-      <td>{job.slot_key.replace(":", " ")}</td><td>{job.source.language} → {job.target_language}</td><td>{job.status}<div className="muted small">{job.message}</div></td>
-      <td>{["failed", "cancelled"].includes(job.status) ? <button className="btn btn-ghost" disabled={busy || !data.enabled} onClick={() => void run(() => api.retryTranslation(job.id))}>{t("Retry")}</button> : job.status !== "completed" ? <button className="btn btn-ghost" disabled={busy} onClick={() => void run(() => api.cancelTranslation(job.id))}>{t("Cancel")}</button> : null}</td>
-    </tr>)}</tbody></table></div> : <p className="muted small">{t("No translation jobs queued.")}</p>}
+    {currentJobs.length ? jobsTable(currentJobs) : <p className="muted small">{t("No translation jobs queued.")}</p>}
+    {history.length ? <details>
+      <summary>{t("History")}</summary>
+      {jobsTable(history)}
+    </details> : null}
   </section>;
 }

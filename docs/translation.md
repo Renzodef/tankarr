@@ -75,7 +75,11 @@ The original archive stays in staging. Only a validated translation enters the
 library, with its source hash, AI model and machine translation provenance in
 ComicInfo. A translated book does not retire human chapter files.
 
-The series page lists jobs, permits retries and cancellation, and accepts a source
+The series page keeps active jobs visible. Completed and cancelled attempts are
+in the collapsed **History** section. Once an ended series has every expected
+book or chapter, failed attempts also move into **History**.
+
+The series page permits retries and cancellation and accepts a source
 CBZ assigned to one book or chapter. Use this for a source archive obtained through
 another channel, checking that its numbering matches the managed edition. Packs
 must first be separated into their individual books. Native library imports keep
