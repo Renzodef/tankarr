@@ -113,7 +113,8 @@ for your decision on the **System** page.
 - **Activity** shows the queue: chapter jobs, torrents and Usenet downloads
   with live progress, grouped by series.
 - **Wanted** lists every monitored chapter or volume that is missing, what
-  Tankarr already tried for it, and a manual search for each item.
+  Tankarr already tried for it, and a manual search for each item. Use the
+  language filter to show only series with the selected reading language.
 - **History** keeps every import and failure, with a retry button.
 - The **series page** lists chapters or books, lets you toggle monitoring per
   chapter or volume, search releases interactively (**Interactive Search**),

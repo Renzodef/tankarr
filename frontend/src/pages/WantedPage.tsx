@@ -16,6 +16,7 @@ import {
   chapterLabel,
   formatDate,
   jobStatusPill,
+  languageName,
   providerChainLabel,
   seriesPath,
   useAppActions,
@@ -206,6 +207,7 @@ export default function WantedPage() {
   const deferredFilter = useDeferredValue(filter);
   const [stateFilter, setStateFilter] = useState<WantedStateFilter>("all");
   const [unitFilter, setUnitFilter] = useState<WantedUnitFilter>("all");
+  const [languageFilter, setLanguageFilter] = useState("");
   const [sort, setSort] = useState<WantedSort>("series");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [page, setPage] = useState(1);
@@ -493,6 +495,13 @@ export default function WantedPage() {
     return counts;
   }, [rows]);
 
+  const languages = useMemo(
+    () => [...new Set(rows.map((row) => row.entry.manga.preferred_language))]
+      .map((code) => ({ code, label: languageName(code) }))
+      .sort((left, right) => titleCollator.compare(left.label, right.label)),
+    [rows],
+  );
+
   const sortedRows = useMemo(
     () => [...rows].sort((left, right) => compareWantedRows(left, right, sort, sortDirection)),
     [rows, sort, sortDirection],
@@ -503,9 +512,10 @@ export default function WantedPage() {
     return sortedRows.filter((row) =>
       (stateFilter === "all" || row.state === stateFilter) &&
       (unitFilter === "all" || row.unit === unitFilter) &&
+      (!languageFilter || row.entry.manga.preferred_language === languageFilter) &&
       (!query || row.searchText.includes(query)),
     );
-  }, [deferredFilter, sortedRows, stateFilter, unitFilter]);
+  }, [deferredFilter, sortedRows, stateFilter, unitFilter, languageFilter]);
 
   useEffect(() => {
     if (stateFilter !== "all" && stateCounts[stateFilter] === 0) setStateFilter("all");
@@ -516,8 +526,12 @@ export default function WantedPage() {
   }, [unitCounts, unitFilter]);
 
   useEffect(() => {
+    if (languageFilter && !languages.some(({ code }) => code === languageFilter)) setLanguageFilter("");
+  }, [languageFilter, languages]);
+
+  useEffect(() => {
     setPage(1);
-  }, [deferredFilter, sort, sortDirection, stateFilter, unitFilter]);
+  }, [deferredFilter, sort, sortDirection, stateFilter, unitFilter, languageFilter]);
 
   useEffect(() => {
     const lastPage = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
@@ -617,6 +631,17 @@ export default function WantedPage() {
               <option value="all">{t("Item: All")}</option>
               {unitCounts.chapter ? <option value="chapter">{t("Item: Chapters ({count})", { count: unitCounts.chapter })}</option> : null}
               {unitCounts.volume ? <option value="volume">{t("Item: Volumes ({count})", { count: unitCounts.volume })}</option> : null}
+            </select>
+            <select
+              className="input"
+              value={languageFilter}
+              aria-label={t("Filter wanted items by language")}
+              onChange={(event) => setLanguageFilter(event.target.value)}
+            >
+              <option value="">{t("All languages")}</option>
+              {languages.map(({ code, label }) => (
+                <option key={code} value={code}>{t("Language: {language}", { language: label })}</option>
+              ))}
             </select>
             <select
               className="input"
